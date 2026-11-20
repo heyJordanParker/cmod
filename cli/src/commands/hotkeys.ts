@@ -10,12 +10,12 @@ import { modLock, takeLock } from '../store.js'
 
 export const summary = "Bind one of a mod's hotkeys to another combo, as Settings does."
 
-export const help = `Usage: cmod hotkey <mod | plugin-root> <hotkey> <combo>
+export const help = `Usage: cmod hotkeys set <mod | plugin-root> <hotkey> <combo>
 
 ${summary}
 
-Binds the hotkey <hotkey> of an installed mod to <combo> in Claude Code's
-keybindings.json, such as cmod hotkey my-mod toggle ctrl+e, and takes its
+set binds the hotkey <hotkey> of an installed mod to <combo> in Claude Code's
+keybindings.json, such as cmod hotkeys set my-mod toggle ctrl+e, and takes its
 old combo off. A plugin root holds a "/", such as ./my-mod, so a mod Claude
 Code loads with --plugin-dir, which has no install record, binds its hotkeys
 too. A combo is one or two of ctrl, alt, shift, and meta in that order, then
@@ -24,8 +24,8 @@ command fails. The new combo works at once, and an update of the mod keeps it.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
-  if (positionals.length !== 3) throw new Error(`cmod hotkey takes a mod, one of its hotkeys, and a combo.\n\n${help}`)
-  const [argument, hotkey, combo] = positionals as [string, string, string]
+  const [action, argument = '', hotkey = '', combo = ''] = positionals
+  if (action !== 'set' || positionals.length !== 4) throw new Error(`cmod hotkeys takes set, a mod, one of its hotkeys, and a combo.\n\n${help}`)
   if (!isCombo(combo)) throw new Error(`${combo} is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as ctrl+q or ctrl+shift+k.`)
   const plugin = await readPlugin(argument.includes('/') ? argument : await installedRoot(argument))
   const lock = await takeLock(modLock(plugin.name))

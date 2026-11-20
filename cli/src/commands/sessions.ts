@@ -17,50 +17,51 @@ import { storePath, takeLock } from '../store.js'
 
 export const summary = 'Read every saved Claude Code conversation as sessions, turns, tasks, and messages.'
 
-export const help = `Usage: cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
-       cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--agent]] [--limit <n>] [--before <session>:<id>] [--json]
-       cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
-       cmod history turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
-       cmod history contexts [<session>] [--task <id>] [--json]
-       cmod history tasks [<session>] [--task <id> | --nested] [--json]
-       cmod history goal [<session>] [--task <id>] [--json]
-       cmod history usage [<session>] [--task <id>] [--json]
-       cmod history state [<session>] [--json]
-       cmod history follow [<session>...] [--running] [--json]
-       cmod history index
+export const help = `Usage: cmod sessions list [--every-project] [--since 2d] [--running] [--project <folder>] [--json]
+       cmod sessions search <text> [--every-project] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--agent]] [--limit <n>] [--before <session>:<id>] [--json]
+       cmod sessions read messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
+       cmod sessions read turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
+       cmod sessions read contexts [<session>] [--task <id>] [--json]
+       cmod sessions read tasks [<session>] [--task <id> | --nested] [--json]
+       cmod sessions read goal [<session>] [--task <id>] [--json]
+       cmod sessions read usage [<session>] [--task <id>] [--json]
+       cmod sessions read state [<session>] [--json]
+       cmod sessions follow [<session>...] [--running] [--json]
+       cmod sessions index
 
 ${summary}
 
-sessions lists the conversations of the project, newest first: the current
-folder's, or --project's, and with --all every project's. --since keeps those
-active in the last 30m, 6h, 2d, or 1w, or since a date such as 2026-10-01, and
---running keeps those open in Claude Code now.
+list lists the conversations of the project, newest first: the current
+folder's, or --project's, and with --every-project every project's. --since
+keeps those active in the last 30m, 6h, 2d, or 1w, or since a date such as
+2026-10-01, and --running keeps those open in Claude Code now.
 
 search prints the newest 50 messages whose text or tool input contains the
 text, at least 3 characters, after indexing every conversation it covers. Each
 tool input value is searched in its first 1,024 characters, and tool results
-are not searched. --all, --since, and --running scope it the way they scope
-sessions, --limit changes the 50, and --before <session>:<id> starts after the
-last message of the previous page. --session searches one conversation, and
+are not searched. --every-project, --since, and --running scope it the way they
+scope list, --limit changes the 50, and --before <session>:<id> starts after
+the last message of the previous page. --session searches one conversation, and
 inside it --task searches a task and the tasks it started, --turn one turn,
 --context one context, and --agent keeps the main agent's messages, or with
 --task that task's own, without the tasks it started.
 
-messages prints one conversation's messages in order: the session named, or the
-conversation this command runs in when Claude Code sets CLAUDE_CODE_SESSION_ID.
-That conversation has no messages until Claude Code saves its first one. --task
-reads a task's messages instead, --turn keeps one turn's, --after starts after a
-message id, and --last keeps that many from the end.
+read messages prints one conversation's messages in order: the session named,
+or the conversation this command runs in when Claude Code sets
+CLAUDE_CODE_SESSION_ID. That conversation has no messages until Claude Code
+saves its first one. --task reads a task's messages instead, --turn keeps one
+turn's, --after starts after a message id, and --last keeps that many from the
+end.
 
-turns prints the conversation's turns, each opened by a prompt and closed when
-Claude finishes. --context keeps one context's, and --last keeps that many from
-the end. contexts prints the conversation's contexts, a new one after each
-compaction. tasks prints the tasks the conversation started, with --task the
-tasks that task started, and with --nested every task at any depth. goal prints
-what the conversation is for: the goal a mod set, or its first prompt. usage
-prints the model and the context's tokens as of the last reply. --task reads
-turns, contexts, goal, and usage of the agent a task runs. state prints what a
-running conversation resumes from.
+read turns prints the conversation's turns, each opened by a prompt and closed
+when Claude finishes. --context keeps one context's, and --last keeps that many
+from the end. read contexts prints the conversation's contexts, a new one after
+each compaction. read tasks prints the tasks the conversation started, with
+--task the tasks that task started, and with --nested every task at any depth.
+read goal prints what the conversation is for: the goal a mod set, or its first
+prompt. read usage prints the model and the context's tokens as of the last
+reply. --task reads turns, contexts, goal, and usage of the agent a task runs.
+read state prints what a running conversation resumes from.
 
 follow prints each message, turn, context, task, and goal change of the
 sessions named as Claude Code saves it, until stopped. With --running it
@@ -69,11 +70,14 @@ later, except the session that runs it.
 
 index indexes every saved conversation.`
 
+const parts: readonly string[] = ['messages', 'turns', 'contexts', 'tasks', 'goal', 'usage', 'state']
+
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
     options: {
+      'every-project': { type: 'boolean', default: false },
       all: { type: 'boolean', default: false },
       since: { type: 'string' },
       running: { type: 'boolean', default: false },
@@ -91,18 +95,20 @@ export async function run(argv: string[]): Promise<number> {
       json: { type: 'boolean', default: false },
     },
   })
-  const [command, ...rest] = positionals
+  const [given = ''] = positionals
+  const [command, ...rest] = given === 'sessions' ? ['list', ...positionals.slice(1)] : parts.includes(given) ? ['read', ...positionals] : positionals
+  const [part, ...named] = command === 'read' ? rest : []
   const project = values.project ?? process.cwd()
-  const scope: Scope = { project, everyProject: values.all, since: sinceOf(values.since), running: values.running }
+  const scope: Scope = { project, everyProject: values['every-project'] || values.all, since: sinceOf(values.since), running: values.running }
   const sessionOf = () => {
-    const session = rest[0] ?? process.env['CLAUDE_CODE_SESSION_ID']
-    if (rest.length > 1 || session === undefined || session === '') throw new Error(`cmod history ${command} takes a session id outside Claude Code. cmod history sessions lists them.`)
+    const session = named[0] ?? process.env['CLAUDE_CODE_SESSION_ID']
+    if (named.length > 1 || session === undefined || session === '') throw new Error(`cmod sessions read ${part} takes a session id outside Claude Code. cmod sessions list lists them.`)
     return session
   }
   const print = (value: unknown, lines: () => string) => process.stdout.write(values.json ? `${JSON.stringify(value)}\n` : lines())
   const db = openHistory()
   try {
-    if (command === 'sessions' && rest.length === 0) {
+    if (command === 'list' && rest.length === 0) {
       const sessions = listSessions(db, scope)
       print(sessions, () => sessions.map(sessionLine).join(''))
       return 0
@@ -115,7 +121,7 @@ export async function run(argv: string[]): Promise<number> {
         ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }),
         ...(values.agent ? { isAgent: true } : {}),
       }
-      if (record.session === undefined && Object.keys(record).length > 0) throw new Error('cmod history search takes --task, --turn, --context, and --agent only with --session.')
+      if (record.session === undefined && Object.keys(record).length > 0) throw new Error('cmod sessions search takes --task, --turn, --context, and --agent only with --session.')
       const found = searchMessages(db, rest[0] as string, {
         ...scope,
         ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }),
@@ -125,7 +131,7 @@ export async function run(argv: string[]): Promise<number> {
       print(found, () => found.map((message) => messageLine(message, true)).join(''))
       return 0
     }
-    if (command === 'messages') {
+    if (part === 'messages') {
       const messages = readMessages(db, {
         session: sessionOf(),
         project,
@@ -138,32 +144,32 @@ export async function run(argv: string[]): Promise<number> {
       return 0
     }
     const task = values.task === undefined ? {} : { task: values.task }
-    if (command === 'turns') {
+    if (part === 'turns') {
       const turns = readTurns(db, { session: sessionOf(), project, ...task, ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }), ...(values.last === undefined ? {} : { last: countOf('--last', values.last) }) })
       print(turns, () => turns.map((turn) => `${localTime(turn.openedAt)}  ${turn.closedAt === undefined ? 'open  ' : localTime(turn.closedAt)}  ${firstLine(turn.prompt.text)}\n`).join(''))
       return 0
     }
-    if (command === 'contexts') {
+    if (part === 'contexts') {
       const contexts = readContexts(db, { session: sessionOf(), project, ...task })
       print(contexts, () => contexts.map((context) => `${context.number}  ${localTime(context.openedAt, true)}${context.closedAt === undefined ? '' : `  to ${localTime(context.closedAt, true)}`}\n`).join(''))
       return 0
     }
-    if (command === 'tasks') {
-      const tasks = await withBackgroundStatus(readTasks(db, { session: sessionOf(), project, ...task, ...(values.nested ? { isNested: true } : {}) }), (error) => process.stderr.write(`cmod history: the background tasks show no status, because ${messageOf(error)}\n`))
+    if (part === 'tasks') {
+      const tasks = await withBackgroundStatus(readTasks(db, { session: sessionOf(), project, ...task, ...(values.nested ? { isNested: true } : {}) }), (error) => process.stderr.write(`cmod sessions: the background tasks show no status, because ${messageOf(error)}\n`))
       print(tasks, () => tasks.map(taskLine).join(''))
       return 0
     }
-    if (command === 'goal') {
+    if (part === 'goal') {
       const goal = readGoal(db, { session: sessionOf(), project, ...task })
       print(goal, () => `${goal.text}\n`)
       return 0
     }
-    if (command === 'usage') {
+    if (part === 'usage') {
       const usage = readUsage({ session: sessionOf(), project, ...task })
       print(usage, () => `${usage.model}  ${usage.contextWindow.tokenCount ?? 0} tokens\n`)
       return 0
     }
-    if (command === 'state') {
+    if (part === 'state') {
       const state = readState(db, { session: sessionOf(), project })
       process.stdout.write(`${JSON.stringify(state)}\n`)
       return 0
@@ -187,7 +193,7 @@ export async function run(argv: string[]): Promise<number> {
       }
       return 0
     }
-    throw new Error(`cmod history takes sessions, search <text>, messages, turns, contexts, tasks, goal, usage, state, follow <session>, or index.\n\n${help}`)
+    throw new Error(`cmod sessions takes list, search <text>, read <messages|turns|contexts|tasks|goal|usage|state> [<session>], follow <session>, or index.\n\n${help}`)
   } finally {
     db.close()
   }

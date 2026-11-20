@@ -1,13 +1,13 @@
-import type { Args, Caught, ClassicHookInputs, EventResult, Frozen, PluginOptions, RenderElement, Timer } from 'claude-code'
+import type { Args, Caught, ClassicHookInputs, EventResult, Frozen, PluginOptions, RenderElement, Timer, UiPressArgument } from 'claude-code'
 import type { Step } from '../installer.js'
 
-import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
+import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { cacheFolder, dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { beforeDeadline, hookMs, settledAfterAbort } from './deadline.js'
+import { beforeDeadline, callDeadline, hookMs, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import type { Conversations } from './conversations.js'
@@ -16,7 +16,7 @@ import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
-import { cmodError, locatingPrograms, newestCmodVersion, readLines, runCmod, spawnCmod, type Programs } from './programs.js'
+import { cmodError, cmodStore, locatingPrograms, newestCmodVersion, readLines, runCmod, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
 import { createInstaller, type Installer } from './installer.js'
@@ -30,14 +30,13 @@ import { createState } from './state.js'
 import { createToaster, type Failure, type ShownToast, type Toaster } from './toaster.js'
 import { toolCalls } from './tool-calls.js'
 import { createHotkeys } from './hotkeys.js'
-import { createProviders, interfaceMethods, type ProgramProviders, type ProvidedCall, type ProvidedHeard } from './interfaces.js'
-import type { Pages } from './pages.js'
-import { drawnParts, type DrawnParts } from './parts.js'
+import { createProviders } from './interfaces.js'
+import { drawnParts, type DrawnParts, type Parts } from './parts.js'
 import { createWatches } from './watches.js'
-import { createUi, openLink, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
+import { createUi, openLink, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownParts, type UiArea } from './ui.js'
 import type { Widgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
-import { Box, Text, withLinks, type Press } from '../ui/elements.js'
+import { Box, forClaudeCode, Text } from '../ui/elements.js'
 
 export type Plugin = {
   readonly name: string
@@ -64,9 +63,10 @@ export type Lifecycle<State extends object> = {
   route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, signal?: AbortSignal): Promise<EventResult<N>>
   caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, failure: Caught): Promise<EventResult<N>>
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
+  settingsLoaded(): Promise<void>
 }
 
-export type CmodPlugin = { readonly conversations: Conversations; readonly widgets: Widgets; readonly pages: Pages; readonly programs: ProgramProviders }
+export type CmodPlugin = { readonly conversations: Conversations; readonly widgets: Widgets; readonly parts: Parts }
 
 export type ServeCmodPlugin = (served: {
   readonly claude: Claude
@@ -100,8 +100,11 @@ type ActiveMod<State extends object, Declared extends Options> = {
   readonly added: readonly string[]
   readonly imports: Imports
   readonly raise: SessionsClient['raise']
+  readonly settingsLoaded: () => Promise<void>
   readonly area: UiArea<State>
 }
+
+type SettingsListener = (change: SettingsFileChange) => unknown
 
 
 const announcedKey = 'cmod:announced'
@@ -129,11 +132,11 @@ const cmodSlowCheckMs = 10_000
 
 const startHoldMs = hookMs / 2
 
-const dependencyCallMs = 30_000
-
 const stallTicks = 3
 
 const stallMs = 60_000
+
+const settingsLoadMs = 500
 
 
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
@@ -146,7 +149,7 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   }
   const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined
-  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+  const store = await cmodStore(claude)
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
   if (name === cmodPluginName) {
     const installed = await newestCmodVersion(claude)
@@ -207,6 +210,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   }
   let imports: Imports | undefined
   let raise: SessionsClient['raise'] | undefined
+  let settingsLoaded: (() => Promise<void>) | undefined
   let failure: unknown
   let pluginOptions = options
   let drawCount = 0
@@ -347,8 +351,8 @@ export function createLifecycle<State extends object, Declared extends Options =
     const value = option.type === 'number' ? Number(text) : option.type === 'toggle' ? text.trim() === 'true' : option.type === 'list' ? text.split(',').map((item) => item.trim()).filter((item) => item !== '') : text
     const misfit = option.type === 'toggle' && !['true', 'false'].includes(text.trim()) ? 'takes true or false' : fitsOption(option, value)
     if (misfit !== undefined) return `${option.title} ${misfit}.`
-    const saved = await claude().process.run(['cmod', 'option', plugin.name, key, Array.isArray(value) ? value.join(',') : String(value)])
-    return saved.exitCode === 0 ? undefined : cmodError(saved.stderr, 'option') || `cmod option ${formatExit(saved.exitCode, '')}.`
+    const saved = await claude().process.run(['cmod', 'options', 'set', plugin.name, key, Array.isArray(value) ? value.join(',') : String(value)])
+    return saved.exitCode === 0 ? undefined : cmodError(saved.stderr, 'options') || `cmod options set ${formatExit(saved.exitCode, '')}.`
   }
 
   const askOptions = async (missing: MissingOptions): Promise<boolean> => {
@@ -422,6 +426,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     mod = active.mod
     imports = active.imports
     raise = active.raise
+    settingsLoaded = active.settingsLoaded
     router = activeRouter
     phase = 'active'
     stopWatchingRecord()
@@ -648,7 +653,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (imports !== undefined) bind(imports)
     const asked = e as Frozen<Args<'cmod.call'>> & { readonly caller?: string }
     if (event === 'cmod.call' && asked.to === definition.name && asked.caller === cmodPluginName) {
-      if (asked.method === partMethods.shown) installer.hear(asked.input as ShownPages)
+      if (asked.method === partMethods.shown) installer.hear(asked.input as ShownParts)
       const answered = installer.answer(asked.method, asked.input)
       if (answered !== undefined) return (await answered.catch((error: unknown) => ({ deny: `${definition.name}: ${messageOf(error)}` }))) as EventResult<N>
       if (asked.method === partMethods.shown && phase !== 'active') return { value: null } as EventResult<N>
@@ -717,9 +722,12 @@ export function createLifecycle<State extends object, Declared extends Options =
       bind(imports)
       return raise(method, payload, unaborted)
     },
+    async settingsLoaded() {
+      await settingsLoaded?.()
+    },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
-      const open = (href: string, press: Press) =>
+      const open = (href: string, press: UiPressArgument) =>
         void openLink(claudeCalls, href, press.surface).then(
           (done) => done === 'copied' && runtime?.toaster.toast.success('Copied the link', { description: 'Paste it in your browser.' }),
           (error: unknown) => toastFailure({ id: 'open-link', message: 'Could not open the link', error, isCritical: true }),
@@ -729,7 +737,7 @@ export function createLifecycle<State extends object, Declared extends Options =
         ui: {
           ...claudeCalls.ui,
           warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)),
-          resolve: (e) => withLinks(claudeCalls.ui.resolve(e), e.surface, open),
+          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open),
         },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() },
       }
@@ -780,18 +788,12 @@ export function createLifecycle<State extends object, Declared extends Options =
 async function createMod<State extends object, Declared extends Options>(definition: ModDefinition<State, string, Declared>, runtime: ModRuntime): Promise<ActiveMod<State, Declared>> {
   const { router, toaster } = runtime
   const report = (failure: Failure) => void toaster.fail(failure)
-  const redraws = new Set<() => void>()
-  const calling = answeringOwnCalls(withBareRefusals(runtime.claude), router)
-  const invalidate: Claude['ui']['invalidate'] = (event) => {
-    calling.ui.invalidate(event)
-    if (event === 'ui.render') for (const redraw of redraws) redraw()
-  }
-  const claude: Claude = { ...calling, ui: { ...calling.ui, invalidate } }
+  const claude = answeringOwnCalls(withBareRefusals(runtime.claude), router)
   const added: string[] = []
   const announce = (feature: string) => {
     added.push(feature)
   }
-  const [session, root, startCwd, home, configHome] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd(), claude.env.home(), claude.env.configHome()])
+  const [session, root, startCwd, home, configHome, cacheHome] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd(), claude.env.home(), claude.env.configHome(), claude.env.cacheHome()])
   const configRoot = configHome ?? (home === undefined ? undefined : `${home}/.claude`)
   const places: Places = { home, configRoot, projectRoot: () => modState.root }
   const files = createModFiles({ name: definition.name, claude, places, report })
@@ -812,6 +814,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     name: definition.name,
     call: (to, method, input) => claude.cmod.call({ to, method, input }),
     changed: () => area.relisted(),
+    after: (ms, run) => claude.clock.after(ms, run),
     report: (error) => report({ id: 'interfaces', message: 'A provider listener failed', error }),
   })
   const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw, provided: () => provided.provided() })
@@ -861,6 +864,35 @@ async function createMod<State extends object, Declared extends Options>(definit
     client.follow(followed)
   }
   let device: Promise<Device> | undefined
+  const settingsChangeOf = ({ source, file_path }: ClassicHookInputs['ConfigChange']): SettingsFileChange => ({ source: source.replace('_settings', '') as SettingsFileChange['source'], ...(file_path === undefined ? {} : { path: file_path }) })
+  const matchedListener =
+    (matcherOrListener: unknown, maybeListener: unknown): SettingsListener =>
+    (change) =>
+      (maybeListener === undefined || matches(change, matcherOrListener)) && ((maybeListener ?? matcherOrListener) as SettingsListener)(change)
+  const settingsListeners = new Set<SettingsListener>()
+  const loadingSettings: SettingsFileChange[] = []
+  const settingsLoaded = async () => {
+    bind(imports)
+    await Promise.all(
+      loadingSettings.splice(0).flatMap((change) =>
+        [...settingsListeners].map(async (listener) => {
+          try {
+            await listener(change)
+          } catch (error) {
+            report({ id: 'settings:onChange', message: 'The settings.onChange listener failed', error })
+          }
+        }),
+      ),
+    )
+  }
+  router.add('classic.ConfigChange', async (e, next) => {
+    const below = await next(e)
+    if (below.block === undefined && settingsListeners.size > 0) {
+      loadingSettings.push(settingsChangeOf(e))
+      claude.clock.after(settingsLoadMs, () => void settingsLoaded())
+    }
+    return below
+  })
   const imports: Imports = {
     sessions: client.sessions,
     commands: {
@@ -889,15 +921,17 @@ async function createMod<State extends object, Declared extends Options>(definit
       user: settingsFile('user'),
       project: settingsFile('project'),
       local: settingsFile('local'),
-      beforeFileChange: (matcherOrListener: unknown, maybeListener?: SettingsFileChangeListener) => {
-        const listener = (maybeListener ?? matcherOrListener) as SettingsFileChangeListener
-        const matcher = maybeListener === undefined ? undefined : matcherOrListener
-        return hookOn('ConfigChange', async ({ source, file_path }) => {
-          const change: SettingsFileChange = { source: source === 'skills' ? 'skills' : (source.replace('_settings', '') as SettingsFileChange['source']), ...(file_path === undefined ? {} : { path: file_path }) }
-          if (matcher !== undefined && !matches(change, matcher)) return undefined
-          const refuse = (await listener(change))?.refuse
+      beforeChange: (matcherOrListener: unknown, maybeListener?: unknown) => {
+        const listener = matchedListener(matcherOrListener, maybeListener)
+        return hookOn('ConfigChange', async (input) => {
+          const refuse = ((await listener(settingsChangeOf(input))) as { readonly refuse?: unknown } | undefined)?.refuse
           return typeof refuse === 'string' ? { block: refuse } : undefined
         })
+      },
+      onChange: (matcherOrListener: unknown, maybeListener?: unknown) => {
+        const listener = matchedListener(matcherOrListener, maybeListener)
+        settingsListeners.add(listener)
+        return { remove: () => void settingsListeners.delete(listener) }
       },
     },
     model: { complete: (completion, options) => claude.model.complete(completion, options) },
@@ -940,9 +974,10 @@ async function createMod<State extends object, Declared extends Options>(definit
     mods: {
       isLoaded: async (name) => (await claude.cmod.call({ to: cmodPluginName, method: loadedMethod, input: { name } })) === true,
     },
+    provide: (name, methods) => provided.provide(name, methods),
     providers: (name) => provided.providers(name) as never,
   }
-  const timer = (ms: number, subject: string, repeats: boolean, listener: () => unknown): ModTimer => {
+  const timer =(ms: number, subject: string, repeats: boolean, listener: () => unknown): ModTimer => {
     let isFiring = false
     let isRunning = true
     let firedAt = 0
@@ -986,14 +1021,15 @@ async function createMod<State extends object, Declared extends Options>(definit
   }
   const hotkeys = await createHotkeys({ name: definition.name, declared: definition.hotkeys ?? {}, configRoot, claude, router, answerInput: area.answerInput, report })
   const secret = async (action: 'store' | 'get' | 'delete', key: string, value?: string): Promise<string> => {
-    const { exitCode, stdout, stderr } = await claude.process.run(['cmod', 'secret', action, definition.name, key], value === undefined ? undefined : { stdin: value })
-    if (exitCode !== 0) throw new Error(`${definition.name}: mod.secrets.${action}: ${cmodError(stderr, 'secret') || `cmod secret ${formatExit(exitCode, '')}.`}`)
+    const { exitCode, stdout, stderr } = await claude.process.run(['cmod', 'secrets', action, definition.name, key], value === undefined ? undefined : { stdin: value })
+    if (exitCode !== 0) throw new Error(`${definition.name}: mod.secrets.${action}: ${cmodError(stderr, 'secrets') || `cmod secrets ${formatExit(exitCode, '')}.`}`)
     return stdout
   }
   const mod: Mod<State, Declared> = {
     name: definition.name,
     folder: claude.plugin.root,
     dataFolder: runtime.dataFolder,
+    cacheFolder: cacheFolder({ HOME: home, XDG_CACHE_HOME: cacheHome }, claude.plugin.name),
     secrets: {
       get: async (key) => (await secret('get', key)) || undefined,
       store: async (key, value) => void (await secret('store', key, value)),
@@ -1013,14 +1049,14 @@ async function createMod<State extends object, Declared extends Options>(definit
       else claude.ui.log(`${definition.name}: ${text}`, { to: options?.to ?? 'debug' })
     },
     panes: area.panes,
-    sidebar: area.sidebar,
+    views: area.views,
+    pages: area.pages,
     settings: area.settings,
     widgets: area.widgets,
     styles: area.styles,
     toast: toaster.toast,
     ask: (question, options) => claude.ui.ask(question, options),
-    dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
-    provide: (name, methods) => provided.provide(name, methods),
+    dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude.clock, callDeadline, call, () => task)),
   }
   bind(imports)
   const followSession = async (isAfterCd = false) => {
@@ -1093,7 +1129,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   router.add('skill.prompt', userSkillHook(claude))
   router.add('ui.press', (e, next) => area.asked(() => next(e)))
   let api: Readonly<Record<string, (input: never) => unknown>> = {}
-  let pages: Pages | undefined
+  let servedParts: Parts | undefined
   const reportPart = (id: string, message: string, error: unknown) => report({ id, message, error })
   const tellRefusedPress = (to: string, error: unknown) => {
     if (messageOf(error).includes(stalePress)) toaster.toast.warning(`The ${to} button was from an older drawing, so nothing ran`, { id: `press:${to}`, description: 'Press the button it shows now.' })
@@ -1105,12 +1141,11 @@ async function createMod<State extends object, Declared extends Options>(definit
       claude.ui.invalidate('ui.render')
       tellRefusedPress(to, error)
     })
-  parts = drawnParts({ claude, report: reportPart, press: (to, input) => (pages === undefined ? pressElsewhere(to, input) : pages.press(to, input)) })
+  parts = drawnParts({ claude, report: reportPart, press: (to, input) => (servedParts === undefined ? pressElsewhere(to, input) : servedParts.press(to, input)) })
   const served = runtime.serveCmodPlugin?.({ claude, router, store: runtime.store, project: () => modState.root, report: reportPart, clear: (id) => toaster.toast.dismiss(id), tellRefusedPress, parts, markdownIn: area.markdownIn, tellStylers: area.restyled })
   const conversations = served?.conversations
   const widgets = served?.widgets
-  const programs = served?.programs
-  pages = served?.pages
+  servedParts = served?.parts
   const tellColor = (to: string, told: SessionColor) => {
     if (told.session === '' || to === cmodPluginName) return
     claude.clock.after(0, () =>
@@ -1121,32 +1156,28 @@ async function createMod<State extends object, Declared extends Options>(definit
   }
   conversations?.onColor((told) => {
     client.recolor(told)
-    for (const { mod: to } of pages?.declared() ?? []) tellColor(to, told)
+    for (const { mod: to } of servedParts?.declared() ?? []) tellColor(to, told)
   })
   router.add('cmod.call', async (e, next) => {
     if (e.to !== definition.name) return next(e)
     const call = e as typeof e & { readonly caller?: string }
     if (e.method === conversationMethods.changed && call.caller === cmodPluginName) {
-      const { session: changedSession, change, isInProject } = e.input as { readonly session: string; readonly change: SessionChange; readonly isInProject?: boolean }
-      client.changed(changedSession, change, isInProject !== false, next.signal)
+      const { session: changedSession, change } = e.input as { readonly session: string; readonly change: SessionChange }
+      client.changed(changedSession, change, next.signal)
       return { value: null }
     }
     if (e.method === conversationMethods.sessionColor && call.caller === cmodPluginName) {
       client.recolor(e.input as SessionColor)
       return { value: null }
     }
-    if (e.method === interfaceMethods.heard && call.caller === cmodPluginName) return { value: await provided.heard(e.input as ProvidedHeard, next.signal) }
-    if (call.caller !== undefined) {
-      const forProgram = programs?.answer(e.method, e.input, call.caller)
-      if (forProgram !== undefined) return { value: await forProgram }
-      if (e.method === interfaceMethods.provided) return { value: await provided.answer(e.input as ProvidedCall) }
-    }
+    const forProvider = call.caller === undefined ? undefined : provided.answer(e.method, e.input ?? {}, call.caller, next.signal)
+    if (forProvider !== undefined) return { value: await forProvider }
     const ask = beforeAskOf(call)
-    if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject, next.signal)) ?? null }
-    if (e.method === partMethods.changed && call.caller !== undefined && pages !== undefined) {
+    if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, next.signal)) ?? null }
+    if (e.method === partMethods.changed && call.caller !== undefined && servedParts !== undefined) {
       const update = e.input as PartsUpdate
       if (update.parts !== undefined && conversations !== undefined) tellColor(call.caller, conversations.color())
-      return { value: { isHeld: pages.update(call.caller, update), stylers: pages.stylers() } }
+      return { value: { isHeld: servedParts.update(call.caller, update), stylers: servedParts.stylers() } }
     }
     if (call.caller !== undefined) {
       const turn = e.method === partMethods.draw ? (e.input as { readonly turn?: TurnData }).turn : undefined
@@ -1158,7 +1189,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   }, (e, error) => {
     if (e.to !== definition.name) return undefined
     const ask = beforeAskOf(e)
-    return ask === undefined ? { deny: `${definition.name}: ${error.message}` } : { value: client.failedBefore(ask.session, ask.event, ask.change, ask.isInProject, error) ?? null }
+    return ask === undefined ? { deny: `${definition.name}: ${error.message}` } : { value: client.failedBefore(ask.session, ask.event, ask.change, error) ?? null }
   })
   const agents = toolCalls(claude, router)
   keepEngine(mod, {
@@ -1171,13 +1202,10 @@ async function createMod<State extends object, Declared extends Options>(definit
     spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
     isInstalledCopy: runtime.isInstalledCopy,
     watches,
-    onRedraw(listener) {
-      redraws.add(listener)
-      return { remove: () => void redraws.delete(listener) }
-    },
+    interfaces: provided,
     ...(widgets === undefined ? {} : { widgets }),
     onServeUnreached: (listener) => conversations?.onUnreached(listener),
-    ...(pages === undefined ? {} : { pages }),
+    ...(servedParts === undefined ? {} : { parts: servedParts }),
   })
   const names = new Set<string>()
   const reserveName = (type: string, name: string, taken: string): Reservation => {
@@ -1203,7 +1231,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   await failsAs('its open panes did not load', () => area.restorePanes())
   area.started()
   void removeUndeclaredServices().catch((error: unknown) => report({ id: 'program:services', message: 'Could not stop a service it no longer runs', error }))
-  return { mod, added, imports, raise: client.raise, area }
+  return { mod, added, imports, raise: client.raise, settingsLoaded, area }
 }
 
 function apiOf(name: string, returned: unknown): Readonly<Record<string, (input: never) => unknown>> {
@@ -1219,12 +1247,10 @@ function checkedMs(name: string, subject: string, ms: number): number {
   return ms
 }
 
-type BeforeAsk = { readonly session: string; readonly event: BeforeEvent; readonly change: SessionChange; readonly isInProject: boolean }
+type BeforeAsk = { readonly session: string; readonly event: BeforeEvent; readonly change: SessionChange }
 
 function beforeAskOf(call: Frozen<Args<'cmod.call'>> & { readonly caller?: string }): BeforeAsk | undefined {
-  if (call.method !== conversationMethods.before || call.caller !== cmodPluginName) return undefined
-  const { session, event, change, isInProject } = call.input as Omit<BeforeAsk, 'isInProject'> & { readonly isInProject?: boolean }
-  return { session, event, change, isInProject: isInProject !== false }
+  return call.method === conversationMethods.before && call.caller === cmodPluginName ? (call.input as BeforeAsk) : undefined
 }
 
 async function failsAs<Value>(subject: string, step: () => Value | Promise<Value>): Promise<Value> {

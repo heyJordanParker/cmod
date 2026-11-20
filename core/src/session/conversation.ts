@@ -8,7 +8,7 @@ import { ToolResult } from './context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from './context/turn/turn.js'
 import { GoalChange } from './goal/goal.js'
 import { Task, TaskEnd, TaskStart, type TaskStatus } from './goal/task.js'
-import type { UsageChange, Usage } from './session.js'
+import type { Session, UsageChange, Usage } from './session.js'
 
 export type SessionData = {
   readonly id: string
@@ -23,6 +23,11 @@ export type SessionData = {
   readonly isRunning: boolean
   readonly agentType?: string
   readonly visitedAt?: string
+  readonly device?: Pick<Device, 'id' | 'name'> | undefined
+  readonly status?: Session['status']
+  readonly waitingFor?: Session['waitingFor']
+  readonly contextPercent?: number
+  readonly lastTurn?: Session['lastTurn']
 }
 
 export type ContextData = Pick<Context, 'number' | 'openedAt' | 'closedAt' | 'task'>
@@ -31,7 +36,7 @@ export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt'
 
 export type TurnEnding = Pick<Turn, 'answer' | 'reason' | 'failure'>
 
-export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt' | 'status' | 'name' | 'spawnedBy' | 'isBackground'> & { readonly agentType?: string; readonly model?: string; readonly parent?: string; readonly machine?: string; readonly forkedFrom?: string }
+export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt' | 'status' | 'name' | 'spawnedBy' | 'isBackground'> & { readonly agentType?: string; readonly model?: string; readonly parent?: string; readonly forkedFrom?: string }
 
 export const forkAgentType = 'fork'
 

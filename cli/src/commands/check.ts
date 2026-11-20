@@ -25,7 +25,7 @@ export const help = `Usage: cmod check [path]
 
 ${summary}
 
-Runs every check this machine can run on the mod at path (default: the current
+Runs every check this device can run on the mod at path (default: the current
 folder): installs its packages, checks its layout and that each step runs a
 script, checks each download covers the machines its "os" and "cpu" list,
 writes the options defineMod declares into plugin.json userConfig and its

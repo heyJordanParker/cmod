@@ -3,14 +3,14 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, resolve } from 'node:path'
 import * as core from '@cmodjs/core/src/mod.js'
 import { storeFolder } from '@cmodjs/core/src/records.js'
-import { bind } from '@cmodjs/core/src/runtime/bound.js'
+import { bind, importsOnly } from '@cmodjs/core/src/runtime/bound.js'
+import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import type { Claude } from '@cmodjs/core/src/runtime/claude.js'
 import { serveConversations } from '@cmodjs/core/src/runtime/conversations.js'
 import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
+import { createProviders, interfaceMethods } from '@cmodjs/core/src/runtime/interfaces.js'
 import { createRouter } from '@cmodjs/core/src/runtime/router.js'
-import { conversationMethods, createSessionsClient } from '@cmodjs/core/src/runtime/sessions.js'
-import type { BeforeEvent } from '@cmodjs/core/src/session/session.js'
-import type { SessionChange } from '@cmodjs/core/src/session/conversation.js'
+import { createSessionsClient } from '@cmodjs/core/src/runtime/sessions.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 
 export const summary = "Run a TypeScript script that reads and drives this computer's sessions."
@@ -19,19 +19,24 @@ export const help = `Usage: cmod run <file> [arguments…]
 
 ${summary}
 
-The script imports sessions from @cmodjs/core/mod.js, as a mod does, and cmod
-connects it to cmod serve: sessions.list, sessions.get, and sessions.search
-read every session on this computer and on each machine whose store it serves,
-and a session's send, fork, end, and its on and before listeners reach the
-session that runs it. The script reads its own arguments from Bun.argv[2] on.
+The script imports sessions, provide, and providers from @cmodjs/core/mod.js,
+as a mod does, and cmod connects it to cmod serve: sessions.list, sessions.get,
+and sessions.search read every session on this computer and on each device a
+sessions provider serves, and a session's send, fork, and end reach the session
+that runs it. A script hears no session, because a listener lives in the
+session it listens to, so its on and before methods throw. providers(name)
+answers every program on this computer that provides the interface, and
+provide(name, methods) answers it for every session while the script runs. The
+script reads its own arguments from Bun.argv[2] on.
 
-cmod run ends once the script's top level has run and it listens to no
-session, and keeps running while it listens, until you stop it with Ctrl-C.
+cmod run ends once the script's top level has run.
 
 Example:
-  import { sessions } from '@cmodjs/core/mod.js'
+  import { Prompt, sessions } from '@cmodjs/core/mod.js'
   const session = await sessions.get(Bun.argv[2])
-  session.onTurnEnd((turn) => console.log(turn.answer))`
+  const [last] = await session.messages({ last: 1 })
+  console.log(last?.type === 'reply' ? last.text : session.title)
+  await session.send({ type: Prompt, text: 'Run the tests again.' })`
 
 const coreModule = '@cmodjs/core/mod.js'
 
@@ -43,54 +48,39 @@ export async function run(argv: string[]): Promise<number> {
   const name = basename(path, extname(path)).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'script'
   process.argv.splice(0, process.argv.length, process.execPath, path, ...args)
   const report = (_id: string, message: string, error: unknown) => process.stderr.write(`cmod run: ${message}: ${messageOf(error)}\n`)
-  const client = createSessionsClient({ name, claude: scriptClaude(name, (call) => answer(call)), report })
-  const conversations = serveConversations({ claude: scriptClaude(name, (call) => answer(call)), router: createRouter(), store: storeFolder(process.env), project: () => process.cwd(), report, clear: () => undefined, keepsConnecting: false })
-  const signal = new AbortController().signal
+  const claude = scriptClaude(name, (call) => answer(call))
+  const client = createSessionsClient({ name, claude, report })
+  const conversations = serveConversations({
+    claude,
+    router: createRouter(),
+    store: storeFolder(process.env),
+    project: () => process.cwd(),
+    report,
+    clear: () => undefined,
+    keepsConnecting: false,
+    provider: { mod: name, program: name },
+    tell: async (_caller, heard, signal) => provided.answer(interfaceMethods.heard, heard, cmodPluginName, signal),
+  })
+  const provided = createProviders({ name, call: (to, method, input) => answer({ to, method, input }), changed: () => undefined, after: (ms, then) => claude.clock.after(ms, then), report: (error) => report('providers', 'A provider listener failed', error) })
   const answer = async ({ to, method, input }: { readonly to: string; readonly method: string; readonly input?: unknown }): Promise<unknown> => {
-    if (to === cmodPluginName) {
-      const answered = await conversations.answer({ to, method, input, caller: name })
-      if (answered === undefined) throw new Error(`cmod run: the script's sessions have no ${method}.`)
-      if ('deny' in answered && typeof answered.deny === 'string') throw new Error(answered.deny)
-      return 'value' in answered ? answered.value : undefined
-    }
-    const asked = input as { readonly session: string; readonly change: SessionChange; readonly event: BeforeEvent; readonly isInProject?: boolean }
-    if (method === conversationMethods.changed) return client.changed(asked.session, asked.change, asked.isInProject !== false, signal)
-    if (method === conversationMethods.before) return (await client.answerBefore(asked.session, asked.event, asked.change, asked.isInProject !== false, signal)) ?? null
-    throw new Error(`${to} is not installed. A cmod run script reaches only cmod serve.`)
+    if (to !== cmodPluginName) throw new Error(`${to} is not installed. A cmod run script reaches only cmod serve.`)
+    const answered = await conversations.answer({ to, method, input, caller: name })
+    if (answered === undefined) throw new Error(`cmod run: the script's sessions have no ${method}.`)
+    if ('deny' in answered && typeof answered.deny === 'string') throw new Error(answered.deny)
+    return 'value' in answered ? answered.value : undefined
   }
-  bind(scriptImports(client.sessions))
+  bind(importsOnly({ sessions: client.sessions, provide: (named, methods) => conversations.provide(named, methods), providers: (named) => provided.providers(named) as never }, 'a cmod run script'))
   Bun.plugin({ name: 'cmod run', setup: (build) => void build.module(coreModule, () => ({ exports: core, loader: 'object' })) })
   await import(path)
   await new Promise((done) => setTimeout(done, 0))
-  if (conversations.listens()) await stopped()
   await conversations.close()
   return 0
-}
-
-function stopped(): Promise<void> {
-  return new Promise((done) => {
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(signal, () => done())
-  })
-}
-
-function scriptImports(sessions: core.Imports['sessions']): core.Imports {
-  return new Proxy({ sessions } as core.Imports, {
-    get: (target, key) => {
-      if (key === 'sessions') return target.sessions
-      throw new Error(`a cmod run script imports only sessions from ${coreModule}, because ${String(key)} belongs to a Claude Code session.`)
-    },
-  })
 }
 
 function scriptClaude(name: string, call: (input: { readonly to: string; readonly method: string; readonly input?: unknown }) => Promise<unknown>): Claude {
   const claude = {
     plugin: { name, root: process.cwd() },
-    http: {
-      fetch: async (url: string, init: { readonly method?: string; readonly body?: string; readonly headers?: Record<string, string>; readonly socketPath?: string } = {}) => {
-        const answer = await fetch(url, { ...(init.method === undefined ? {} : { method: init.method }), ...(init.body === undefined ? {} : { body: init.body }), ...(init.headers === undefined ? {} : { headers: init.headers }), ...(init.socketPath === undefined ? {} : { unix: init.socketPath }) })
-        return { status: answer.status, ok: answer.ok, headers: Object.fromEntries(answer.headers), text: await answer.text() }
-      },
-    },
+    http: { fetch: bunFetch },
     clock: {
       now: async () => Date.now(),
       after: (ms: number, fire: () => void) => {

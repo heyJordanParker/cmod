@@ -1,6 +1,6 @@
 # Install steps
 
-A mod that changes the machine, such as by adding a shell alias or downloading a program, names its install and uninstall steps in its `package.json`. The cmod program of Claude Mod Manager (cmod) runs the install step when the person installs the mod, and the uninstall step after the person removes it. The library never runs them.
+A mod that changes the device, such as by adding a shell alias or downloading a program, names its install and uninstall steps in its `package.json`. The cmod program of Claude Mod Manager (cmod) runs the install step when the person installs the mod, and the uninstall step after the person removes it. The library never runs them.
 
 ## The cmod key
 
@@ -51,7 +51,7 @@ In Claude Code, the mod sets itself up through the `cmod` program the cmod plugi
 
 ## Steps in Claude Code
 
-Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and its install page shows each one after the options, once the mod has started:
+Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and its install view shows each one after the options, once the mod has started:
 
 ```tsx
 import { defineMod, type Step } from '../node_modules/@cmodjs/core/mod.js'
@@ -72,16 +72,16 @@ export const myMod = defineMod({ name: 'my-mod', installer: [signIn], setup(mod)
 type Step<State> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: PageProps): JSX.Element
+  render(mod: Mod<State>, props: ViewProps<undefined>): JSX.Element
   isDone(mod: Mod<State>): boolean | Promise<boolean>
 }
 ```
 
 - `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the steps. `title` is the line above the step, with `(1 of 2)`. `defineMod` throws for an id that is not one, a blank title, or two steps with one id.
-- `render` draws the step's body, the way a page's `render` does, with the elements a page draws ([ui.md](ui.md#the-sidebar-and-its-pages)). Give the step a `Button` that does the work or opens the place to do it, never a command to type.
-- `isDone` says whether the step is finished. A step that is done is skipped, so the page opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
+- `render` draws the step's body, the way a view's `render` does, with the elements a view draws ([ui.md](ui.md#views-and-pages)). Give the step a `Button` that does the work or opens the place to do it, never a command to type.
+- `isDone` says whether the step is finished. A step that is done is skipped, so the view opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
 - An `isDone` that throws or rejects opens no step: the mod shows `The <title> step's isDone failed` with the error, and the step stays listed as left to do. Pressed on a step already open, `Next` shows `The <title> step's isDone failed: <error>`.
-- `Not now` closes the page, and the mod keeps running. A toast stays above the prompt, `Needs one more step` with `Starting with <title>.` under it, and its `Finish` button opens the page on the first step left. Settings shows `Needs setup: <title>` with a `Finish setup` button too.
+- `Not now` closes the view, and the mod keeps running. A toast stays above the prompt, `Needs one more step` with `Starting with <title>.` under it, and its `Finish` button opens the view on the first step left. Settings shows `Needs setup: <title>` with a `Finish setup` button too.
 
 ## Hotkeys
 
@@ -93,8 +93,8 @@ A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only f
 
 - cmod writes each combo into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.
 - A combo the person already bound to something else stays theirs, and the hotkey has no combo. The person picks one in Settings, under the mod, Hotkeys.
-- A hotkey without a default combo binds nothing at setup. Settings lists it as unbound, and the person binds it there or with `cmod hotkey`.
-- The combo the person picks in Settings runs `cmod hotkey <mod> <hotkey> <combo>`. An update keeps the combo each hotkey has in `keybindings.json`, whether Settings or the person's own edit bound it ([commands.md](commands.md#cmod-hotkey)).
+- A hotkey without a default combo binds nothing at setup. Settings lists it as unbound, and the person binds it there or with `cmod hotkeys set`.
+- The combo the person picks in Settings runs `cmod hotkeys set <mod> <hotkey> <combo>`. An update keeps the combo each hotkey has in `keybindings.json`, whether Settings or the person's own edit bound it ([commands.md](commands.md#cmod-hotkeys)).
 - An upgrade that drops a hotkey removes its binding. Removing the mod removes every binding that runs one of its hotkeys, and a `Chat` block that leaves empty. A binding the person moved to another action stays.
 - A hotkey bound to `shift+tab` replaces Claude Code's own mode switch, and Claude Code then drops its `shift+tab` hint.
 
@@ -107,7 +107,8 @@ The step gets these environment variables:
 | Variable | Value |
 | --- | --- |
 | `CMOD_PLUGIN_ROOT` | The mod's folder |
-| `CMOD_DATA` | The mod's data folder, which cmod creates first. It is the folder `mod.dataFolder` names. |
+| `CMOD_DATA` | The mod's data folder, which cmod creates first. It is the folder `mod.dataFolder` names. It holds what the mod cannot build again. |
+| `CMOD_CACHE` | The mod's cache folder, which cmod creates first. It is the folder `mod.cacheFolder` names. It holds what the mod can build or download again, such as a program `cmod download` fetches. |
 | `CMOD_VERSION` | The mod's version from `plugin.json` |
 | `PATH` | The person's `PATH`, with the cmod program's own folder first, so the step can run `cmod download`, then cmod's programs folder |
 
@@ -135,8 +136,8 @@ When the install step succeeds, cmod saves a copy of every script folder the uni
 - After the person removes the mod with `/plugin uninstall`, the cmod plugin runs the uninstall step at the next session start or prompt.
 - `cmod remove <mod>` uninstalls the mod and runs the step at once.
 - The step runs only once Claude Code has no copy of the mod left. When `cmod remove`, `cmod unlink`, or `/plugin uninstall` takes away one copy and another stays, such as an installed copy beside a linked checkout, cmod sets up the copy that stays and keeps the mod's data and secrets.
-- In the copy, `CMOD_PLUGIN_ROOT` is the copy's folder, and `CMOD_DATA` and `CMOD_VERSION` are the same as at install.
-- After the step, cmod deletes the mod's install record, its program, its data folder, and the approvals of its scripts. It keeps the mod's config folders, because the files there are the person's.
+- In the copy, `CMOD_PLUGIN_ROOT` is the copy's folder, and `CMOD_DATA`, `CMOD_CACHE`, and `CMOD_VERSION` are the same as at install.
+- After the step, cmod deletes the mod's install record, its program, its data folder, its cache folder, and the approvals of its scripts. It keeps the mod's config folders, because the files there are the person's.
 - A failed uninstall step keeps the record. `cmod teardown <mod>` runs it again.
 
 ## Example
@@ -172,9 +173,11 @@ cmod deletes `$CMOD_DATA` itself after the uninstall step.
 cmod download <program> <machine> <url> <sha256> [<machine> <url> <sha256> …]
 ```
 
-An install script runs `cmod download` to fetch a program built by someone else. It picks the download for this machine, checks its SHA-256, unpacks a `.tar.gz` or a `.zip` or takes the file as it is, and moves the file named `<program>` to `$CMOD_DATA/bin/<program>`, which Claude Code then runs by its name. A download whose SHA-256 differs installs nothing. Machines are `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
+An install script runs `cmod download` to fetch a program built by someone else. It picks the download for this machine, checks its SHA-256, unpacks a `.tar.gz` or a `.zip` or takes the file as it is, and moves the file named `<program>` to `$CMOD_CACHE/bin/<program>`, which Claude Code then runs by its name. The program goes in the cache folder because cmod can download it again, and a program built for one machine is no use on another. A download whose SHA-256 differs installs nothing. Machines are `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
 
-`$CMOD_DATA/bin/<program>` is `${mod.dataFolder}/bin/<program>` in mod code. That folder is not on `PATH`, so mod code names the program by that full path, such as `` process.run([`${mod.dataFolder}/bin/mermaid-ascii`, '--help']) ``, and so does the `command` of a `program` job.
+Run the program by its name. cmod links it into its programs folder, so mod code runs it as `process.run(['mermaid-ascii', '--help'])`, and the `command` of a `program` job names it as `['mermaid-ascii']` ([Run a program by its name](#run-a-program-by-its-name)).
+
+cmod 7 put the program at `$CMOD_DATA/bin/<program>`, `${mod.dataFolder}/bin/<program>` in mod code, and that path still runs it: `cmod download` links it to the file in the cache folder. When cmod 8 sets the mod up, it moves each program cmod 7 downloaded to the cache folder and leaves that link in its place. It moves no other file in `$CMOD_DATA/bin/`, so a file the install step wrote there itself stays where it is.
 
 ```sh
 cmod download mermaid-ascii \
@@ -211,10 +214,10 @@ Then:
 
 ## Run a program by its name
 
-cmod links every program it installs into its programs folder, `~/.local/share/cmod/programs/<program>` (under `$XDG_DATA_HOME` when it is set): the program `cmod.program` names, each program `cmod download` installs, and `cmod` itself. Claude Code runs the one there by its name, whatever else `PATH` holds, so a mod's `trace` wins over `/usr/bin/trace`:
+cmod links every program it installs into its programs folder, `~/.local/share/cmod/programs/<program>` (under `$XDG_DATA_HOME` when it is set): the program `cmod.program` names, each program `cmod download` installs, and `cmod` itself. Claude Code runs the one there by its name, whatever else `PATH` holds, so a mod's `hello` wins over `/usr/bin/hello`:
 
 - The cmod plugin's `SessionStart` hook puts the programs folder first on `PATH` for every Bash command Claude runs.
-- `process.run` and `process.spawn` run `[name, ...args]` from the programs folder when it holds `name`. A path such as `/usr/bin/trace` runs as given.
+- `process.run` and `process.spawn` run `[name, ...args]` from the programs folder when it holds `name`. A path such as `/usr/bin/hello` runs as given.
 - Install and uninstall steps find the programs folder on `PATH` after cmod's own `bun`.
 
 cmod also links the program into `~/.local/bin/<program>` so a terminal runs it, unless a file there is not cmod's. Setup then logs which program a terminal runs, and changes nothing outside cmod's folders.
@@ -224,10 +227,10 @@ cmod also links the program into `~/.local/bin/<program>` so a terminal runs it,
 A mod runs on macOS and Linux, on arm64 and x64, unless the `os` and `cpu` keys of its `package.json` say less. They read as npm reads them, and a `!` in front leaves a value out:
 
 ```json
-{ "name": "safe-delete", "os": ["darwin"], "cpu": ["arm64"] }
+{ "name": "my-mod", "os": ["darwin"], "cpu": ["arm64"] }
 ```
 
-- Setup refuses a machine the mod leaves out before any script runs, with `safe-delete runs on macOS on arm64, and this is Linux, so cmod set up nothing.`, in the terminal and in the mod's error toast in Claude Code.
+- Setup refuses a machine the mod leaves out before any script runs, with `my-mod runs on macOS on arm64, and this is Linux, so cmod set up nothing.`, in the terminal and in the mod's error toast in Claude Code.
 - `cmod publish` builds the program for each machine the mod runs on.
 - `cmod check` fails when a `cmod download` line in the install step has no download for one of those machines, and when `os` or `cpu` names a value cmod does not run mods on, such as `win32`.
 

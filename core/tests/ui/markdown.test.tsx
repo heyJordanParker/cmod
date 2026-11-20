@@ -469,7 +469,7 @@ test("another mod's markdown drawing stays while this mod's own parts change and
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
 
-  notes.mod?.sidebar.add({ id: 'later', title: 'Later', render: () => Markdown({ text: 'Later.' }) })
+  notes.mod?.views.add({ id: 'later', title: 'Later', render: () => Markdown({ text: 'Later.' }) })
   await fake.settle()
 
   expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toContain('diagram: graph TD')
@@ -483,12 +483,12 @@ test("a mod's markdown style draws in its own Sidebar page and widget under test
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
         mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: '```mermaid\ngraph LR\n```' }) })
-        void mod.sidebar.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: '```mermaid\ngraph TD\n```' }) }).open()
+        void mod.views.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: '```mermaid\ngraph TD\n```' }) }).open()
       },
     }),
   )
 
-  expect(await tested.shown.page.lines()).toEqual(['diagram: graph TD'])
+  expect(await tested.shown.view.lines()).toEqual(['diagram: graph TD'])
   expect(await tested.lines(BelowPrompt)).toEqual(['diagram: graph LR'])
 })
 
@@ -512,7 +512,7 @@ const bullets = defineMod({
     })
     mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render: () => <Markdown key="list" text={'- you\n- me'} /> })
     void mod.panes.add({ id: 'demo', title: 'Notes', render: () => <Markdown key="list" text={'Intro\n\n- you\n- me'} /> }).open()
-    void mod.sidebar.add({ id: 'all', title: 'Bullets', render: () => <Markdown key="list" text={'- you\n- me'} /> }).open()
+    void mod.views.add({ id: 'all', title: 'Bullets', render: () => <Markdown key="list" text={'- you\n- me'} /> }).open()
   },
 })
 
@@ -526,7 +526,7 @@ test('a style that draws each list item with Default draws every item through Cl
 test('a style that draws each list item with Default draws every item through Claude Code in a Sidebar page and a widget', async () => {
   const tested = testMod(bullets)
 
-  expect(await tested.shown.page.lines()).toEqual(['• you', '• me'])
+  expect(await tested.shown.view.lines()).toEqual(['• you', '• me'])
   expect(await tested.lines(BelowPrompt)).toEqual(['• you', '• me'])
 })
 
@@ -556,7 +556,7 @@ const linkSteps = (pressed: string[]) =>
       mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) })
       const render = () => <Markdown key="steps" text={linkList} dimColor pressableLinks={[docs]} onLinkPress={({ href }) => void pressed.push(href)} />
       mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
-      void mod.sidebar.add({ id: 'all', title: 'Links', render }).open()
+      void mod.views.add({ id: 'all', title: 'Links', render }).open()
     },
   })
 
@@ -578,8 +578,8 @@ test("a Sidebar page's Markdown keeps its dim color and links in each part its s
   const pressed: string[] = []
   const tested = testMod(linkSteps(pressed))
 
-  const parts = await defaultPartsDrawn(() => tested.shown.page.lines())
-  await tested.shown.page.press('steps', docs)
+  const parts = await defaultPartsDrawn(() => tested.shown.view.lines())
+  await tested.shown.view.press('steps', docs)
 
   expect(parts).toEqual([linkPart('demo/all:steps', `[docs](${docs})`), linkPart('demo/all:steps:1', 'later')])
   expect(pressed).toEqual([docs])
@@ -683,7 +683,7 @@ const ideasDrawing = (render: () => RenderElement) =>
     setup(mod) {
       mod.styles.add({ kind: List, render: (_mod, props) => indexKeyed(props) })
       mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
-      void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+      void mod.views.add({ id: 'all', title: 'Ideas', render }).open()
     },
   })
 
@@ -697,7 +697,7 @@ test('two keyed Markdown elements on a page, each holding a list its style keys 
     )),
   )
 
-  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+  expect(await tested.shown.view.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
 })
 
 test('two keyed Markdown elements in a widget, each holding a list its style keys by index, draw both lists', async () => {
@@ -723,7 +723,7 @@ test('two Markdown elements without a key on a page, each holding a list its sty
     )),
   )
 
-  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+  expect(await tested.shown.view.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
 })
 
 const twoLists = '- Ship it\n- Tell the team\n\nThen:\n\n- Rest'
@@ -731,7 +731,7 @@ const twoLists = '- Ship it\n- Tell the team\n\nThen:\n\n- Rest'
 test('one Markdown element on a page holding two lists its style keys by index draws both lists', async () => {
   const tested = testMod(ideasDrawing(() => <Markdown key="idea" text={twoLists} />))
 
-  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', '', 'Then:', '', 'Rest'])
+  expect(await tested.shown.view.lines()).toEqual(['Ship it', 'Tell the team', '', 'Then:', '', 'Rest'])
 })
 
 test("one Markdown element in the mod's own pane holding two lists its style keys by index draws both lists, beside a keyless one of the same text", async () => {
@@ -793,14 +793,14 @@ test("the test kit presses and types into a markdown style's elements by the key
         )
         mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
         void mod.panes.add({ id: 'ideas', title: 'Ideas', render }).open()
-        void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+        void mod.views.add({ id: 'all', title: 'Ideas', render }).open()
       },
     }),
   )
   await tested.start()
 
-  await tested.shown.page.press('done:0')
-  await tested.shown.page.input('note:0', 'today')
+  await tested.shown.view.press('done:0')
+  await tested.shown.view.input('note:0', 'today')
   await tested.press(BelowPrompt, 'done:0')
   await tested.shown.pane.press('done:0')
   await tested.shown.pane.input('note:0', 'now')
@@ -872,13 +872,13 @@ test("a mod's markdown style under test draws at the terminal and at the width o
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, { surface, columns }) => <Text>{`${surface} ${columns}`}</Text> })
         mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: diagram }) })
-        void mod.sidebar.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: diagram }) }).open()
+        void mod.views.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: diagram }) }).open()
       },
     }),
   )
 
-  expect(await tested.shown.page.lines({ columns: 60 })).toEqual(['terminal 60'])
-  expect(await tested.shown.page.lines({ columns: 40 })).toEqual(['terminal 40'])
+  expect(await tested.shown.view.lines({ columns: 60 })).toEqual(['terminal 60'])
+  expect(await tested.shown.view.lines({ columns: 40 })).toEqual(['terminal 40'])
   expect(await tested.lines(BelowPrompt, { columns: 100 })).toEqual(['terminal 100'])
 })
 

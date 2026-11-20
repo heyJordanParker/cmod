@@ -1,12 +1,14 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs'
 import { readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { interfaceServer } from '@cmodjs/core/src/runtime/interfaces.js'
-import { rpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
-import type { SessionEvents } from '@cmodjs/core/src/runtime/web.js'
+import { interfaceServer, listenMethod, type Heard, type StoreChange } from '@cmodjs/core/src/runtime/interfaces.js'
+import { connectRpc, rpcRoutes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { ifMissing } from '../src/files.js'
-import { answered as answeredRpc } from '../src/serve.js'
+import { openHistory, runningFolder } from '../src/history.js'
+import { answered as answeredRpc, serveSessions } from '../src/serve.js'
+import { webApp } from '../src/web.js'
 import { cmodWith, deleteTemporaryHomes, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
@@ -19,20 +21,23 @@ const at = (second: number) => `2026-11-04T10:00:${String(second).padStart(2, '0
 
 const children: { kill(): void }[] = []
 
+const clients: RpcClient[] = []
+
 afterAll(async () => {
+  for (const client of clients.splice(0)) await client.close()
   for (const child of children.splice(0)) child.kill()
   await deleteTemporaryHomes()
 })
 
-function answered(session: string, project: string, prompt: string, reply: string) {
+function answered(session: string, project: string, prompt: string, reply: string, isTurnOpen: boolean) {
   return lines([
     { type: 'user', uuid: `${session}-u`, sessionId: session, timestamp: at(0), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: prompt } },
     { type: 'assistant', uuid: `${session}-a`, sessionId: session, timestamp: at(2), cwd: project, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: reply }] } },
-    { type: 'system', subtype: 'turn_duration', uuid: `${session}-d`, sessionId: session, timestamp: at(3), cwd: project, durationMs: 3000 },
+    ...(isTurnOpen ? [] : [{ type: 'system', subtype: 'turn_duration', uuid: `${session}-d`, sessionId: session, timestamp: at(3), cwd: project, durationMs: 3000 }]),
   ])
 }
 
-type Running = { readonly project: string; readonly prompt: string; readonly reply: string; readonly entrypoint?: string; readonly name?: string; readonly status?: string; readonly waitingFor?: string }
+type Running = { readonly project: string; readonly prompt: string; readonly reply: string; readonly entrypoint?: string; readonly name?: string; readonly status?: string; readonly waitingFor?: string; readonly isTurnOpen?: boolean }
 
 const registryEntry = (home: string, session: string, { project, entrypoint, name, status, waitingFor }: Running) =>
   JSON.stringify({ pid: process.pid, sessionId: session, cwd: join(home, project), kind: 'interactive', entrypoint: entrypoint ?? 'cli', ...(name === undefined ? {} : { name, nameSource: 'derived' }), ...(status === undefined ? {} : { status }), ...(waitingFor === undefined ? {} : { waitingFor }) })
@@ -42,7 +47,7 @@ async function homeWith(sessions: Record<string, Running>): Promise<string> {
   const files: Record<string, string> = { '.local/share/cmod/preferences.json': JSON.stringify({ servesWebUi: true }) }
   for (const [index, [session, running]] of Object.entries(sessions).entries()) {
     const folder = join(home, running.project)
-    files[`${projectFolder(folder)}/${session}.jsonl`] = answered(session, folder, running.prompt, running.reply)
+    files[`${projectFolder(folder)}/${session}.jsonl`] = answered(session, folder, running.prompt, running.reply, running.isTurnOpen === true)
     files[`.claude/sessions/${index + 1}.json`] = registryEntry(home, session, running)
   }
   await writeFiles(home, files)
@@ -71,7 +76,25 @@ async function served(home: string, { env = {}, args = ['serve'], isOther }: { r
   const base = `http://127.0.0.1:${port}`
   const socket = store(home, 'serve.sock')
   const session = (path: string, body?: object) => fetch(`http://localhost${path}`, { unix: socket, ...(body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) })
-  return { serving, port, base, session }
+  const hold = async (id: string, project: string, act: (action: string, input: unknown) => void = () => undefined) => {
+    const plugin = connectRpc({
+      call: async (path, init) => {
+        const answer = await fetch(`http://localhost${path}`, { unix: socket, method: init.method, ...(init.body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: init.body }) })
+        return { status: answer.status, text: await answer.text() }
+      },
+      handle: async (method, params) => {
+        if (method !== '$/act') throw new Error(`The fake cmod plugin answers no ${method}.`)
+        const { action, input } = params as { readonly action: string; readonly input: unknown }
+        act(action, input)
+        return null
+      },
+      wait: () => new Promise<void>(() => undefined),
+    })
+    clients.push(plugin)
+    await plugin.request('$/hold', { session: id, project: join(home, project), cwd: join(home, project) })
+    return { tell: (status: object) => plugin.notify('$/status', { session: id, ...status }) }
+  }
+  return { serving, port, base, session, hold }
 }
 
 async function browsed(base: string) {
@@ -104,7 +127,7 @@ async function browsed(base: string) {
   const press = async (screen: { readonly draw: number; readonly html: string }, key: string, attribute: string, input: Record<string, string> = {}) => {
     const handler = new RegExp(`data-key="${key}"[^>]*?${attribute}="(\\d+)"`).exec(screen.html)?.[1]
     if (handler === undefined) throw new Error(`the screen draws no ${attribute} on ${key}:\n${screen.html}`)
-    return fetch(`${base}/api/press`, { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ stream, draw: screen.draw, handler: Number(handler), key, ...input }) })
+    return fetch(`${base}/api/press`, { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ stream, handler: Number(handler), key, ...input }) })
   }
   return { showing, press, close: () => browsing.abort() }
 }
@@ -127,7 +150,6 @@ test.concurrent("loading / shows the browser app at once, with no sign-in, and t
   expect((await fetch(`${base}/`, { headers: { host: `localhost:${port}` } })).status).toBe(200)
   expect((await change('/api/press', { origin: 'http://evil.example' })).status).toBe(403)
   expect((await change('/api/press', {})).status).toBe(403)
-  expect((await change('/api/sessions/s1', { origin: base })).status).toBe(403)
   expect((await change('/rpc/connect', { origin: base })).status).toBe(403)
   expect((await change('/api/press', { origin: base })).status).toBe(410)
   serving.child.kill()
@@ -145,9 +167,9 @@ test.concurrent('the browser app answers you through your tailnet, by the Tailsc
   expect((await fetch(`${base}/`, { headers: { host: tailnet } })).status).toBe(421)
   expect((await change('/api/press', 'person@example.com', `https://${tailnet}`)).status).toBe(410)
   expect((await change('/api/press', 'person@example.com', `http://${tailnet}`)).status).toBe(403)
-  expect((await change('/api/sessions/s1', 'person@example.com', `https://${tailnet}`)).status).toBe(403)
+  expect((await change('/rpc/connect', 'person@example.com', `https://${tailnet}`)).status).toBe(403)
   for (let waited = 0; !(await readFile(store(home, 'tailnet/cmod/cmod.json'), 'utf8').catch(ifMissing('')).then((text) => text.includes('https://'))) && waited < 15_000; waited += 50) await Bun.sleep(50)
-  expect((await cmodWith(home, { BROWSER: 'true' }, 'web')).stdout).toBe(`${base}/\nFrom your other machines: https://computer.example.ts.net:${port}/\n`)
+  expect((await cmodWith(home, { BROWSER: 'true' }, 'web')).stdout).toBe(`${base}/\nFrom your other devices: https://computer.example.ts.net:${port}/\n`)
   serving.child.kill()
 }, 30_000)
 
@@ -186,17 +208,16 @@ test.concurrent("a session's row and header carry the name Claude Code gives it,
   expect(screen.html).not.toContain('>Fix the login test</span>')
 }, 30_000)
 
-test.concurrent("a session's posted permission wait puts it in Needs you with the tool and its command, and the open session says to answer it in its terminal", async () => {
-  const home = await homeWith({ s1: { project: 'work/app', prompt: 'Run the suite', reply: 'Running it.' } })
-  const { base, serving, session } = await served(home)
-  const about = { tabs: [], pages: [], isWorking: true, waiting: { kind: 'permission', tool: 'Bash', input: { command: 'bun test' } } }
-  const posted = await session('/api/sessions/s1', { about })
+test.concurrent("a permission wait the session's cmod plugin tells cmod serve puts it in Needs you with the tool and its command, and the open session says to answer it in its terminal", async () => {
+  const home = await homeWith({ s1: { project: 'work/app', prompt: 'Run the suite', reply: 'Running it.', isTurnOpen: true } })
+  const { base, serving, hold } = await served(home)
+  const plugin = await hold('s1', 'work/app')
+  plugin.tell({ status: 'waiting', waitingFor: { dialog: 'permission prompt', tool: 'Bash', input: { command: 'bun test' } } })
   const browser = await browsed(base)
   const screen = await browser.showing('Needs you 1')
   browser.close()
   serving.child.kill()
 
-  expect(posted.status).toBe(200)
   expect(screen.html).toContain('Wants to run Bash: bun test</span>')
   expect(screen.html).toContain('Wants to run Bash: bun test. Answer it in the session&#39;s terminal.')
   expect(screen.html).toContain('data-key="stop"')
@@ -217,10 +238,53 @@ test.concurrent('a session moves to Needs you once Claude Code records it waits 
   expect(both.html).toContain('Wants permission to run a tool</span>')
 }, 30_000)
 
+test.concurrent("cmod serve follows Claude Code's session records with one watcher, and a record that changes to waiting reaches the browser as a cmod/Sessions Change, before the browser app's 5-second sweep", async () => {
+  const sweepMs = 5000
+  const running = { project: 'work/app', prompt: 'Run the suite', reply: 'Running it.', isTurnOpen: true }
+  const home = await homeWith({ s1: { ...running, status: 'busy' } })
+  const before = { CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'], XDG_DATA_HOME: process.env['XDG_DATA_HOME'] }
+  Object.assign(process.env, { CLAUDE_CONFIG_DIR: join(home, '.claude'), XDG_DATA_HOME: join(home, '.local/share') })
+  const watching = spyOn(fs, 'watch')
+  const db = openHistory()
+  const reported: string[] = []
+  const sessions = serveSessions({ db, report: (doing) => void reported.push(doing) })
+  const web = webApp({ db, sessions })
+  const heard: StoreChange[] = []
+  const listener = sessions.interfaces.handler({ request: () => Promise.reject(new Error('The test answers no request.')), notify: (_method, params) => void heard.push((params as Heard).payload as StoreChange) })
+  try {
+    await listener(listenMethod, { id: 'test', interface: 'cmod/Sessions', event: 'Change', kind: 'on' }, AbortSignal.timeout(5000))
+    const listenedAt = Date.now()
+    const browser = await browsed(`http://127.0.0.1:${web.listen(0)}`)
+    const working = await browser.showing('claude-opus-5-5')
+    await writeFiles(home, { '.claude/sessions/1.json': registryEntry(home, 's1', { ...running, status: 'waiting', waitingFor: 'permission prompt' }) })
+    const waiting = await browser.showing('Needs you 1')
+    const waitedMs = Date.now() - listenedAt
+    browser.close()
+
+    expect(waitedMs).toBeLessThan(sweepMs)
+    expect(working.html).toContain('Working 1')
+    expect(working.html).not.toContain('Needs you')
+    expect(waiting.html).toContain('Wants permission to run a tool</span>')
+    expect(heard).toContainEqual({ session: 's1', part: 'status' })
+    expect(watching.mock.calls.filter(([path]) => path === runningFolder())).toHaveLength(1)
+    expect(reported).toEqual([])
+  } finally {
+    await web.stop()
+    sessions.close()
+    db.close()
+    watching.mockRestore()
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}, 30_000)
+
 test.concurrent("a turn stopped while its command keeps running says so on its row and in its header, because Claude Code moved the command to the session's background", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Ping the host', reply: 'Pinging.', status: 'shell' } })
-  const { base, serving, session } = await served(home)
-  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: false, lastTurn: { reason: 'stopped', at: at(9) } } })
+  const { base, serving, hold } = await served(home)
+  const plugin = await hold('s1', 'work/app')
+  plugin.tell({ status: 'idle', lastTurn: { reason: 'stopped', at: at(9) } })
   const browser = await browsed(base)
   const screen = await browser.showing('Needs you 1')
   browser.close()
@@ -230,29 +294,35 @@ test.concurrent("a turn stopped while its command keeps running says so on its r
   expect(screen.html).toContain('app · claude-opus-5-5 · Stopped, and a command still runs in its terminal</span>')
 }, 30_000)
 
-test.concurrent("a prompt typed in a session's prompt box reaches that session's next poll as the person's prompt, and Stop reaches it as a stop", async () => {
+test.concurrent("a prompt typed in a session's prompt box reaches that session's cmod plugin as cmod/Sessions send of the person's prompt, and Stop reaches it as cmod/Sessions abort", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
-  const { base, serving, session } = await served(home)
-  const poll = () => session('/api/sessions/s1/events').then(async (answer) => (await answer.json()) as SessionEvents)
-  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: false } })
-  await poll()
-  const next = poll()
+  const { base, serving, hold } = await served(home)
+  const acted: { readonly action: string; readonly input: unknown }[] = []
+  const reached: (() => void)[] = []
+  const next = () => new Promise<void>((resolve) => void reached.push(resolve))
+  const plugin = await hold('s1', 'work/app', (action, input) => {
+    acted.push({ action, input })
+    reached.shift()?.()
+  })
   const browser = await browsed(base)
   const opened = await browser.showing('data-key="prompt:s1:0"')
+  const prompted = next()
   const typed = await browser.press(opened, 'prompt:s1:0', 'data-submit', { kind: 'submit', value: 'Now run the whole suite' })
-  const prompted = await next
-  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: true } })
+  await prompted
+  plugin.tell({ status: 'busy' })
   const working = await browser.showing('Working 1')
-  const stopped = poll()
+  const stopped = next()
   await browser.press(working, 'stop', 'data-press', { kind: 'press' })
-  const stop = await stopped
+  await stopped
   browser.close()
   serving.child.kill()
 
   expect(typed.status).toBe(200)
-  expect(prompted.actions).toEqual([{ type: 'prompt', text: 'Now run the whole suite' }])
   expect(working.html).toContain('data-key="prompt:s1:1"')
-  expect(stop.actions).toEqual([{ type: 'stop' }])
+  expect(acted).toEqual([
+    { action: 'send', input: { type: 'prompt', text: 'Now run the whole suite', as: 'person' } },
+    { action: 'abort', input: {} },
+  ])
 }, 30_000)
 
 test.concurrent("cmod serve deletes the before listeners an older cmod plugin kept for each session that ended, and keeps a running session's", async () => {
@@ -266,15 +336,13 @@ test.concurrent("cmod serve deletes the before listeners an older cmod plugin ke
 
 function anotherStore(home: string) {
   const sent: unknown[] = []
-  const remote = () => ({ id: 'r1', title: 'build-box-1', project: '/srv/app', cwd: '/srv/app', model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(sent.length === 0 ? 2 : 4), isRunning: true })
+  const remote = () => ({ id: 'r1', title: 'build-box-1', project: '/srv/app', cwd: '/srv/app', model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(sent.length === 0 ? 2 : 4), isRunning: true, device: { id: '9c41d07e2b5a4f86a3e1c8d2f07b6e95', name: 'build-box' } })
   const turn = () => (sent.length === 0 ? { prompt: { id: 'r1-u' }, openedAt: at(0), closedAt: at(3) } : { prompt: { id: 'r1-p' }, openedAt: at(4) })
   const server = interfaceServer({
     implementations: {
-      'cmod/SessionStore': {
+      'cmod/Sessions': {
         sessions: () => [remote()],
         read: (_session: string, part: string) => (part === 'messages' ? [{ id: 'r1-a', session: 'r1', type: 'reply', at: at(2), context: 1, turn: 'r1-u', text: 'Deployed it on the build box.' }] : part === 'state' ? { turn: turn(), openCalls: {} } : []),
-      },
-      'cmod/Session': {
         send: (session: string, input: unknown) => void sent.push(['send', session, input]),
         abort: (session: string) => void sent.push(['abort', session]),
       },
@@ -284,13 +352,13 @@ function anotherStore(home: string) {
   const routes = rpcRoutes({ handle: (connection) => server.handler(connection), onClose: (connection) => server.closed(connection), now: () => Date.now() })
   const http = Bun.serve({ unix: socket, fetch: (request) => answeredRpc(routes, request) ?? new Response('', { status: 404 }) })
   children.push({ kill: () => void (routes.close(), http.stop(true)) })
-  return { sent, instance: JSON.stringify({ address: `unix:${socket}`, pid: process.pid, started: at(0), provides: ['cmod/SessionStore', 'cmod/Session'] }) }
+  return { sent, instance: JSON.stringify({ address: `unix:${socket}`, pid: process.pid, started: at(0), provides: ['cmod/Sessions'] }) }
 }
 
-test.concurrent("the browser app lists the running sessions of every other session store beside this computer's, and a prompt or Stop there reaches that store's session", async () => {
+test.concurrent("the browser app lists the running sessions of every other sessions provider beside this computer's, and a prompt or Stop there reaches that provider's session", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.', name: 'app-1' } })
   const other = anotherStore(home)
-  await writeFiles(home, { '.local/share/cmod/instances/anyhost/anyhost.json': other.instance })
+  await writeFiles(home, { '.local/share/cmod/instances/demo/sessions-server.json': other.instance })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
   const listed = await browser.showing('build-box-1')
@@ -343,22 +411,25 @@ test.concurrent('visits pressed back to back reach the file in the order pressed
   const replied = await browser.showing('Replied 1')
   await browser.press(replied, 'row:s1', 'data-press', { kind: 'press' })
   const read = await browser.showing('Idle 1')
-  await browser.press(read, 'unread', 'data-press', { kind: 'press' })
-  await browser.press(read, 'done', 'data-press', { kind: 'press' })
+  const unread = await browser.press(read, 'unread', 'data-press', { kind: 'press' })
+  const done = await browser.press(replied, 'done', 'data-press', { kind: 'press' })
   browser.close()
   first.serving.child.kill()
   await first.serving.done
 
+  expect([unread.status, done.status]).toEqual([200, 200])
   expect(Date.parse((JSON.parse(readFileSync(store(home, 'visited.json'), 'utf8')) as { s1: string }).s1)).toBeGreaterThan(Date.parse(at(3)))
 }, 30_000)
 
-test.concurrent("a session's poll stays open its whole 8 seconds, under the 10-second idle timeout Bun keeps on a unix socket, and then answers with nothing new", async () => {
+test.concurrent("a 7.0.0 cmod plugin's post about its session is answered as taken, and its poll stays open 8 seconds, under the 10-second idle timeout Bun keeps on a unix socket, and answers that no browser wants anything, so that session warns of nothing until it reloads", async () => {
   const { serving, session } = await served(await homeWith({}))
-  await session('/api/sessions/one', { about: { tabs: [], pages: [] } })
-  await session('/api/sessions/one/events')
+  const posted = await session('/api/sessions/one', { about: { tabs: [], pages: [], isWorking: false } })
+  const postedAnswer = await posted.json()
   const startedAt = Date.now()
+  const polled = await session('/api/sessions/one/events')
 
-  expect(await (await session('/api/sessions/one/events')).json()).toEqual({ views: [], actions: [] })
+  expect([posted.status, postedAnswer]).toEqual([200, {}])
+  expect([polled.status, await polled.json()]).toEqual([200, { views: [], actions: [] }])
   expect(Date.now() - startedAt).toBeGreaterThanOrEqual(7900)
   serving.child.kill()
 }, 30_000)

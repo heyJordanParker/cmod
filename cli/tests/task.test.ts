@@ -98,7 +98,7 @@ test("the starting session's tasks list a background task, with the status claud
   const home = await backgroundHome()
   await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Upgrade', '--json', 'Upgrade every dependency.')
 
-  const listed = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'history', 'tasks', '--json')
+  const listed = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'sessions', 'read', 'tasks', '--json')
 
   expect(JSON.parse(listed.stdout)).toEqual([{ id: sessionId, title: 'Upgrade', openedBy: '', openedAt: expect.any(String), isBackground: true, status: 'running' }])
 })

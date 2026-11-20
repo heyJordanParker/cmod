@@ -10,27 +10,29 @@ A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmo
 
 ```text
 my-mod/
-├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.2.0" }]
+├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=8.0.0" }]
 ├── .claude/CLAUDE.md                   facts for coding agents, starting with these docs
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
+├── CHANGELOG.md                        the release notes, a section per version, which cmod publish requires
 ├── hooks/hooks.json                    names hooks/register.ts as the hooks module
 ├── hooks/register.ts                   registerMod(addHook, myMod, options), and nothing else
 ├── src/mod.tsx                         defineMod: the state, the hotkeys, the setup, the listeners
 ├── src/state.ts                        the starting state
-├── src/pages/prompts.tsx               one Sidebar page per file
+├── src/views/prompts.tsx               one view per file
 ├── src/widgets/prompts.tsx             one widget per file
-├── src/components/prompt-count.tsx     what the page and the widget draw with
+├── src/components/prompt-count.tsx     what the view and the widget draw with
 ├── skills/my-mod/SKILL.md              a Skill the mod ships
 ├── rules/prompt-count.md               a rule Claude reads
 ├── tests/mod.test.ts                   testMod tests, run with bun test
+├── tests/tsconfig.json                 adds Bun's types for the tests
 ├── package.json                        depends on @cmodjs/core, and lists the hotkeys
 └── tsconfig.json                       extends .claude-plugin/types/tsconfig.json, with the JSX options
 ```
 
 `cmod new --project` writes the same files, less `.claude/CLAUDE.md`, into `.claude/skills/<name>/` of the repository.
 
-The template is a working example to replace. It counts the prompts of the session in `state.session.prompts`, shows the count below the prompt and in a Sidebar page that the `alt+shift+p` hotkey shows or hides, and tests all three. Replace the counter, the page, the widget, the component, the Skill, the rule, and the tests with the mod's own.
+The template is a working example to replace. It counts the prompts of the session in `state.session.prompts`, shows the count below the prompt and in a view that the `alt+shift+p` hotkey shows or hides, and tests all three. Replace the counter, the view, the widget, the component, the Skill, the rule, and the tests with the mod's own.
 
 A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Every type a mod writes comes from `@cmodjs/core` too, never from the `claude-code` module. A component returns `JSX.Element` and takes `JSX.Children`, which need no import. Element props, such as `BoxProps` and `Color`, come from `ui/elements.js`. The two types of `register`'s parameters, `AddHook` and `PluginOptions`, come from `register.js`, and the rest from `mod.js`.
 
@@ -39,6 +41,46 @@ A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.
 `.claude-plugin/types/` describes Claude Code's API to TypeScript: the `tsconfig.json` the mod's own extends, the `claude-code` module that `@cmodjs/core` imports, and the `h` JSX global. Claude Code writes it when it loads the mod, and git ignores it. `cmod check` has Claude Code write it when it is missing, so a fresh clone and CI compile the mod against Claude Code's API too. Until it exists, `tsc` alone fails, so run `cmod check` once first.
 
 Claude Code links the types of each plugin the mod depends on, such as `cmod`, into the folder where that plugin is installed. `cmod try` installs the cmod plugin into a home it deletes when the session ends, which leaves those links leading nowhere, so `tsc` alone fails with `Cannot find type definition file for 'cmod'`. `cmod check` deletes a types folder with such a link and has Claude Code write it again.
+
+## How cmod is built
+
+cmod follows VS Code's extension architecture, with a Claude Code session where VS Code has a window. Each part below is named for cmod, then for its VS Code counterpart:
+
+```text
+computer
+├── cmod serve                          the shared process: one per computer, serves every session on it, holds every program's providers, and carries calls to other devices' cmod serve
+├── a mod's program                     a language server: one copy per computer, with singleInstance or isService
+│   ├── provide, after connect()        registerXProvider, from a program, registered with cmod serve
+│   └── provide('cmod/Devices')         a RemoteAuthorityResolver: answers where another device's cmod serve listens, or carries its messages
+└── Claude Code session                 a window
+    └── the session's hooks worker      the extension host: loads every mod of the session
+        └── mod                         an extension: 30 sessions run 30 copies of its code
+            ├── sessions.current        window events: the session the mod runs in
+            ├── state.project           workspaceState
+            ├── state.global            globalState
+            ├── state.memory            cmod's own, because VS Code has no conversations
+            ├── state.session           cmod's own, for the same reason
+            ├── mod.secrets             SecretStorage: get, store, delete
+            ├── options                 contributed configuration, shown in /config
+            ├── what setup returns      extension exports, called through mod.dependencies
+            ├── provide                 registerXProvider, from session code, for its window alone
+            ├── slash commands          commands
+            ├── hotkeys                 keybindings
+            ├── widgets                 status bar items
+            ├── views                   views in a view container
+            ├── pages                   editors
+            └── panes                   webviews, which only Claude Code draws
+```
+
+Each app places a mod's widgets, views, and pages, as each VS Code workbench places an extension's parts: Claude Code, the browser app, and any app that reaches the `cmod/UI` interface ([ui.md](ui.md#every-app-reaches-them-through-cmod-ui)). A mod draws them with cmod's own element data rather than HTML, because Claude Code's terminal draws no HTML.
+
+Three parts depart from VS Code:
+
+- A mod hears only the session it runs in, as an extension hears only its own window. It also reads and acts on every other session on the computer, through `cmod serve`, and on every session of another device `cmod serve` reaches or a sessions provider serves ([session.md](session.md#sessions-providers)), where an extension reaches no other window. A task that ends on another device reaches the mod as its own task's end.
+- cmod knows an address or a message channel a `cmod/Devices` provider gives, never the transport. The provider opens the link its own way, such as an ssh tunnel, a tailnet, or a relay. It answers a unix socket path or an `http://` URL, which `cmod serve` reaches with its own JSON-RPC over HTTP, or no address, and then carries each JSON-RPC message for that device with its `send` and tells each message from it as `Message`. A VS Code `RemoteAuthorityResolver` answers an address or a `ManagedMessagePassing` that carries bytes. cmod's channel carries whole JSON-RPC messages instead, so a provider frames nothing and every device speaks one protocol ([dependencies.md](dependencies.md#cmod-devices-providers-on-your-other-devices)).
+- `mod.secrets` keeps every mod's secrets as plain values in `secrets.json` in the cmod store, which only the person can read, on every platform, as Claude Code keeps its own login on Linux. VS Code's `SecretStorage` seals them with a key in the keychain or the Secret Service instead, which cmod leaves out because the keychain can raise a prompt that nobody answers on a computer nobody sits at ([mod.md](mod.md#mod-secrets)).
+
+cmod runs on every device, as VS Code's Remote Development runs a server on each remote machine. A mod connects the devices when its program provides `cmod/Devices`, which names where each other device's `cmod serve` listens, or carries its messages. `cmod serve` then lists that device's providers beside this computer's and carries each call and listener to the device that holds the provider, as VS Code's window carries each call to a remote extension host ([dependencies.md](dependencies.md#cmod-devices-providers-on-your-other-devices)).
 
 ## Where a mod runs
 
@@ -67,16 +109,17 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | Where does my mod keep a token it gets by itself, such as from a sign-in, out of its files? | [mod.md](mod.md#mod-secrets) |
 | How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#metadata-a-file-s-own-keys) |
 | How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
-| How do I add my mod's own page to Settings, or change Claude Code's settings? | [ui.md](ui.md#settings-pages), [mod.md](mod.md#settings-claude-code-s-settings-files) |
+| How do I add my mod's own view to Settings, or change Claude Code's settings? | [ui.md](ui.md#views-in-settings), [mod.md](mod.md#settings-claude-code-s-settings-files) |
 | How do I give my mod a hotkey the person can change? | [mod.md](mod.md#hotkeys) |
 | How does my mod read and follow this conversation, its tasks, or earlier ones, search them, or start a task? | [session.md](session.md) |
 | How does my mod hear a prompt, a tool call, a permission dialog, or a model switch, and change or refuse it? | [session.md](session.md#listen-to-a-record), [session.md](session.md#the-session-s-own-events) |
 | How does my mod hear, change, or run any slash command, a built-in such as `/compact` included? | [mod.md](mod.md#commands-slash-commands) |
-| How do I draw a page in the Sidebar, a pane, change how Claude Code draws a row, or ask the person something? | [ui.md](ui.md) |
+| How do I draw a view beside the session, a page, a pane, change how Claude Code draws a row, or ask the person something? | [ui.md](ui.md) |
+| How does an app, such as the browser app, list, draw, and press every session's widgets, views, and pages? | [ui.md](ui.md#every-app-reaches-them-through-cmod-ui) |
 | How do I show a status, such as the branch or a CI result, by the prompt, while Claude works, after each turn, or on the Dashboard? | [ui.md](ui.md#widgets) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, or a background program? | [jobs.md](jobs.md) |
 | How does one mod call another, or call whichever mods answer an interface? | [dependencies.md](dependencies.md) |
-| How does a mod change the machine, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
+| How does a mod change the device, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
 | How do I test a mod without Claude Code? | [testing.md](testing.md) |
 | Which `cmod` command links, checks, tries in a clean Claude Code, or publishes a mod? | [commands.md](commands.md) |
 
@@ -94,15 +137,16 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `InstructionFile`, `AttachedFile`, `AttachmentType`, `Notice`, `Sender`, `SenderType`, `Person`, `Mod`, `Schedule`, `Channel`, `Sdk`, `Engine` | [session.md](session.md#message) |
 | `mod.js` | `Context`, `Turn`, `Goal`, `Task` | [session.md](session.md#turn-context-goal-and-task) |
 | `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
-| `mod.js` | `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `PaneScroll`, `PaneClose`, `OpenOptions`, `ScrollTarget`, `ScrollOptions` | [ui.md](ui.md#the-sidebar-and-its-pages) |
+| `mod.js` | `ViewInit`, `View`, `ViewProps`, `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `PaneScroll`, `PaneClose`, `OpenOptions`, `ScrollTarget`, `ScrollOptions` | [ui.md](ui.md#views-and-pages) |
 | `mod.js` | `WidgetInit`, `Widget`, `WidgetContext`, `Area`, `AbovePrompt`, `BelowPrompt`, `Working`, `TurnEnd`, `Dashboard` | [ui.md](ui.md#widgets) |
 | `mod.js` | `StyleInit`, `Style`, `StyleProps`, `Kind`, `Row`, `Block`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion` | [ui.md](ui.md#styles-change-how-claude-code-draws) |
-| `mod.js` | `notInstalled`, `providers`, `InterfaceName`, `InterfaceMethods`, `InterfaceProvider`, `ProviderOn`, `ProviderBefore`, `ProviderListenOptions` | [dependencies.md](dependencies.md) |
+| `mod.js` | `notInstalled`, `provide`, `Provided`, `providers`, `InterfaceName`, `InterfaceMethods`, `InterfaceProvider`, `ProviderOn`, `ProviderBefore`, `ProviderListenOptions` | [dependencies.md](dependencies.md) |
 | `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod`, `AddHook`, `PluginOptions` | [mod.md](mod.md) |
+| `rpc.js` | `connect`, `Connection`, `NotHeld` | [dependencies.md](dependencies.md#connect-a-program-s-connection-to-cmod-serve) |
 | `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionType`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
 | `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
-| `testing.js` | `testMod`, `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `MessageDraft`, `RoutedEvent` | [testing.md](testing.md) |
+| `testing.js` | `testMod`, `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `FakeProvider`, `MessageDraft`, `RoutedEvent` | [testing.md](testing.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `Raster`, `Svg`, `Client`, `drawWith` | [ui.md](ui.md) |
 | `ui/elements.js` | `BoxProps`, `TextProps`, `ButtonProps`, `CodeProps`, `MarkdownProps`, `InputProps`, `SelectProps`, `ImageProps`, `RasterProps`, `SvgProps`, `ClientProps`, `Color`, `Press` | [ui.md](ui.md#elements) |
 | `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `Progress` | [ui.md](ui.md) |

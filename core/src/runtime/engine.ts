@@ -1,8 +1,8 @@
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Claude } from './claude.js'
-import type { Pages } from './pages.js'
+import type { Providers } from './interfaces.js'
+import type { Parts } from './parts.js'
 import type { Router } from './router.js'
-import type { Subscription } from '../utils/subscription.js'
 import type { Failure } from './toaster.js'
 import type { ToolCalls } from './tool-calls.js'
 import type { Watches } from './watches.js'
@@ -18,9 +18,9 @@ export type Engine = {
   readonly spawnCmod: (args: readonly string[], env?: Readonly<Record<string, string>>) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>
   readonly isInstalledCopy: () => Promise<boolean>
   readonly watches: Watches
-  readonly onRedraw: (listener: () => void) => Subscription
+  readonly interfaces: Providers
   readonly widgets?: Widgets
-  readonly pages?: Pages
+  readonly parts?: Parts
   readonly onServeUnreached: (listener: () => void) => void
 }
 

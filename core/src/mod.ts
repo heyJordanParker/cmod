@@ -23,9 +23,9 @@ import { checkOptions, type Option, type Options, type OptionValues } from './op
 import { bound } from './runtime/bound.js'
 import type { Device } from './session/context/turn/device.js'
 import { Mod as modSender } from './session/context/turn/message/sender.js'
-import { sessionEvents, type BeforeMethod, type CommandRun, type CommandRunAnswer, type OnMethod, type OnMethods, type Sessions } from './session/session.js'
+import type { BeforeMethod, CommandRun, CommandRunAnswer, OnMethod, Sessions } from './session/session.js'
 import type { Widget, WidgetInit } from './ui/areas.js'
-import type { Page, PageInit, Pane, PaneInit } from './ui/panes.js'
+import type { Page, PageInit, Pane, PaneInit, View, ViewInit } from './ui/panes.js'
 import type { Kind, Style, StyleInit } from './ui/styles.js'
 import type { Matcher } from './utils/matcher.js'
 import type { Subscription } from './utils/subscription.js'
@@ -135,7 +135,12 @@ export type ProviderBefore<Payload> = {
 
 export type InterfaceMethods<Name extends InterfaceName> = { readonly [Method in keyof MethodsOf<Name>]: MethodsOf<Name>[Method] extends (...args: infer Args) => infer Result ? (...args: Args) => Result | Promise<Awaited<Result>> : never }
 
-export type InterfaceProvider<Name extends InterfaceName> = { readonly mod: string; readonly program?: string } & {
+export type Provided<Name extends InterfaceName> = Subscription & {
+  tell<Event extends keyof EventsOf<Name> & string>(event: Event, payload: EventsOf<Name>[Event]): void
+  ask<Event extends keyof EventsOf<Name> & string>(event: Event, payload: EventsOf<Name>[Event]): Promise<unknown[]>
+}
+
+export type InterfaceProvider<Name extends InterfaceName> = { readonly mod: string; readonly program?: string; readonly device: { readonly id: string; readonly name: string } } & {
   readonly [Method in keyof MethodsOf<Name>]: MethodsOf<Name>[Method] extends (...args: infer Args) => infer Result ? (...args: Args) => Promise<Awaited<Result>> : never
 } & { readonly [Event in keyof EventsOf<Name> & string as `on${Event}`]: ProviderOn<EventsOf<Name>[Event]> } & { readonly [Event in keyof EventsOf<Name> & string as `before${Event}`]: ProviderBefore<EventsOf<Name>[Event]> }
 
@@ -152,8 +157,10 @@ export type Imports = {
     readonly user: SettingsFile
     readonly project: SettingsFile
     readonly local: SettingsFile
-    beforeFileChange(listener: SettingsFileChangeListener): Subscription
-    beforeFileChange(matcher: Matcher<SettingsFileChange>, listener: SettingsFileChangeListener): Subscription
+    beforeChange(listener: SettingsFileChangeListener): Subscription
+    beforeChange(matcher: Matcher<SettingsFileChange>, listener: SettingsFileChangeListener): Subscription
+    onChange(listener: (change: SettingsFileChange) => unknown): Subscription
+    onChange(matcher: Matcher<SettingsFileChange>, listener: (change: SettingsFileChange) => unknown): Subscription
   }
   readonly model: { complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult> }
   readonly fs: {
@@ -177,6 +184,7 @@ export type Imports = {
   readonly device: { read(): Promise<Device> }
   readonly clipboard: { write(text: string): Promise<void> }
   readonly mods: { isLoaded(name: string): Promise<boolean> }
+  provide<Name extends InterfaceName>(name: Name, methods: InterfaceMethods<Name>): Provided<Name>
   providers<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>[]>
 }
 
@@ -187,14 +195,14 @@ export const sessions: Imports['sessions'] = {
   list: (options) => bound().sessions.list(options),
   get: (id) => bound().sessions.get(id),
   search: (text, matcher, options) => bound().sessions.search(text, matcher, options),
-  ...(Object.fromEntries(Object.keys(sessionEvents).map((named) => [`on${named}`, (...args: unknown[]) => (bound().sessions[`on${named}` as keyof OnMethods] as (...each: unknown[]) => Subscription)(...args)])) as OnMethods),
 }
 
 export const settings: Imports['settings'] = {
   user: { read: () => bound().settings.user.read(), update: (values) => bound().settings.user.update(values) },
   project: { read: () => bound().settings.project.read(), update: (values) => bound().settings.project.update(values) },
   local: { read: () => bound().settings.local.read(), update: (values) => bound().settings.local.update(values) },
-  beforeFileChange: ((matcherOrListener: never, listener?: never) => bound().settings.beforeFileChange(matcherOrListener, listener as never)) as Imports['settings']['beforeFileChange'],
+  beforeChange: ((matcherOrListener: never, listener?: never) => bound().settings.beforeChange(matcherOrListener, listener as never)) as Imports['settings']['beforeChange'],
+  onChange: ((matcherOrListener: never, listener?: never) => bound().settings.onChange(matcherOrListener, listener as never)) as Imports['settings']['onChange'],
 }
 
 export const commands: Imports['commands'] = {
@@ -248,12 +256,15 @@ export const mods: Imports['mods'] = {
   isLoaded: (name) => bound().mods.isLoaded(name),
 }
 
+export const provide: Imports['provide'] = (name, methods) => bound().provide(name, methods)
+
 export const providers: Imports['providers'] = (name) => bound().providers(name)
 
 export type Mod<State extends object = Record<never, never>, Declared extends Options = Options, Keys extends Hotkeys = Hotkeys> = {
   readonly name: string
   readonly folder: string
   readonly dataFolder: string
+  readonly cacheFolder: string
   readonly secrets: {
     get(key: string): Promise<string | undefined>
     store(key: string, value: string): Promise<void>
@@ -267,9 +278,10 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   use<Handle>(job: Job<Handle, State>): Handle
   log(text: string, options?: { readonly to?: 'debug' | 'transcript'; readonly level?: 'warning' | 'error' }): void
   readonly panes: { add<Params = undefined>(pane: PaneInit<State, Params>): Pane<Params> }
-  readonly sidebar: { add<Params = undefined>(page: PageInit<State, Params>): Page<Params> }
+  readonly views: { add<Params = undefined>(view: ViewInit<State, Params>): View<Params> }
+  readonly pages: { add<Params = undefined>(page: PageInit<State, Params>): Page<Params> }
   readonly settings: {
-    add<Params = undefined>(page: PageInit<State, Params>): Page<Params>
+    add<Params = undefined>(view: ViewInit<State, Params>): View<Params>
     open(): Promise<void>
   }
   readonly widgets: { add(widget: WidgetInit<State>): Widget }
@@ -277,7 +289,6 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly toast: Toast
   ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
   readonly dependencies: CmodDependencies
-  provide<Name extends InterfaceName>(name: Name, methods: InterfaceMethods<Name>): Subscription
 }
 
 export const Mod = modSender
@@ -326,7 +337,7 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 
 export type { Matcher } from './utils/matcher.js'
 export type { Combo, Hotkey, HotkeyInit, Key } from './hotkeys.js'
-export type { OpenOptions, Page, PageInit, PageProps, Pane, PaneClose, PaneInit, PaneProps, PaneScroll, ScrollOptions, ScrollTarget } from './ui/panes.js'
+export type { OpenOptions, Page, PageInit, PageProps, Pane, PaneClose, PaneInit, PaneProps, PaneScroll, ScrollOptions, ScrollTarget, View, ViewInit, ViewProps } from './ui/panes.js'
 export type { Kind, Row, Style, StyleInit, StyleProps } from './ui/styles.js'
 export type { Block } from './ui/markdown.js'
 export { AskUserQuestion, CommandOutput, ToolGroup, ToolProgress } from './ui/styles.js'

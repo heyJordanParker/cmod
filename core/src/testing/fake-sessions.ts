@@ -15,7 +15,8 @@ import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { createConversation, emptyConversation, searchLimit, tasksWithAgents, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import type { Decide, Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
-import { conversationMethods, everySession, isHeardBy, resultOf, type Listened, type SessionColor } from '../runtime/sessions.js'
+import { testDevice } from './fake-claude.js'
+import { conversationMethods, isHeardBy, resultOf, type Listened, type SessionColor } from '../runtime/sessions.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { firstLine, messageOf } from '../utils/text.js'
 
@@ -78,7 +79,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
   const now = () => new Date((clock += 1000)).toISOString()
 
   const keep = (data: SessionData): Kept => {
-    const session: Kept = { data, conversation: createConversation(emptyConversation(data.id)), messages: [], turns: new Map(), contexts: new Map(), tasks: new Map() }
+    const session: Kept = { data: { device: { id: testDevice.id, name: testDevice.name }, ...data }, conversation: createConversation(emptyConversation(data.id)), messages: [], turns: new Map(), contexts: new Map(), tasks: new Map() }
     kept.set(data.id, session)
     return session
   }
@@ -91,7 +92,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       if ('task' in change) session.tasks.set(change.task.id, change.task)
       session.data = { ...session.data, lastAt: change.type === Message ? change.message.at : session.data.lastAt, ...(session.data.title === '' && change.type === Message && change.message.type === Prompt && change.message.from.type === Person ? { title: firstLine(change.message.text) } : {}) }
       for (const [mod, sessions] of heard) {
-        if ([...(sessions.get(session.data.id) ?? []), ...(sessions.get(everySession) ?? [])].some(({ event, matcher }) => isHeardBy(event, matcher, change))) push(mod, session.data.id, change)
+        if ((sessions.get(session.data.id) ?? []).some(({ event, matcher }) => isHeardBy(event, matcher, change))) push(mod, session.data.id, change)
       }
     }
   }
@@ -131,7 +132,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
     return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns, ...(openCalls === undefined ? {} : { openCalls }) }
   }
 
-  const wantsBefore = (mod: string, event: string) => [current, everySession].some((target) => (watches.get(mod)?.get(target) ?? []).includes(event))
+  const wantsBefore = (mod: string, event: string) => (watches.get(mod)?.get(current) ?? []).includes(event)
 
   const taskOf = (session: Kept, id: string) => {
     const task = session.tasks.get(id)
@@ -160,7 +161,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
     [conversationMethods.session]: (request) => sessionOf(String(request['session'])).data,
     [conversationMethods.search](request) {
       const text = String(request['text'])
-      if ([...text].length < 3) throw new Error('cmod history search takes at least 3 characters.')
+      if ([...text].length < 3) throw new Error('cmod sessions search takes at least 3 characters.')
       const inRecord = (message: Message) => {
         const session = kept.get(message.session)
         const task = request['task']

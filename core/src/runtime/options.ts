@@ -1,6 +1,6 @@
 import type { PluginOptions } from 'claude-code'
 import { fitsOption, isUnset, projectOptionsOf, type Option, type Options } from '../options.js'
-import { configFolders } from '../records.js'
+import { projectConfigFolder } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Failure } from './toaster.js'
@@ -51,10 +51,7 @@ export function createOptions({
   }
 
   const readProject = async (root: string): Promise<Record<string, unknown>> => {
-    const env = { HOME: await claude.env.home(), CLAUDE_CONFIG_DIR: await claude.env.configHome() }
-    const project = configFolders(env, name, root).find(({ tier }) => tier === 'project')
-    if (project === undefined) return {}
-    const path = `${project.folder}/options.json`
+    const path = `${projectConfigFolder(root, name)}/options.json`
     if (!(await claude.fs.exists(path))) return {}
     const { values: kept, ignored } = projectOptionsOf(name, declared, await claude.fs.read(path))
     for (const reason of ignored) report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` })

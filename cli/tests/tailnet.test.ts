@@ -53,7 +53,7 @@ test.concurrent('a web app runs with your tailnet name and login, is on your tai
   expect(tailnetRecord(home)).toEqual({ port: 62021, url: null, reason: null })
 }, 60000)
 
-test.concurrent('a web app keeps its tailnet port when it listens on another local port, so its address on your other machines stays the same', async () => {
+test.concurrent('a web app keeps its tailnet port when it listens on another local port, so its address on your other devices stays the same', async () => {
   const home = await webHome()
   const first = startCmod(home, 'program', 'demo', '--web-app', '--no-wait', '--', 'web-server', '62021')
   await first.waitForOutput('127.0.0.1:62021')

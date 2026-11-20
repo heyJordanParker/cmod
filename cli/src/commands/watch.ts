@@ -37,7 +37,7 @@ such as a build's temporary file, offers nothing. A build that still fails
 after 10 seconds without a change shows its error in every session, and the
 last program that built keeps running. At its start it builds again each mod an earlier cmod watch
 left failing, so a failure an older cmod wrote goes once the mod builds. One cmod
-watch watches per machine: another one exits at once while it runs. It touches
+watch watches per device: another one exits at once while it runs. It touches
 its file in watch.lock every 5 seconds, and the cmod plugin of each session
 with a linked mod starts cmod watch again once that file is gone or 15 seconds
 old. Before each touch it reads the newest cmod installed in the cmod store,

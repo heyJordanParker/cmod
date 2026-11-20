@@ -1,14 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, watch } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
 import type { Database } from 'bun:sqlite'
 import { basename } from 'node:path'
 import type { Server } from 'bun'
-import { isObject, storeFolder } from '@cmodjs/core/src/records.js'
-import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
-import { readProviders, sessionInterface, sessionStore } from '@cmodjs/core/src/runtime/interfaces.js'
-import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { htmlOf, type ClosedPage, type ElementData, type HandlerData, type SessionAbout, type SessionEvents, type SessionWait, type WebAction, type WebDrawing, type WebInput, type WebView } from '@cmodjs/core/src/runtime/web.js'
+import { isObject } from '@cmodjs/core/src/records.js'
+import { listenMethod, methodName, onMethod, sessionsInterface, uiInterface, type Heard, type Listening, type ProviderIdentity, type StoreChange } from '@cmodjs/core/src/runtime/interfaces.js'
+import type { Peer } from '@cmodjs/core/src/runtime/rpc.js'
+import { htmlOf, type ElementData, type HandlerData } from '@cmodjs/core/src/runtime/web.js'
 import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
@@ -18,20 +15,13 @@ import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-r
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
 import type { ConversationState, SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { ifMissing } from './files.js'
-import { followSessions, hasTranscript, listSessions, readMessages, readState, readTurns, runningEntries, runningFolder, type RunningEntry } from './history.js'
+import { followSessions, hasTranscript, readMessages, readState, readTurns, runningEntries, type RunningEntry } from './history.js'
 import type { SessionServer } from './serve.js'
-import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type PressInput, type Screen, type ScreenActions } from './web-page.js'
-
-const pollMs = 8000
+import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type On, type PressInput, type Screen, type ScreenActions, type UiUnit, type UnitTab } from './web-page.js'
 
 const idleSeconds = 30
 
-const liveMs = 20_000
-
 const sweepMs = 5000
-
-const registryQuietMs = 300
 
 const summaryQuietMs = 1000
 
@@ -49,24 +39,15 @@ const questionTool = 'AskUserQuestion'
 
 const sdkEntrypoint = 'sdk-cli'
 
+const browserSurface = 'browser'
+
 const stoppedRunning = 'Stopped, and a command still runs in its terminal'
 
 const inputKinds: ReadonlySet<unknown> = new Set(['press', 'change', 'submit', 'select', 'link'])
 
-const sessionPath = /^\/api\/sessions\/([\w-]{1,128})(\/events)?$/
-
-type Waiter = (events: SessionEvents) => void
-
-type Posted = {
-  about: SessionAbout | undefined
-  seenAt: number
-  waiter: Waiter | undefined
-  actions: WebAction[]
-  told: string
-  readonly drawings: Map<string, { readonly draw: number; readonly tree: unknown }>
-}
-
 type Call = { readonly name: string; readonly input: Readonly<Record<string, unknown>> }
+
+type Units = { readonly views: readonly UiUnit[]; readonly pages: readonly UiUnit[] }
 
 type Agent = {
   entry: RunningEntry
@@ -75,12 +56,15 @@ type Agent = {
   closedAt: string | undefined
   readonly openCalls: Map<string, Call>
   messages: SessionMessage[]
+  readonly openPages: Set<string>
   readonly stop: AbortController
-  readonly store?: RpcClient
+  readonly store?: ProviderIdentity
   readAt?: string
 }
 
 type PressHandler = (input: PressInput) => void
+
+type ShownUnit = { readonly session: string; readonly unit: UiUnit }
 
 type Stream = {
   readonly id: string
@@ -96,11 +80,14 @@ type Stream = {
   html: string
   seenAt: number
   timer: ReturnType<typeof setTimeout> | undefined
-  readonly handlers: Map<number, readonly PressHandler[]>
+  controls: ReadonlyMap<number, PressHandler>
+  readonly numbers: Map<string, number>
+  shown: ShownUnit | undefined
 }
 
+type Fetched = { value: unknown; failure: string | undefined; heldFor: number; wanted: number; isFetching: boolean }
+
 export type WebApp = {
-  sessionRoute(request: Request): Promise<Response> | undefined
   listen(port: number): number
   close(): Promise<void>
   stop(): Promise<void>
@@ -115,16 +102,19 @@ class Refusal extends Error {
   }
 }
 
+const unitKey = ({ mod, id }: Pick<UiUnit, 'mod' | 'id'>) => `${mod}/${id}`
+
 export function webApp({ db, sessions }: { readonly db: Database; readonly sessions: SessionServer }): WebApp {
-  const posted = new Map<string, Posted>()
   const agents = new Map<string, Agent>()
   const streams = new Map<string, Stream>()
+  const fetched = new Map<string, Fetched>()
+  const heardBy = new Map<string, (payload: unknown) => void>()
   const encoder = new TextEncoder()
   let visits = new Map<string, string>()
   let summaryTimer: ReturnType<typeof setTimeout> | undefined
   let registryTimer: ReturnType<typeof setTimeout> | undefined
+  let lastNumber = 0
   const following = new AbortController()
-  const stores = new Map<string, RpcClient>()
   let isReadingStores = false
 
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod web serve: ${doing}: ${messageOf(error)}\n`)
@@ -134,38 +124,90 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     return tailnetName !== '' && host.replace(/:\d+$/, '') === tailnetName && request.headers.get('tailscale-user-login') === tailnetLogin
   }
 
-  const postedOf = (id: string): Posted => {
-    const known = posted.get(id)
-    if (known !== undefined) return known
-    const created: Posted = { about: undefined, seenAt: Date.now(), waiter: undefined, actions: [], told: '', drawings: new Map() }
-    posted.set(id, created)
-    return created
+  const app: Pick<Peer, 'request' | 'notify'> = {
+    request: () => Promise.reject(new Error('cmod web asks no listener of cmod serve.')),
+    notify(method, params) {
+      if (method !== onMethod) return
+      const { id, payload } = params as Heard
+      heardBy.get(id)?.(payload)
+    },
   }
-  const isLive = (session: Posted) => session.waiter !== undefined || Date.now() - session.seenAt < liveMs
-  const aboutOf = (id: string) => {
-    const session = posted.get(id)
-    return session !== undefined && isLive(session) ? session.about : undefined
+  const serve = sessions.interfaces.handler(app)
+  const callOwn = async <Result>(name: string, method: string, args: readonly unknown[]): Promise<Result> => (await serve(methodName(name, method), args, following.signal)) as Result
+  const callUi = <Result>(method: string, args: readonly unknown[]) => callOwn<Result>(uiInterface, method, args)
+  const listen = <Payload>(name: string, event: string, heard: (payload: Payload) => void) => {
+    const id = `${name} ${event}`
+    heardBy.set(id, (payload) => heard(payload as Payload))
+    void Promise.resolve(serve(listenMethod, { id, interface: name, event, kind: 'on' } satisfies Listening, following.signal)).catch((error: unknown) => report(`hears no ${event} of ${name}`, error))
   }
 
-  const lastTurnOf = (agent: Agent) => {
-    const told = aboutOf(agent.entry.session)
-    if (told?.isWorking !== undefined) return told.isWorking ? undefined : told.lastTurn
-    return agent.isTurnOpen || agent.closedAt === undefined ? undefined : { reason: 'answered' as const, at: agent.closedAt }
+  const fetchedOf = (key: string, read: () => Promise<unknown>): Fetched => {
+    const known = fetched.get(key) ?? { value: undefined, failure: undefined, heldFor: -1, wanted: 0, isFetching: false }
+    fetched.set(key, known)
+    if (known.isFetching || known.heldFor === known.wanted) return known
+    known.isFetching = true
+    const asked = known.wanted
+    void read()
+      .then(
+        (value) => {
+          known.value = value
+          known.failure = undefined
+        },
+        (error: unknown) => void (known.failure = messageOf(error)),
+      )
+      .finally(() => {
+        known.isFetching = false
+        known.heldFor = asked
+        redrawAll()
+      })
+    return known
   }
-  const askedOf = (agent: Agent): SessionWait | undefined => {
+  const refetch = (prefix: string) => {
+    for (const [key, known] of fetched) if (key.startsWith(prefix)) known.wanted += 1
+    redrawAll()
+  }
+  const forget = (session: string) => {
+    for (const key of fetched.keys()) if (key.startsWith(`${session}\n`)) fetched.delete(key)
+  }
+
+  const unitsOf = (agent: Agent): Units | undefined => {
+    if (agent.store !== undefined) return undefined
+    const { session } = agent.entry
+    const listed = async (): Promise<Units> => {
+      const [views, pages] = await Promise.all([callUi<UiUnit[]>('views', [session]), callUi<UiUnit[]>('pages', [session])])
+      return { views, pages }
+    }
+    return fetchedOf(`${session}\nunits`, listed).value as Units | undefined
+  }
+  const drawnOf = (session: string, unit: UiUnit, columns: number) => fetchedOf(`${session}\ndraw\n${unitKey(unit)}\n${columns}`, () => callUi('draw', [session, { mod: unit.mod, id: unit.id }, { columns, surface: browserSurface }]))
+
+  const statusOf = (agent: Agent) => agent.entry.status ?? agent.summary?.status
+  const isWorking = (agent: Agent) => {
+    const status = statusOf(agent)
+    return status === undefined ? agent.isTurnOpen : status === 'busy' || (status === 'waiting' && agent.isTurnOpen)
+  }
+  const lastTurnOf = (agent: Agent): SessionData['lastTurn'] => {
+    if (isWorking(agent)) return undefined
+    return agent.summary?.lastTurn ?? (agent.isTurnOpen || agent.closedAt === undefined ? undefined : { reason: 'answered', at: agent.closedAt })
+  }
+  const askedOf = (agent: Agent): string | undefined => {
     const asked = [...agent.openCalls.values()].findLast((call) => call.name === questionTool)
     const question = (asked?.input['questions'] as readonly { readonly question?: unknown }[] | undefined)?.[0]?.question
-    return typeof question === 'string' ? { kind: 'question', question } : undefined
+    return typeof question === 'string' ? question : undefined
   }
   const waitOf = (agent: Agent): string | undefined => {
-    const { status, waitingFor } = agent.entry
-    const told = aboutOf(agent.entry.session)
-    const wait = status === 'waiting' || status === undefined ? (told?.isWorking === undefined ? askedOf(agent) : told.waiting) : undefined
-    if (wait !== undefined) return wait.kind === 'question' ? `Asks: ${wait.question}` : `Wants to run ${wait.tool}: ${callSummary(wait.input)}`
-    if (status !== 'waiting') return undefined
-    return waitingFor === 'permission prompt' ? 'Wants permission to run a tool' : waitingFor === 'input needed' ? 'Asks you a question' : `Waits on ${waitingFor ?? 'you'} in its terminal`
+    const status = statusOf(agent)
+    if (status !== undefined && status !== 'waiting') return undefined
+    const waiting = agent.summary?.waitingFor
+    if (waiting?.question !== undefined) return `Asks: ${waiting.question}`
+    if (waiting?.tool !== undefined) return `Wants to run ${waiting.tool}: ${callSummary(waiting.input ?? {})}`
+    if (status === undefined) {
+      const question = askedOf(agent)
+      return question === undefined ? undefined : `Asks: ${question}`
+    }
+    const dialog = agent.entry.waitingFor ?? waiting?.dialog
+    return dialog === 'permission prompt' ? 'Wants permission to run a tool' : dialog === 'input needed' ? 'Asks you a question' : `Waits on ${dialog ?? 'you'} in its terminal`
   }
-  const isWorking = (agent: Agent) => aboutOf(agent.entry.session)?.isWorking ?? agent.isTurnOpen
   const lastReply = (agent: Agent) => agent.messages.findLast((message) => message.type === Reply)
 
   const rowOf = (agent: Agent): AgentRow => {
@@ -177,7 +219,7 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     const reply = lastReply(agent)
     const replyLine = reply === undefined ? '' : firstLine(reply.text)
     const current = [...agent.openCalls.values()].at(-1)
-    const isStillRunning = ended?.reason === 'stopped' && entry.status === 'shell'
+    const isStillRunning = ended?.reason === 'stopped' && statusOf(agent) === 'shell'
     const [group, reason]: readonly [Group, string] =
       wait !== undefined
         ? ['needs', wait]
@@ -214,35 +256,36 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
       return []
     })
 
-  const viewOf = (stream: Stream): WebView | undefined => {
-    if (stream.cursor === undefined || stream.tab === conversationTab || aboutOf(stream.cursor) === undefined) return undefined
-    const columns = Math.max(stream.columns - listColumns - 2, fewestColumns)
-    return { id: `${columns}:${stream.tab}`, tab: stream.tab, columns }
+  const tabsOf = (agent: Agent, units: Units | undefined): (UnitTab & { readonly unit: UiUnit })[] => {
+    if (units === undefined) return []
+    const pages = units.pages.filter((page) => agent.openPages.has(unitKey(page)))
+    return [...units.views.map((unit) => ({ key: unitKey(unit), label: unit.title, isClosable: false, unit })), ...pages.map((unit) => ({ key: unitKey(unit), label: unit.title, isClosable: true, unit }))]
   }
-  const viewsOf = (id: string): WebView[] => {
-    const views = new Map<string, WebView>()
-    for (const stream of streams.values()) {
-      const view = stream.send === undefined || stream.cursor !== id ? undefined : viewOf(stream)
-      if (view !== undefined) views.set(view.id, view)
-    }
-    return [...views.values()]
+  const columnsOf = (stream: Stream) => Math.max(stream.columns - listColumns - 2, fewestColumns)
+
+  const tellShown = (stream: Stream, session: string, units: readonly UiUnit[]) =>
+    void callUi('show', [session, `browser:${stream.id}`, units.map(({ mod, id }) => ({ mod, id }))]).catch((error: unknown) => report(`kept what ${session} shows in the browser`, error))
+  const shownKey = (shown: ShownUnit | undefined) => (shown === undefined ? '' : `${shown.session}\n${unitKey(shown.unit)}`)
+  const showIn = (stream: Stream, next: ShownUnit | undefined) => {
+    const was = stream.shown
+    if (shownKey(was) === shownKey(next)) return
+    stream.shown = next
+    if (was !== undefined && was.session !== next?.session) tellShown(stream, was.session, [])
+    if (next !== undefined) tellShown(stream, next.session, [next.unit])
   }
 
-  const forwarded = (tree: unknown, session: string, view: string, draw: number, on: (run: PressHandler) => HandlerData): unknown => {
-    if (Array.isArray(tree)) return tree.map((each: unknown) => forwarded(each, session, view, draw, on))
+  const forwarded = (stream: Stream, tree: unknown, session: string, on: On): unknown => {
+    if (Array.isArray(tree)) return tree.map((each: unknown) => forwarded(stream, each, session, on))
     if (!isObject(tree)) return tree
     const handler = tree['$cmodHandler']
-    if (typeof handler === 'number') return on((input) => queue(session, { type: 'press', view, draw, handler, key: input.key, kind: input.kind as WebInput['kind'], ...(input.value === undefined ? {} : { value: input.value }), ...(input.href === undefined ? {} : { href: input.href }) }))
-    return Object.fromEntries(Object.entries(tree).map(([key, each]) => [key, forwarded(each, session, view, draw, on)]))
+    if (typeof handler === 'number') return on(`unit:${session}:${handler}`, (input) => pressUnit(stream, session, handler, input))
+    return Object.fromEntries(Object.entries(tree).map(([key, each]) => [key, forwarded(stream, each, session, on)]))
   }
-
-  const queue = (id: string, action: WebAction): boolean => {
-    const session = posted.get(id)
-    if (session === undefined || !isLive(session)) return false
-    session.actions.push(action)
-    wake(id)
-    return true
-  }
+  const pressUnit = (stream: Stream, session: string, handler: number, input: PressInput) =>
+    void callUi('press', [session, handler, pressOf(input)]).catch((error: unknown) => {
+      stream.notice = `That control did not run: ${messageOf(error)}`
+      redrawSoon(stream)
+    })
 
   let visitWrites = Promise.resolve()
   const visit = (session: string, at: string) => {
@@ -250,9 +293,9 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     visitWrites = visitWrites.then(async () => void (await sessions.call(session, 'visit', at))).catch((error: unknown) => void report(`kept the visit of ${session} only in memory`, error))
   }
 
-  const actElsewhere = (stream: Stream, agent: Agent, action: 'send' | 'abort', input: object) =>
-    void agent.store?.request(`${sessionInterface}.${action}`, [agent.entry.session, input, { project: agent.entry.cwd }]).then(
-      () => readStoresSoon(),
+  const act = (stream: Stream, agent: Agent, action: 'send' | 'abort', input: object) =>
+    void (agent.store === undefined ? sessions.call(agent.entry.session, action, input, { project: agent.entry.cwd }) : callStore(agent.store, action, [agent.entry.session, input, { project: agent.entry.cwd }])).then(
+      () => (agent.store === undefined ? undefined : readStoresSoon()),
       (error: unknown) => {
         stream.notice = `${action === 'send' ? 'The prompt did not reach' : 'Stop did not reach'} ${agent.entry.name ?? agent.entry.session}: ${messageOf(error)}`
         redrawSoon(stream)
@@ -264,6 +307,13 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     const ended = () => {
       const agent = at()
       return agent === undefined ? undefined : lastTurnOf(agent)
+    }
+    const showUnit = (agent: Agent, key: string, isOpen: boolean) => {
+      const [mod = '', id = ''] = key.split('/')
+      void callUi(isOpen ? 'open' : 'close', [agent.entry.session, { mod, id }]).catch((error: unknown) => {
+        stream.notice = `${isOpen ? 'That page did not open' : 'That page did not close'} in ${agent.entry.name ?? agent.entry.session}: ${messageOf(error)}`
+        redrawSoon(stream)
+      })
     }
     const move = (by: number) => {
       const shown = visibleRows({ rows: rows(), ...(stream.cursor === undefined ? {} : { cursor: stream.cursor }), isIdleOpen: stream.isIdleOpen })
@@ -305,50 +355,51 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
         stream.tab = tab
       },
       closeTab(tab) {
-        if (stream.cursor === undefined) return
-        queue(stream.cursor, { type: 'close', tab })
+        const agent = at()
+        if (agent === undefined || !agent.openPages.delete(tab)) return
         if (stream.tab === tab) stream.tab = conversationTab
+        showUnit(agent, tab, false)
       },
-      openPage(page: ClosedPage) {
-        if (stream.cursor === undefined) return
-        if (queue(stream.cursor, { type: 'open', mod: page.mod, page: page.page })) stream.tab = `${page.mod}/${page.page}`
+      openPage(page) {
+        const agent = at()
+        if (agent === undefined) return
+        agent.openPages.add(unitKey(page))
+        stream.tab = unitKey(page)
+        showUnit(agent, unitKey(page), true)
       },
       prompt(text) {
         const agent = at()
         if (agent === undefined || text.trim() === '') return
-        if (agent.store !== undefined) {
-          actElsewhere(stream, agent, 'send', { type: Prompt, text, as: Person })
-          stream.sent += 1
-          stream.focus = 'prompt'
-          return
-        }
-        if (!queue(agent.entry.session, { type: 'prompt', text })) {
-          stream.notice = "This session's cmod plugin does not answer the browser app, so type the prompt in its terminal."
-          return
-        }
+        act(stream, agent, 'send', { type: Prompt, text, as: Person })
         stream.sent += 1
         stream.focus = 'prompt'
         stream.notice = undefined
       },
       stop() {
         const agent = at()
-        if (agent?.store !== undefined) return actElsewhere(stream, agent, 'abort', {})
-        if (stream.cursor !== undefined && !queue(stream.cursor, { type: 'stop' })) stream.notice = "This session's cmod plugin does not answer the browser app, so press Esc in its terminal."
+        if (agent !== undefined) act(stream, agent, 'abort', {})
       },
     }
   }
 
-  const screenOf = (stream: Stream, on: (run: PressHandler) => HandlerData): Screen => {
+  const screenOf = (stream: Stream, on: On): Screen => {
     const listed = rows()
     if (stream.cursor === undefined || !agents.has(stream.cursor)) stream.cursor = listed[0]?.id
     const agent = stream.cursor === undefined ? undefined : agents.get(stream.cursor)
-    if (agent === undefined) return { rows: listed, tab: stream.tab, isIdleOpen: stream.isIdleOpen, focus: stream.focus, sent: stream.sent, ...(stream.notice === undefined ? {} : { notice: stream.notice }) }
+    if (agent === undefined) {
+      showIn(stream, undefined)
+      return { rows: listed, tab: stream.tab, isIdleOpen: stream.isIdleOpen, focus: stream.focus, sent: stream.sent, ...(stream.notice === undefined ? {} : { notice: stream.notice }) }
+    }
     const row = listed.find((each) => each.id === agent.entry.session) ?? rowOf(agent)
-    const told = aboutOf(agent.entry.session)
-    if (told === undefined || (stream.tab !== conversationTab && !told.tabs.some((tab) => tab.key === stream.tab))) stream.tab = conversationTab
-    const view = viewOf(stream)
-    const drawn = view === undefined ? undefined : posted.get(agent.entry.session)?.drawings.get(view.id)
+    const units = unitsOf(agent)
+    const tabs = tabsOf(agent, units)
+    const shown = tabs.find((tab) => tab.key === stream.tab)
+    if (shown === undefined) stream.tab = conversationTab
+    showIn(stream, shown === undefined ? undefined : { session: agent.entry.session, unit: shown.unit })
+    const drawn =shown === undefined ? undefined : drawnOf(agent.entry.session, shown.unit, columnsOf(stream))
+    const drawing = drawn === undefined ? undefined : drawn.failure !== undefined ? ({ $cmodElement: 'Text', props: { color: 'error', children: `${shown?.label ?? 'It'} could not draw: ${drawn.failure}` } } satisfies ElementData) : drawn.value === undefined || drawn.value === null ? undefined : (forwarded(stream, drawn.value, agent.entry.session, on) as ElementData)
     const wait = waitOf(agent)
+    const contextPercent = agent.summary?.contextPercent
     return {
       rows: listed,
       cursor: agent.entry.session,
@@ -360,14 +411,14 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
       open: {
         row,
         model: agent.summary?.model ?? '',
-        ...(told?.contextPercent === undefined ? {} : { contextPercent: told.contextPercent }),
+        ...(contextPercent === undefined ? {} : { contextPercent }),
         isWorking: isWorking(agent),
         ...(wait === undefined || row.group !== 'needs' ? {} : { waiting: row.reason }),
         ...(row.reason === stoppedRunning ? { state: stoppedRunning } : {}),
         feed: feedOf(agent),
-        tabs: told?.tabs ?? [],
-        pages: told?.pages ?? [],
-        ...(view === undefined || drawn === undefined ? {} : { page: forwarded(drawn.tree, agent.entry.session, view.id, drawn.draw, on) as ElementData }),
+        tabs: tabs.map(({ key, label, isClosable }) => ({ key, label, isClosable })),
+        pages: units?.pages.filter((each) => !agent.openPages.has(unitKey(each))) ?? [],
+        ...(drawing === undefined ? {} : { page: drawing }),
       },
     }
   }
@@ -375,17 +426,24 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
   const render = (stream: Stream) => {
     stream.timer = undefined
     if (stream.send === undefined) return
-    const handlers: PressHandler[] = []
-    const on = (run: PressHandler): HandlerData => ({ $cmodHandler: handlers.push(run) - 1 })
+    const controls = new Map<number, PressHandler>()
+    const used = new Set<string>()
+    const on: On = (token, run): HandlerData => {
+      const number = stream.numbers.get(token) ?? (lastNumber += 1)
+      stream.numbers.set(token, number)
+      used.add(token)
+      controls.set(number, run)
+      return { $cmodHandler: number }
+    }
     const html = htmlOf(appScreen(screenOf(stream, on), actionsOf(stream), on))
+    stream.controls = controls
+    for (const token of stream.numbers.keys()) if (!used.has(token)) stream.numbers.delete(token)
     if (stream.focus === 'prompt') {
       stream.focus = 'row'
       redrawSoon(stream)
     }
     if (html === stream.html) return
     stream.draw += 1
-    stream.handlers.set(stream.draw, handlers)
-    stream.handlers.delete(stream.draw - 2)
     stream.html = html
     stream.send('screen', { draw: stream.draw, html })
   }
@@ -396,67 +454,25 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     for (const stream of streams.values()) redrawSoon(stream)
   }
 
-  const answer = (session: Posted, id: string) => {
-    const { waiter, actions } = session
-    if (waiter === undefined) return
-    const views = viewsOf(id)
-    session.waiter = undefined
-    session.told = JSON.stringify(views)
-    session.actions = []
-    waiter({ views, actions })
-  }
-  const wake = (id: string) => {
-    const session = posted.get(id)
-    if (session?.waiter !== undefined && (session.actions.length > 0 || JSON.stringify(viewsOf(id)) !== session.told)) answer(session, id)
-  }
-  const wakeAll = () => {
-    for (const id of posted.keys()) wake(id)
-  }
-
-  const poll = (id: string, signal: AbortSignal): Promise<SessionEvents> => {
-    const session = postedOf(id)
-    session.seenAt = Date.now()
-    session.waiter?.({ views: viewsOf(id), actions: [] })
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => answer(session, id), pollMs)
-      const waiter: Waiter = (events) => {
-        clearTimeout(timer)
-        session.seenAt = Date.now()
-        resolve(events)
-      }
-      session.waiter = waiter
-      signal.addEventListener('abort', () => {
-        if (session.waiter === waiter) session.waiter = undefined
-        waiter({ views: [], actions: [] })
-      })
-      redrawAll()
-      wake(id)
-    })
-  }
-
-  const post = (id: string, body: unknown) => {
-    if (!isObject(body)) throw new Refusal(400, 'A session posts { about, drawings }.')
-    const session = postedOf(id)
-    session.seenAt = Date.now()
-    if (isObject(body['about'])) session.about = body['about'] as SessionAbout
-    const wanted = new Set(viewsOf(id).map((view) => view.id))
-    for (const drawing of Array.isArray(body['drawings']) ? (body['drawings'] as WebDrawing[]) : []) {
-      if (typeof drawing.view !== 'string' || typeof drawing.draw !== 'number' || !wanted.has(drawing.view)) continue
-      session.drawings.set(drawing.view, { draw: drawing.draw, tree: drawing.tree })
-    }
-    redrawAll()
-  }
-
   const press = (body: unknown) => {
     if (!isObject(body)) throw new Refusal(400, 'A press is a JSON object.')
-    const { stream: id, draw, handler, key, kind, value, href } = body
+    const { stream: id, handler, key, kind, value, href } = body
     const stream = typeof id === 'string' ? streams.get(id) : undefined
     if (stream === undefined) throw new Refusal(410, 'This page lost its place in cmod web. Reload it.')
-    if (typeof draw !== 'number' || typeof handler !== 'number' || typeof key !== 'string' || !inputKinds.has(kind)) throw new Refusal(400, 'A press is { stream, draw, handler, key, kind }.')
-    const run = stream.handlers.get(draw)?.[handler]
-    if (run !== undefined) run({ kind: kind as string, key, ...(typeof value === 'string' ? { value } : {}), ...(typeof href === 'string' ? { href } : {}) })
+    if (typeof handler !== 'number' || typeof key !== 'string' || !inputKinds.has(kind)) throw new Refusal(400, 'A press is { stream, handler, key, kind }.')
+    const run = stream.controls.get(handler)
+    if (run === undefined) throw new Refusal(409, `${key === '' ? 'That control' : key} is no longer on the screen, so nothing ran.`)
+    run({ kind: kind as string, key, ...(typeof value === 'string' ? { value } : {}), ...(typeof href === 'string' ? { href } : {}) })
     redrawSoon(stream)
-    wakeAll()
+  }
+
+  const shownIn = (session: string, key: string, isOpen: boolean) => {
+    const agent = agents.get(session)
+    if (agent === undefined) return
+    if (isOpen) agent.openPages.add(key)
+    else agent.openPages.delete(key)
+    for (const stream of streams.values()) if (stream.cursor === session && (isOpen || stream.tab === key)) stream.tab = isOpen ? key : conversationTab
+    redrawAll()
   }
 
   const hear = (agent: Agent, change: SessionChange) => {
@@ -470,7 +486,7 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
       agent.isTurnOpen = change.type === TurnStart
       if (change.type === TurnStart) agent.openCalls.clear()
       else agent.closedAt = change.turn.closedAt
-      summarizeSoon()
+      summarizeSoon(summaryQuietMs)
     } else {
       return
     }
@@ -478,7 +494,7 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
   }
 
   const follow = (entry: RunningEntry): Agent => {
-    const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], stop: new AbortController() }
+    const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), stop: new AbortController() }
     const signal = AbortSignal.any([agent.stop.signal, following.signal])
     void followSessions(db, { sessions: [entry.session], isEveryRunning: false }, entry.cwd, (_session, change) => hear(agent, change), signal).catch((error: unknown) => report(`stopped following ${entry.session}`, error))
     if (!hasTranscript(entry.session, entry.cwd)) return agent
@@ -500,14 +516,16 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     }
   }
 
-  const summarize = guarded('kept the models, colors, and projects it read last', () => {
+  const summarize = async () => {
     summaryTimer = undefined
-    const listed = new Map(listSessions(db, { project: '', everyProject: true, since: undefined, running: true }).map((summary) => [summary.id, summary]))
-    for (const agent of agents.values()) agent.summary = listed.get(agent.entry.session)
+    const listed = new Map((await callOwn<SessionData[]>(sessionsInterface, 'sessions', [{ everyProject: true, running: true }])).map((summary) => [summary.id, summary]))
+    for (const agent of agents.values()) if (agent.store === undefined) agent.summary = listed.get(agent.entry.session)
     redrawAll()
-  })
-  const summarizeSoon = () => {
-    summaryTimer ??= setTimeout(summarize, summaryQuietMs)
+  }
+  const summarizeSoon = (ms: number) => {
+    if (summaryTimer !== undefined && ms >= summaryQuietMs) return
+    clearTimeout(summaryTimer)
+    summaryTimer = setTimeout(() => void summarize().catch((error: unknown) => report('kept the models, colors, projects, and statuses it read last', error)), ms)
   }
 
   const readRegistry = guarded('kept the sessions it listed last', () => {
@@ -519,6 +537,7 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
       if (running.has(id) || agent.store !== undefined) continue
       agent.stop.abort()
       agents.delete(id)
+      forget(id)
       isChanged = true
     }
     for (const entry of entries) {
@@ -536,47 +555,28 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
         report(`skipped ${entry.session} until its transcript reads`, error)
       }
     }
-    if (isChanged) summarizeSoon()
+    if (isChanged) summarizeSoon(summaryQuietMs)
     redrawAll()
   })
   const readRegistrySoon = () => {
-    registryTimer ??= setTimeout(readRegistry, registryQuietMs)
+    registryTimer ??= setTimeout(readRegistry, 0)
   }
 
-  const storesOf = async () => {
-    const files = {
-      list: async (path: string) => (await readdir(path, { withFileTypes: true }).catch(ifMissing([]))).map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file' })),
-      read: (path: string) => readFile(path, 'utf8').catch(ifMissing(undefined)),
-    }
-    const found = (await readProviders(files, storeFolder(process.env), sessionStore)).filter((provider) => provider.mod !== cmodPluginName)
-    for (const [address, client] of stores) {
-      if (found.some((provider) => provider.address === address)) continue
-      stores.delete(address)
-      void client.close()
-    }
-    for (const { address } of found) {
-      if (stores.has(address)) continue
-      const call = addressCall(async (url, init) => {
-        const answer = await fetch(url, { method: init.method, ...(init.body === undefined ? {} : { body: init.body }), ...(init.headers === undefined ? {} : { headers: init.headers }), ...(init.socketPath === undefined ? {} : { unix: init.socketPath }) })
-        return { status: answer.status, text: await answer.text() }
-      }, address)
-      stores.set(address, connectRpc({ call, handle: (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `cmod web answers no ${method}.`)), wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }))
-    }
-    return [...stores.values()]
-  }
-  const readStore = async (store: RpcClient, seen: Set<string>) => {
-    const listed = await store.request<SessionData[]>(`${sessionStore}.sessions`, [{ everyProject: true, running: true }])
+  const storesOf = () => sessions.providers.list(sessionsInterface)
+  const callStore = async <Result>(store: ProviderIdentity, method: string, args: readonly unknown[]) => (await sessions.providers.call({ interface: sessionsInterface, method, args, ...store })) as Result
+  const readStore = async (store: ProviderIdentity, seen: Set<string>) => {
+    const listed = await callStore<SessionData[]>(store, 'sessions', [{ everyProject: true, running: true }])
     for (const summary of listed) {
       const known = agents.get(summary.id)
       if (seen.has(summary.id) || (known !== undefined && known.store === undefined)) continue
       seen.add(summary.id)
-      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionStore, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], stop: new AbortController(), store }
+      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionsInterface, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), stop: new AbortController(), store }
       agent.summary = summary
       agents.set(summary.id, agent)
       if (agent.readAt === summary.lastAt) continue
       const [messages, state] = await Promise.all([
-        store.request<SessionMessage[]>(`${sessionStore}.read`, [summary.id, 'messages', { project: summary.cwd, last: feedMessages }]),
-        store.request<ConversationState | null>(`${sessionStore}.read`, [summary.id, 'state', { project: summary.cwd }]),
+        callStore<SessionMessage[]>(store, 'read', [summary.id, 'messages', { project: summary.cwd, last: feedMessages }]),
+        callStore<ConversationState | null>(store, 'read', [summary.id, 'state', { project: summary.cwd }]),
       ])
       agent.messages = messages.filter((message) => message.task === undefined)
       agent.isTurnOpen = state?.turn !== undefined && state.turn.closedAt === undefined
@@ -605,21 +605,19 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     if (!/^[\w-]{1,64}$/.test(id)) throw new Refusal(400, 'A stream names itself with ?stream=<id>.')
     const columns = Math.max(Math.floor(Number(url.searchParams.get('columns'))) || 0, listColumns + fewestColumns)
     const known = streams.get(id)
-    const opened: Stream = known ?? { id, send: undefined, columns, cursor: undefined, tab: conversationTab, isIdleOpen: false, focus: 'row', sent: 0, notice: undefined, draw: 0, html: '', seenAt: Date.now(), timer: undefined, handlers: new Map() }
+    const opened: Stream = known ?? { id, send: undefined, columns, cursor: undefined, tab: conversationTab, isIdleOpen: false, focus: 'row', sent: 0, notice: undefined, draw: 0, html: '', seenAt: Date.now(), timer: undefined, controls: new Map(), numbers: new Map(), shown: undefined }
     opened.columns = columns
     opened.html = ''
     streams.set(id, opened)
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        const send = (event: string, data: object) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-        opened.send = send
+        opened.send = (event: string, data: object) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
         render(opened)
-        wakeAll()
       },
       cancel() {
         opened.send = undefined
         opened.seenAt = Date.now()
-        wakeAll()
+        showIn(opened, undefined)
       },
     })
     server.timeout(request, 0)
@@ -646,22 +644,6 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     throw new Refusal(404, `cmod web has no ${request.method} ${url.pathname}.`)
   }
 
-  const sessionRoute = async (request: Request): Promise<Response> => {
-    const url = new URL(request.url)
-    const [, id, events] = sessionPath.exec(url.pathname) ?? []
-    try {
-      if (id !== undefined && events !== undefined && request.method === 'GET') return Response.json(await poll(id, request.signal))
-      if (id !== undefined && events === undefined && request.method === 'POST') {
-        post(id, await request.json())
-        return Response.json({})
-      }
-      throw new Refusal(404, `cmod serve has no ${request.method} ${url.pathname}.`)
-    } catch (error) {
-      if (error instanceof Refusal) return Response.json({ error: error.message }, { status: error.status })
-      return Response.json({ error: messageOf(error) }, { status: 500 })
-    }
-  }
-
   const page = (at: number) =>
     Bun.serve({
       hostname: '127.0.0.1',
@@ -675,7 +657,7 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
         const own = `${isTailnet ? 'https' : 'http'}://${host}`
         if (!isTailnet && host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return Response.json({ error: 'cmod web answers only 127.0.0.1, localhost, and you on your tailnet.' }, { status: 421 })
         const url = new URL(request.url)
-        if (sessionPath.test(url.pathname) || url.pathname.startsWith('/rpc')) return Response.json({ error: "cmod web takes a session's calls only on cmod serve's socket." }, { status: 403 })
+        if (url.pathname.startsWith('/rpc')) return Response.json({ error: "cmod web takes a session's calls only on cmod serve's socket." }, { status: 403 })
         if (origin !== null ? origin !== own : request.method !== 'GET') return Response.json({ error: `cmod web takes a change only from its own page, and this came from ${origin ?? 'no page'}.` }, { status: 403 })
         try {
           return await route(request, url, server)
@@ -694,20 +676,35 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     },
     (error: unknown) => report('starts with no visits', error),
   )
-  let registry: ReturnType<typeof watch> | undefined
   let sweep: ReturnType<typeof setInterval> | undefined
+  const viewedDrawings = () =>
+    new Set(
+      [...streams.values()].flatMap((each) => {
+        const [mod = '', id = ''] = each.tab.split('/')
+        return each.cursor === undefined || each.tab === conversationTab ? [] : [`${each.cursor}\ndraw\n${mod}/${id}\n${columnsOf(each)}`]
+      }),
+    )
   const start = () => {
-    if (registry !== undefined) return
+    if (sweep !== undefined) return
+    listen(sessionsInterface, 'Change', ({ part }: StoreChange) => {
+      if (part !== 'status' && part !== 'running') return
+      readRegistrySoon()
+      summarizeSoon(0)
+    })
+    listen(uiInterface, 'Change', ({ session }: { readonly session: string }) => refetch(`${session}\nunits`))
+    listen(uiInterface, 'Redraw', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => refetch(`${session}\ndraw\n${mod}/${id}\n`))
+    listen(uiInterface, 'Open', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, true))
+    listen(uiInterface, 'Close', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, false))
     readRegistry()
-    summarize()
-    mkdirSync(runningFolder(), { recursive: true })
-    registry = watch(runningFolder(), { signal: following.signal }).on('change', readRegistrySoon).on('error', (error: unknown) => report('lists new sessions only every 5 seconds', error))
+    summarizeSoon(0)
     readStoresSoon()
     sweep = setInterval(() => {
       readRegistrySoon()
       readStoresSoon()
-      for (const [id, session] of posted) if (!isLive(session) && Date.now() - session.seenAt > liveMs) posted.delete(id)
       for (const [id, each] of streams) if (each.send === undefined && Date.now() - each.seenAt > keptStreamMs) streams.delete(id)
+      for (const each of streams.values()) if (each.shown !== undefined) tellShown(each, each.shown.session, [each.shown.unit])
+      const viewed = viewedDrawings()
+      for (const key of fetched.keys()) if (key.includes('\ndraw\n') && !viewed.has(key)) fetched.delete(key)
     }, sweepMs)
   }
   const close = async () => {
@@ -716,7 +713,6 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     await was?.stop(true)
   }
   return {
-    sessionRoute: (request) => (sessionPath.test(new URL(request.url).pathname) ? sessionRoute(request) : undefined),
     listen(port) {
       start()
       if (server !== undefined) return server.port ?? port
@@ -731,13 +727,22 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
     close,
     async stop() {
       clearInterval(sweep)
-      registry?.close()
+      clearTimeout(summaryTimer)
+      clearTimeout(registryTimer)
       following.abort()
-      await Promise.all([...stores.values()].map((store) => store.close()))
+      sessions.interfaces.closed(app)
       await close()
       await visitWrites
     },
   }
+}
+
+function pressOf({ kind, key, value, href }: PressInput): object {
+  const at = { surface: browserSurface, key }
+  if (kind === 'change' || kind === 'submit') return { ...at, kind, value: value ?? '' }
+  if (kind === 'select') return { ...at, value: value ?? '' }
+  if (kind === 'link') return { ...at, link: { href: href ?? '' } }
+  return at
 }
 
 function callSummary(input: Readonly<Record<string, unknown>>): string {

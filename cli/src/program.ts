@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, rmdir, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { dataFolder, instancePath, isObject, linkedProgramPath, pluginName, programPath, storeFolder, type ProgramInstance, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { cacheFolder, dataFolder, instancePath, isObject, linkedProgramPath, pluginName, programPath, storeFolder, type ProgramInstance, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
@@ -300,7 +300,8 @@ export function programsFolder(): string {
   return storePath('programs')
 }
 
-export async function linkDownloaded(name: string, path: string): Promise<void> {
+export async function linkDownloaded(name: string, path: string, dataPath: string): Promise<void> {
+  await placeLink(dataPath, path)
   await placeLink(join(programsFolder(), name), path)
   await stopCopies(name)
 }
@@ -343,13 +344,29 @@ async function stopCopies(name: string): Promise<void> {
   }
 }
 
+export function folderEnvironment(name: string): { readonly CMOD_DATA: string; readonly CMOD_CACHE: string } {
+  return { CMOD_DATA: dataFolder(storeFolder(process.env), name), CMOD_CACHE: cacheFolder(process.env, name) }
+}
+
+export async function moveDownloads(name: string): Promise<void> {
+  const { CMOD_DATA, CMOD_CACHE } = folderEnvironment(name)
+  for (const entry of await readdir(programsFolder()).catch(ifMissing([]))) {
+    const downloaded = await readLink(join(programsFolder(), entry))
+    if (downloaded === undefined || dirname(downloaded) !== join(CMOD_DATA, 'bin') || !(await lstat(downloaded).catch(ifMissing(undefined)))?.isFile()) continue
+    const cached = join(CMOD_CACHE, 'bin', basename(downloaded))
+    await mkdir(dirname(cached), { recursive: true })
+    await copyFile(downloaded, cached)
+    await linkDownloaded(entry, cached, downloaded)
+  }
+}
+
 export async function removeData(name: string): Promise<void> {
-  const folder = dataFolder(storeFolder(process.env), name)
+  const folders = [dataFolder(storeFolder(process.env), name), cacheFolder(process.env, name)]
   for (const entry of await readdir(programsFolder()).catch(ifMissing([]))) {
     const target = await readLink(join(programsFolder(), entry))
-    if (target?.startsWith(`${folder}/`)) await rm(join(programsFolder(), entry))
+    if (folders.some((folder) => target?.startsWith(`${folder}/`))) await rm(join(programsFolder(), entry))
   }
-  await rm(folder, { recursive: true, force: true })
+  for (const folder of folders) await rm(folder, { recursive: true, force: true })
   await deleteSecrets(name)
 }
 

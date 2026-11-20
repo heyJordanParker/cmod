@@ -51,7 +51,7 @@ export async function inFolder(call: Call, folder: string, workspace: Workspace)
 }
 
 export function withinDeadline<Value>(mod: object, deadline: Deadline, subject: string, run: () => Value | Promise<Value>): Promise<Value> {
-  return beforeDeadline(engineOf(mod).claude, deadline, subject, Promise.resolve().then(run))
+  return beforeDeadline(engineOf(mod).claude.clock, deadline, subject, () => Promise.resolve().then(run))
 }
 
 export function targetWords(target: Target): string {

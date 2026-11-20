@@ -151,14 +151,14 @@ test("startSession starts a new session that has its own session values, and a r
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
-test("after /resume to another session, sessions.current.id and the page name the resumed session, though Claude Code 2.1.317 answers the old id during the resume's SessionStart", async () => {
+test("after /resume to another session, sessions.current.id and the view name the resumed session, though Claude Code 2.1.317 answers the old id during the resume's SessionStart", async () => {
   const heardAtStart: string[] = []
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
         sessions.current.onSessionStart(() => void heardAtStart.push(sessions.current.id))
-        void mod.sidebar.add({ id: 'scope', title: 'Scope', render: () => Text({ children: `This session: ${sessions.current.id}` }) }).open()
+        void mod.views.add({ id: 'scope', title: 'Scope', render: () => Text({ children: `This session: ${sessions.current.id}` }) }).open()
       },
     }),
   )
@@ -168,7 +168,7 @@ test("after /resume to another session, sessions.current.id and the page name th
 
   expect(sessions.current.id).toBe('resumed-session')
   expect(heardAtStart).toEqual(['resumed-session'])
-  expect((await tested.shown.page.lines()).join('\n')).toContain('This session: resumed-session')
+  expect((await tested.shown.view.lines()).join('\n')).toContain('This session: resumed-session')
 })
 
 test("during a /resume's SessionStart, the session id the engine answers is the resumed one, though Claude Code 2.1.317's $.session.id() still answers the old one, so the cmod plugin acts on the resumed session in place instead of relaying to it", async () => {
@@ -315,12 +315,12 @@ test('shown.pane reads the pane the person sees as rows of text', async () => {
   expect(await tested.shown.pane.lines()).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', '[ Clear ]'])
 })
 
-test("shown.pane shows an Image's alt text", async () => {
+test("shown.pane shows an Image's label", async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
-        void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, alt: 'A login flow diagram' })] }) }).open()
+        void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, label: 'A login flow diagram' })] }) }).open()
       },
     }),
   )
@@ -349,7 +349,7 @@ test('shown.page.focusedKey() names the autoFocus element each time the page tak
       name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
-        const page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerField(true) })
+        const page = mod.pages.add({ id: 'question', title: 'Question', render: () => answerField(true) })
         mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
       },
     }),
@@ -499,14 +499,14 @@ const ideas = defineMod({
   setup(mod) {
     const render = () => Box({ flexDirection: 'column', children: [Markdown({ key: 'item-text:0', text: 'Ship it' }), Markdown({ key: 'item-text:0', text: 'Rest' })] })
     mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
-    void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+    void mod.views.add({ id: 'all', title: 'Ideas', render }).open()
   },
 })
 
-test('a page that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses the Sidebar', async () => {
+test('a view that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses the Sidebar', async () => {
   const tested = testMod(ideas)
 
-  await expect(tested.shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Markdown "demo/all:item-text:0" is drawn twice; each takes its own key')
+  await expect(tested.shown.view.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Markdown "demo/all:item-text:0" is drawn twice; each takes its own key')
 })
 
 test('a widget that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses its row', async () => {
@@ -515,36 +515,37 @@ test('a widget that draws one key on two Markdown elements fails as Claude Code 
   await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "demo/next:item-text:0" is drawn twice; each takes its own key')
 })
 
-test('a page whose Button hover has no keyed Box around it fails as Claude Code 2.1.318 refuses the Sidebar, and one inside a keyed Box or naming a scope draws', async () => {
-  const pageOf = (children: readonly ReturnType<typeof Box>[]) =>
-    testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'items', title: 'Items', render: () => Box({ flexDirection: 'column', children }) }).open() }))
+test('a view whose Button hover has no keyed Box around it fails as Claude Code 2.1.318 refuses the Sidebar, and one inside a keyed Box or naming a scope draws', async () => {
+  const viewOf = (children: readonly ReturnType<typeof Box>[]) =>
+    testMod(defineMod({ name: 'demo', setup: (mod) => void mod.views.add({ id: 'items', title: 'Items', render: () => Box({ flexDirection: 'column', children }) }).open() }))
   const archive = (hover: object) => Button({ key: 'archive', label: 'Archive', hover, onPress: () => undefined })
 
-  await expect(pageOf([Box({ children: [archive({ color: 'error' })] })]).shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "demo/items:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
-  expect(await pageOf([Box({ key: 'row', children: [archive({ color: 'error' })] }), archive({ color: 'error', scope: 'rows' })]).shown.page.lines()).toEqual(['[ Archive ]', '[ Archive ]'])
+  await expect(viewOf([Box({ children: [archive({ color: 'error' })] })]).shown.view.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "demo/items:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
+  expect(await viewOf([Box({ key: 'row', children: [archive({ color: 'error' })] }), archive({ color: 'error', scope: 'rows' })]).shown.view.lines()).toEqual(['[ Archive ]', '[ Archive ]'])
 })
 
-test('a page draws Markdown elements of different keys, and a Box and a Markdown of one key, as Claude Code 2.1.312 does', async () => {
+test('a view draws Markdown elements of different keys, and a Box and a Markdown of one key, as Claude Code 2.1.312 does', async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: List, render: (_mod, { source }) => Markdown({ key: 'item-text:0', text: source.slice(2) }) })
-        void mod.sidebar
+        void mod.views
           .add({ id: 'all', title: 'Ideas', render: () => Box({ key: 'item-text:0', flexDirection: 'column', children: [Markdown({ key: 'item-text:0', text: 'Ship it' }), Markdown({ key: 'item-text:1', text: 'Tell the team' }), Markdown({ text: '- Rest' })] }) })
           .open()
       },
     }),
   )
 
-  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+  expect(await tested.shown.view.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
 })
 
-test("a press on a page's Button takes the mod's key and gets the key the cmod plugin draws", async () => {
+test("a press on a view's Button takes the mod's key and gets the key the cmod plugin draws", async () => {
   const pressed: string[] = []
-  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'all', title: 'Ideas', render: () => Button({ key: 'ship', label: 'Ship', onPress: (e) => void pressed.push(e.element) }) }).open() }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.views.add({ id: 'all', title: 'Ideas', render: () => Button({ key: 'ship', label: 'Ship', onPress: (e) => void pressed.push(e.element) }) }).open() }))
 
-  await tested.shown.page.press('ship')
+  await tested.shown.view.press('ship')
+  expect(() => tested.shown.page.id).toThrow('No page of demo shows in the Sidebar, where its view "all" shows. Open one with page.open().')
 
   expect(pressed).toEqual(['demo/all:ship'])
 })

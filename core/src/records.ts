@@ -54,12 +54,16 @@ export type RunnerEvent =
 
 export const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
-export function storeFolder(env: Record<string, string | undefined>): string {
-  const dataHome = env['XDG_DATA_HOME']
+function xdgFolder(env: Record<string, string | undefined>, variable: 'XDG_DATA_HOME' | 'XDG_CACHE_HOME', underHome: string): string {
+  const base = env[variable]
   const home = env['HOME']
-  if (dataHome) return `${dataHome}/cmod`
-  if (!home) throw new Error('Neither XDG_DATA_HOME nor HOME is set, so the cmod store has no folder. Set HOME.')
-  return `${home}/.local/share/cmod`
+  if (base) return `${base}/cmod`
+  if (!home) throw new Error(`Neither ${variable} nor HOME is set, so cmod has no folder there. Set HOME.`)
+  return `${home}/${underHome}/cmod`
+}
+
+export function storeFolder(env: Record<string, string | undefined>): string {
+  return xdgFolder(env, 'XDG_DATA_HOME', '.local/share')
 }
 
 export function recordPath(store: string, name: string): string {
@@ -96,6 +100,10 @@ export function dataFolder(store: string, name: string): string {
   return `${store}/data/${checkedName(name)}`
 }
 
+export function cacheFolder(env: Record<string, string | undefined>, name: string): string {
+  return `${xdgFolder(env, 'XDG_CACHE_HOME', '.cache')}/${checkedName(name)}`
+}
+
 export function configFolder(env: Record<string, string | undefined>, name: string): string {
   const configRoot = env['CLAUDE_CONFIG_DIR']
   const home = env['HOME']
@@ -107,8 +115,12 @@ export function configFolder(env: Record<string, string | undefined>, name: stri
 export function configFolders(env: Record<string, string | undefined>, name: string, root: string): { readonly tier: 'system' | 'project'; readonly folder: string }[] {
   return [
     { tier: 'system', folder: configFolder(env, name) },
-    { tier: 'project', folder: `${root}/.claude/cmods/${checkedName(name)}` },
+    { tier: 'project', folder: projectConfigFolder(root, name) },
   ]
+}
+
+export function projectConfigFolder(root: string, name: string): string {
+  return `${root}/.claude/cmods/${checkedName(name)}`
 }
 
 function checkedName(name: string): string {
@@ -293,7 +305,7 @@ export function serveSocketPath(store: string): string {
   return `${store}/serve.sock`
 }
 
-export type ProgramInstance = { readonly address: string; readonly pid: number; readonly started: string; readonly tailnetUrl?: string; readonly provides?: readonly string[] }
+export type ProgramInstance = { readonly pid: number; readonly started: string; readonly address?: string; readonly tailnetUrl?: string; readonly provides?: readonly string[] }
 
 export const processTypes = ['Interactive', 'Background'] as const
 
@@ -481,9 +493,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '7.0.0'
+export const coreVersion = '8.0.0'
 
-export const oldestCmodVersion = '7.0.0'
+export const oldestCmodVersion = '8.0.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

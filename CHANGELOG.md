@@ -4,6 +4,48 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-11-20
+
+### Added
+- Views and pages. `mod.views.add(view)` adds a view that shows beside the session, and `mod.pages.add(page)` adds a page that fills a window, as a VS Code View and editor. Claude Code shows both as tabs of the Sidebar: a view in a panel titled with the mod's name, and a page at the Sidebar's full width. `props.surface` names the app that draws it. A view's or page's `isOpen` reads true the moment you call `open()` and false the moment you call `close()`. `cmod new` writes a view in `src/views/`.
+- Every app draws your mods' widgets, views, and pages through the `cmod/UI` interface: `widgets`, `views`, `pages`, `draw`, `press`, `open`, `close`, and `show`, with the events `Change`, `Redraw`, `Open`, and `Close`. Each session's cmod plugin answers it for its own session, and `cmod serve` sends each call to the session it names. `cmod ui list`, `draw`, `press`, `open`, `close`, `show`, and `follow` make the same calls from a terminal. A mod writes each part once, and it works in each app.
+- A widget's `render` reads `context.surface`, the app that draws it.
+- The browser app draws every session's views and pages through `cmod/UI`, the cmod plugin's own Dashboard, History, and Settings among them. A view or page any app shows counts as `isShown`.
+- The Herdr app draws your mods' widgets, views, and pages beside its terminals, through cmod's Herdr mod, which `cmod serve` places in `mods/cmod/` of Herdr's home when Herdr is installed. It shows the session of the focused terminal. `herdr-app do mod.open:cmod` opens it as a window over any layout, and a layout places it as a block with `{ "mod": "cmod", "props": { "show": "views" } }`, or `{ "show": "widgets", "area": "belowPrompt" }` for a status bar. A page opens as a Herdr tab. A mod writes no Herdr code.
+- A program provides interfaces for every session on the computer: it calls `connect()` from `@cmodjs/core/rpc.js`, then `provide` from `mod.js`. `cmod serve` holds every program's providers and carries each call to the one it names. The `Connection` `connect()` returns has `call`, `listen`, `tell`, `ask`, and `close`. A program in another language speaks the same JSON-RPC over HTTP on `serve.sock` in the cmod store.
+- `NotHeld` from `@cmodjs/core/rpc.js`. A `cmod/Sessions` provider throws it for a session it does not hold, so cmod asks the next provider.
+- `program(...).provider(name)` resolves with the program's provider of an interface once the program provides it, so a mod waits for a program that only provides and prints no address. Its `ready()` rejects and points at `provider(name)`. Such a program counts as started once it provides, and restarts on a new build or version as every program does.
+- `cmod/Devices` connects your devices. A mod's program that links them, over ssh, a tailnet, or a relay, provides it, and names each other device with the `address` where its `cmod serve` listens, or carries that device's messages with `send` and `Message`. `cmod serve` then reaches each device's `cmod serve`: `providers(name)` lists that device's providers, each `InterfaceProvider` names its `device`, and `sessions.list`, `sessions.get`, `sessions.search`, and every action reach that device's sessions.
+- `provide` returns a `Provided`, whose `tell` tells one of the interface's events to every `on` listener on that provider, and whose `ask` asks every `before` listener and resolves their answers. Both work from session code too, where only a program told events before.
+- A call to a provider's method fails with `<interface>.<method> passed its 30 s deadline` after 30 seconds, as a `mod.dependencies` call does, and cancels the request it left with the provider.
+- A session holds `status`, which is `busy`, `shell`, `idle`, or `waiting`, `waitingFor`, the dialog it waits on, `contextPercent`, how full its context is, `lastTurn`, how its last turn ended, and `device`, the computer it runs on. `cmod/Sessions` tells a `Change` with `part: 'status'` when one of them changes. `list_sessions` prints each session's device and what it waits on.
+- `mod.cacheFolder` holds what a mod can build or download again, such as an index, outside its data folder. A mod's program gets `CMOD_DATA` and `CMOD_CACHE`, as an install step does.
+- `cmod data` prints the data folder of each mod cmod set up, and `--json` prints `[{ mod, folder }]`, so a program that moves your work to another computer knows what to copy. It leaves out cache folders and secrets.
+- `settings.onChange` hears a settings file change once Claude Code loaded it, so `read` answers the new values there.
+- `testMod(myMod, { providers })` fakes a provider of an interface, as another mod, a program, or a program on another device, and `tested.providers[i]` tells its events, asks its `before` listeners, and takes it away with `remove()`. `tested.shown.view` reads the view the mod shows.
+
+### Changed
+- `mod.sidebar.add` is gone. Write `mod.views.add(view)` with a `ViewInit` for a part that shows beside the session, or `mod.pages.add(page)` for one that fills a window, which now draws at the Sidebar's full width with no panel around it. An id is unique across a mod's widgets, views, and pages, so give a widget and a view that shared one their own.
+- `mod.settings.add` takes a `ViewInit` and returns a `View`. A `Step`'s `render` gets `ViewProps<undefined>` in place of `PageProps`.
+- `Image`, `Svg`, and `Raster` need `label`, their accessible name, which replaces `alt`. Write `<Image label="…" />` where you wrote `alt`.
+- `mod.provide` is gone. Import `provide` from `mod.js` beside `providers`, and call `provide(name, methods)`.
+- A `program` job takes no `provides`. The program calls `connect()` from `@cmodjs/core/rpc.js` and then `provide`, and the mod waits for it with `program(...).provider(name)`.
+- `settings.beforeFileChange` is now `settings.beforeChange`.
+- `startTask`'s `machine` is now `device`, and so is `start_session`'s. A `beforeTaskStart` listener answers no `{ result }`: a mod's program that starts sessions on another device provides `cmod/Sessions` and answers its `startTask`.
+- A program that serves another device's sessions provides `cmod/Sessions`, which replaces `cmod/SessionStore` and `cmod/Session`, and holds no listeners. It throws `NotHeld` for a session it does not hold, which a program in another language answers as the JSON-RPC error code `-32098`, and tells a `Change` with `part: 'running'` when one of its sessions stops running.
+- A mod hears only the session it runs in, as a VS Code extension hears only its own window. The `on` methods of `sessions`, such as `sessions.onPrompt`, are gone, a session from `sessions.list` or `sessions.get` has no `on` or `before` methods, and a background task's `owner` takes no listener. Listen on `sessions.current` and its parts. A mod built on an older `@cmodjs/core` that listens on `sessions` hears only its own session.
+- A `cmod run` script hears no session: its `on` and `before` methods throw, and it ends once its top level has run. It imports `provide` and `providers` beside `sessions`.
+- Each command is a noun, then a verb. `cmod options <mod>` is now `cmod options get <mod>`, `cmod option` is `cmod options set`, `cmod secret` is `cmod secrets`, `cmod hotkey` is `cmod hotkeys set`, `cmod settings <mod>` is `cmod settings update <mod>`, and `cmod rules` is `cmod rules sync`. `cmod history` is `cmod sessions`, with `list` for `sessions`, `read <part>` for each part, and `--every-project` for `--all`. The old forms still run, left out of `cmod --help`.
+- A press in the browser app reaches its handler with `surface: 'browser'`, where it was `'desktop'`. A press in the Herdr app has `surface: 'herdr'`.
+- `cmod download` puts a program in `$CMOD_CACHE/bin/`, the mod's cache folder. Run a downloaded program by its name, which cmod links into its programs folder, where you wrote `${mod.dataFolder}/bin/<program>`. `$CMOD_DATA/bin/<program>`, where cmod 7 put it, links to the same file, so a mod that still runs that path keeps working. `cmod setup` moves each program cmod 7 downloaded the same way, and moves no other file in `$CMOD_DATA/bin/`.
+- Every mod's secrets live as plain values in `secrets.json`, which only you can read, on macOS too, so a Mac nobody sits at never waits on a keychain prompt. A secret an older cmod sealed is opened once with the `cmod Safe Storage` key in your login keychain and written back plain.
+- A mod built on `@cmodjs/core` 8.0.0 runs on cmod 8.0.0 or later, so `cmod check` writes `>=8.0.0` for its `cmod` dependency.
+- A session whose cmod plugin is 7.0.0 keeps reading and acting on sessions, and warns nothing, until you press Reload.
+
+### Fixed
+- A press in the browser app runs on any control the screen still shows, however often the screen drew again since. Through 7.0.0 a press on a screen two drawings old, such as `done` on a reply, was dropped without a word. A press on a control the screen no longer shows is refused.
+- Settings lists every mod the session loaded, where it listed only the mods cmod set up.
+
 ## [7.0.0] - 2026-11-19
 
 ### Added

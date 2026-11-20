@@ -61,7 +61,7 @@ test('cmod publish refuses a file: dependency', async () => {
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.stderr).toBe(
-    `cmod publish: ~/hello-mod/package.json depends on @cmodjs/core at file:../cmod/core/cmodjs-core-0.1.1.tgz, shared at link:shared, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.\n`,
+    `cmod publish: ~/hello-mod/package.json depends on @cmodjs/core at file:../cmod/core/cmodjs-core-0.1.1.tgz, shared at link:shared, which exist only on this device, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.\n`,
   )
   expect(result.exitCode).toBe(1)
 })

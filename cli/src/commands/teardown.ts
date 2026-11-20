@@ -2,8 +2,10 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { instanceFolder, readRecord, recordPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
 import { formatExit } from '@cmodjs/core/src/utils/text.js'
 import { readText, tilde } from '../files.js'
+import { removeHerdrMod } from '../herdr.js'
 import { runStep } from '../process.js'
 import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
@@ -24,12 +26,13 @@ Runs the mod's saved uninstall step, then removes the key bindings it added
 that still run its commands and the Claude Code settings it set that still
 hold its values, and deletes its install record, the saved step,
 every version of its program with its links, its data
-folder, its secrets, the addresses of its single-instance programs, and its approvals in
+folder, its cache folder, its secrets, the addresses of its single-instance programs, and its approvals in
 consent.json. It first stops and deletes each service of the computer that cmod
 program --service made for the mod, and takes each web app cmod program
---web-app put on your tailnet off it. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
+--web-app put on your tailnet off it. For cmod itself, it also deletes each file of the
+Herdr mod cmod serve placed that still holds what cmod wrote. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
 the files there are yours. Claude Code has already deleted the plugin's folder by then. A mod with
-no install record has only its data folder, secrets, and approvals deleted. While a setup
+no install record has only its data folder, cache folder, secrets, and approvals deleted. While a setup
 or another teardown of the mod runs, a teardown waits for it. A teardown whose
 process is gone is taken over at once. Ctrl+C, a closed terminal, or SIGTERM
 while it waits stops it. Once it runs, they wait for the uninstall step and the
@@ -76,6 +79,7 @@ async function tearDown(name: string, emit: (event: RunnerEvent) => void): Promi
   const store = storeFolder(process.env)
   await removeServices(name)
   await removeTailnet(name)
+  if (name === cmodPluginName) await removeHerdrMod()
   await rm(instanceFolder(store, name), { recursive: true, force: true })
   const record = await readRecord(readText, store, name)
   if (record === undefined) {

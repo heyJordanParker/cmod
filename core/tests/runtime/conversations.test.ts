@@ -1,16 +1,22 @@
 import { expect, test } from 'bun:test'
 import type { Args, Caught, Frozen } from 'claude-code'
-import { defineMod, notInstalled } from '../../src/mod.js'
+import { defineMod, notInstalled, type Mod, type ModDefinition, type Subscription } from '../../src/mod.js'
 import { coreVersion } from '../../src/records.js'
 import { serveCmodPlugin } from '../../src/register.js'
 import type { Claude } from '../../src/runtime/claude.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
-import { createLifecycle } from '../../src/runtime/lifecycle.js'
+import { interfaceListeners, interfaceServer, listeningOf, methodName, sessionsInterface, uiInterface } from '../../src/runtime/interfaces.js'
+import { createLifecycle, type Lifecycle } from '../../src/runtime/lifecycle.js'
 import { createRouter } from '../../src/runtime/router.js'
+import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes } from '../../src/runtime/rpc.js'
+import { partMethods } from '../../src/runtime/ui.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
-import { fakeClaude, type FakeClaude } from '../../src/testing/fake-claude.js'
+import type { SessionData } from '../../src/session/conversation.js'
+import { calledAnswer, fakeClaude, testDevice, type FakeClaude } from '../../src/testing/fake-claude.js'
+import { BelowPrompt, Dashboard, TurnEnd, Working } from '../../src/ui/areas.js'
+import { Box, Button, Text } from '../../src/ui/elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
 import { fakeServe, type FakeServe } from '../../src/testing/fake-serve.js'
 import { ifMissing } from '../../src/utils/paths.js'
@@ -460,9 +466,92 @@ test('a failure to tell a mod about a change clears once cmod reaches that mod a
   expect(shown).toEqual([])
 })
 
+async function servedHere() {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  fake.fakes.serve.sessions = () => [{ id: 'here', title: 'Deploy', project: '/work/app', cwd: '/work/app', model: 'test-model', startedAt: '', lastAt: '', isRunning: true }]
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'here', source: 'startup' } as never, async () => ({}))
+  await fake.settle()
+  const listed = async () => {
+    await fake.settle()
+    const answer = (await served.answer({ to: 'cmod', method: conversationMethods.sessions, input: {}, caller: 'demo' })) as { readonly value: readonly SessionData[] }
+    return answer.value.map(({ status, waitingFor, contextPercent }): unknown => ({ status, waitingFor, contextPercent }))
+  }
+  const lastTurn = async () => {
+    await fake.settle()
+    const answer = (await served.answer({ to: 'cmod', method: conversationMethods.sessions, input: {}, caller: 'demo' })) as { readonly value: readonly SessionData[] }
+    return answer.value.map(({ lastTurn: ended }) => (ended === undefined ? undefined : { ...ended, at: typeof ended.at }))
+  }
+  return { fake, router, listed, lastTurn }
+}
+
+test("the cmod plugin's turn start and end move its session between busy and idle in cmod/Sessions", async () => {
+  const { router, listed } = await servedHere()
+
+  const before = await listed()
+  await router.dispatch('turn.start', { text: 'Deploy', turnId: 'turn-1' }, async () => ({}) as never)
+  const working = await listed()
+  await router.dispatch('turn.complete', { turnId: 'turn-1', reason: 'answer', isAborted: false } as never, async () => ({}) as never)
+  const after = await listed()
+
+  expect([before, working, after]).toEqual([[{ status: 'idle' }], [{ status: 'busy' }], [{ status: 'idle' }]])
+})
+
+test('a session lists how its last main turn ended, answered, stopped with Esc, or refused with its explanation, and a new turn takes it away', async () => {
+  const { router, lastTurn } = await servedHere()
+  const turn = async (turnId: string, ending: object) => {
+    await router.dispatch('turn.start', { text: 'Deploy', turnId }, async () => ({}) as never)
+    await router.dispatch('turn.complete', { turnId, isAborted: false, ...ending } as never, async () => ({}) as never)
+    return lastTurn()
+  }
+
+  const before = await lastTurn()
+  const answered = await turn('turn-1', { reason: 'answer' })
+  const stopped = await turn('turn-2', { reason: 'aborted', isAborted: true })
+  const refused = await turn('turn-3', { reason: 'refusal', refusal: { explanation: 'It would delete production.' } })
+  await router.dispatch('turn.start', { text: 'Deploy again', turnId: 'turn-4' }, async () => ({}) as never)
+  const running = await lastTurn()
+
+  expect([before, answered, stopped, refused, running]).toEqual([
+    [undefined],
+    [{ reason: 'answered', at: 'string' }],
+    [{ reason: 'stopped', at: 'string' }],
+    [{ reason: 'failed', at: 'string', failure: 'It would delete production.' }],
+    [undefined],
+  ])
+})
+
+test('a session whose permission prompt waits on a tool call lists as waiting on that call until the call ends', async () => {
+  const { router, listed } = await servedHere()
+  let allow: (answer: never) => void = () => undefined
+  await router.dispatch('turn.start', { text: 'Clean up', turnId: 'turn-1' }, async () => ({}) as never)
+
+  const called = router.dispatch('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'rm -rf build' } as never, () => new Promise((resolve) => void (allow = resolve)))
+  await router.dispatch('classic.Notification', { notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' } as never, async () => ({}))
+  const waiting = await listed()
+  allow({} as never)
+  await called
+  const ran = await listed()
+
+  expect(waiting).toEqual([{ status: 'waiting', waitingFor: { dialog: 'permission prompt', tool: 'Bash', input: { command: 'rm -rf build' } } }])
+  expect(ran).toEqual([{ status: 'busy' }])
+})
+
+test("a session lists the context fill its usage() reads at each measure", async () => {
+  const { fake, router, listed } = await servedHere()
+  fake.fakes.session.usage = async () => ({ startedAt: 0, context: { window: 200000, tokens: 84000, percent: 42 }, rateLimits: [], cost: { usd: 0 } })
+
+  await router.dispatch('session.measure', { context: { window: 200000, tokens: 84000, percent: 42 }, rateLimits: [], changed: ['context'] } as never, async () => ({ changed: ['context'] }) as never)
+
+  expect(await listed()).toEqual([{ status: 'idle', contextPercent: 42 }])
+})
+
 test("a goal updated from another session becomes that running session's goal", async () => {
   const disk = fakeFiles({})
-  const serve = fakeServe(() => ({ read: async (session, part) => (part === 'goal' ? { text: await disk.read(`/store/data/cmod/goals/${session}.txt`) } : part === 'state' ? null : []) }))
+  const serve = fakeServe(() => ({ read: async (session, part) => (part === 'goal' ? { text: await disk.read(`/store/data/cmod/goals/${session}.txt`) } : part === 'state' ? null : []) }), { device: async () => testDevice })
   const plugin = async (id: string) => {
     const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
     const router = createRouter()
@@ -798,7 +887,7 @@ test('a clone runs cmod task start with --clone and none of the owner a listener
 test("a background session's cmod plugin records its task's answer at the session's first stop, and the session that started it closes the task", async () => {
   const disk = fakeFiles({})
   const saved = async (session: string) => Promise.all((await disk.list(`/store/data/cmod/tasks/${session}`).catch(ifMissing([]))).map(async (file) => JSON.parse(await disk.read(`/store/data/cmod/tasks/${session}/${file.name}`)) as unknown))
-  const serve = fakeServe(() => ({ read: async (session, part) => (part === 'tasks' ? saved(session) : part === 'state' ? null : []) }))
+  const serve = fakeServe(() => ({ read: async (session, part) => (part === 'tasks' ? saved(session) : part === 'state' ? null : []) }), { device: async () => testDevice })
   const started = { id: 'test-session', title: 'Upgrade the dependencies', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
   const plugin = async (session: string, configure: (fake: ReturnType<typeof fakeClaude>) => void) => {
     const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
@@ -847,7 +936,7 @@ test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this c
 
 test("the cmod plugin tells each mod of its session the color the index holds at the session's start, and each color /color picks", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
-  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true }
+  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
   let color = 'green'
   tested.fakes.serve.sessions = () => [{ ...indexed, color }]
   const told: unknown[] = []
@@ -876,7 +965,7 @@ test("the cmod plugin tells each mod of its session the color the index holds at
 
 test("a mod still installing misses the session's color with no warning, and hears it when its start tells its parts", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
-  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true, color: 'green' }
+  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true, color: 'green', device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
   tested.fakes.serve.sessions = () => [indexed]
   let isInstalling = true
   const told: unknown[] = []
@@ -922,54 +1011,357 @@ const settled = async (...plugins: readonly { readonly fake: FakeClaude }[]) => 
 const typedPrompt = (text: string) => ({ uuid: `prompt:${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } })
 
 test("a mod's action on another running session reaches that session through cmod serve, and the session's answer resolves it", async () => {
-  const serve = fakeServe(() => ({}))
+  const serve = fakeServe(() => ({}), { device: async () => testDevice })
   const here = await connected(serve, 'here')
   await connected(serve, 'other', { configure: (fake) => void (fake.fakes.session.surfaces = async () => ['mobile']) })
 
   expect(await here.served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'other', action: 'surfaces', input: null }, caller: 'demo' })).toEqual({ value: ['mobile'] })
 })
 
-test("a mod in another session refuses a prompt here before it enters, through cmod serve", async () => {
-  const serve = fakeServe(() => ({}))
-  const here = await connected(serve, 'here')
-  const other = await connected(serve, 'other', { configure: (fake) => void (fake.fakes.cmod.call = async ({ method }) => (method === conversationMethods.before ? { refuse: 'blocked by session other' } : null)) })
-  await other.served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
-  await settled(here, other)
-
-  expect(await here.router.dispatch('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false } as never, async (e) => ({ text: e.text }))).toEqual({ drop: 'blocked by session other' })
-})
-
-test("another session's refusing listener refuses here once its own timeoutMs and a second pass, and a listener that does not refuse lets the event through", async () => {
-  const serve = fakeServe(() => ({}))
-  const here = await connected(serve, 'here')
-  const other = await connected(serve, 'other', { configure: (fake) => void (fake.fakes.cmod.call = ({ method }) => (method === conversationMethods.before ? new Promise<never>(() => undefined) : Promise.resolve(null))) })
-  await other.served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'here', subscriptions: [{ event: 'toolCall', matcher: { name: 'Bash' }, onFailure: 'refuse', timeoutMs: 30_000 }] }, caller: 'demo' })
-  await settled(here, other)
-  const waits: number[] = []
-  here.fake.fakes.clock.after = (ms, fire) => {
-    waits.push(ms)
-    void Promise.resolve().then(fire)
-    return { cancel: () => undefined }
-  }
-  const call = (tool: string) => here.router.dispatch('tool.call', { tool, command: 'ls', tool_use_id: 't1' } as never, async () => ({ result: 'ran' }))
-
-  expect(await call('Bash')).toEqual({ deny: 'demo: session other did not answer within 31 s' })
-  expect(waits).toContain(31_000)
-  expect(await call('Read')).toEqual({ result: 'ran' })
-})
-
-test("a mod hears another session's prompts through cmod serve, and a mod listening on every session hears only its own project's sessions", async () => {
-  const serve = fakeServe(() => ({}))
+test("a mod hears only the session it runs in: its listener on another session hears nothing, and a released mod's listener on every session hears its own", async () => {
+  const serve = fakeServe(() => ({}), { device: async () => testDevice })
   const told: string[] = []
   const listener = await connected(serve, 'listener', { configure: (fake) => void (fake.fakes.cmod.call = async ({ to, method, input }) => (method === conversationMethods.changed && told.push(`${to} ${(input as { session: string }).session}`), null)) })
   const here = await connected(serve, 'here')
-  const elsewhere = await connected(serve, 'elsewhere', { project: '/work/site' })
   await listener.served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
   await listener.served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: '*', subscriptions: [{ event: 'prompt' }] }, caller: 'every' })
-  await settled(listener, here, elsewhere)
+  await settled(listener, here)
 
-  for (const plugin of [here, elsewhere]) await plugin.router.dispatch('session.append', typedPrompt('Ship it') as never, async () => typedPrompt('Ship it') as never)
-  await settled(listener, here, elsewhere)
+  for (const plugin of [here, listener]) await plugin.router.dispatch('session.append', typedPrompt('Ship it') as never, async () => typedPrompt('Ship it') as never)
+  await settled(listener, here)
 
-  expect(told.toSorted()).toEqual(['demo here', 'every here'])
+  expect(told).toEqual(['every listener'])
+})
+
+function devboxProvider() {
+  const started: unknown[] = []
+  let isRunning = true
+  const notHere = (session: string) => new RpcError(rpcCodes.notHeld, `No session ${session} on devbox.`)
+  const server = interfaceServer({
+    implementations: {
+      [sessionsInterface]: {
+        sessions: () => [{ id: 'bg-devbox', title: 'Upgrade the dependencies', project: '/work/app', cwd: '/work/app', model: 'opus', startedAt: '', lastAt: '', isRunning, device: { id: 'devbox-id', name: 'devbox' } }],
+        startTask: (session: string, task: { readonly title: string; readonly device?: string }) => {
+          if (task.device !== 'devbox') throw notHere(session)
+          started.push({ session, task })
+          return { id: 'bg-devbox', title: task.title, openedBy: '', openedAt: '2026-11-19T10:00:00.000Z', isBackground: true }
+        },
+        surfaces: (session: string) => {
+          throw notHere(session)
+        },
+      },
+    },
+  })
+  const routes = rpcRoutes({ handle: (connection) => server.handler(connection), onClose: (connection) => server.closed(connection), now: () => Date.now() })
+  const fetch = async (url: string, init: { readonly method?: string; readonly body?: unknown } = {}) => {
+    const answered = await routes.route({ method: init.method ?? 'GET', path: new URL(url).pathname, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
+    return { status: answered?.status ?? 404, ok: answered !== undefined && answered.status < 300, headers: {}, text: answered?.json === undefined ? '' : JSON.stringify(answered.json) }
+  }
+  const files = fakeFiles({ '/store/instances/demo/sessions-server.json': JSON.stringify({ address: 'unix:/store/devbox.sock', pid: 1, started: '', provides: [sessionsInterface] }) })
+  return {
+    started,
+    end: () => {
+      isRunning = false
+      server.emit(sessionsInterface, 'Change', { session: 'bg-devbox', part: 'running' }, ['bg-devbox'])
+    },
+    serve: () => fakeServe(() => ({}), { device: async () => testDevice, programs: { store: '/store', files: { list: (path) => files.list(path).catch(ifMissing([])), read: (path) => files.read(path).catch(ifMissing(undefined)) }, fetch, wait: async () => undefined } }),
+    close: () => routes.close(),
+  }
+}
+
+test("a task started on another device starts through the sessions provider that serves it, and its end there reaches the session that started it", async () => {
+  const devbox = devboxProvider()
+  const serve = devbox.serve()
+  const told: unknown[] = []
+  const opener = await connected(serve, 'test-session', {
+    configure: (fake) => {
+      fake.fakes.cmod.call = async ({ method, input }) => (method === conversationMethods.changed && told.push((input as { change: unknown }).change), null)
+    },
+  })
+  const call = (method: string, input: unknown) => opener.served.answer({ to: 'cmod', method, input, caller: 'demo' })
+  await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [{ event: 'taskEnd' }] })
+
+  const answer = await call(conversationMethods.act, { session: 'test-session', action: 'startBackgroundTask', input: { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', device: 'devbox' } })
+  await settled(opener)
+  const toldWhileRunning = [...told]
+  devbox.end()
+  await settled(opener)
+
+  expect(toldWhileRunning).toEqual([])
+  expect(answer).toMatchObject({ value: { id: 'bg-devbox', title: 'Upgrade the dependencies', isBackground: true } })
+  expect(devbox.started).toEqual([{ session: 'test-session', task: { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', device: 'devbox' } }])
+  expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  devbox.close()
+})
+
+test('a background task that @cmodjs/core 7.0.0 sends for machine devbox starts on the device devbox', async () => {
+  const devbox = devboxProvider()
+  const opener = await connected(devbox.serve(), 'test-session')
+
+  const answer = await opener.served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'startBackgroundTask', input: { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', machine: 'devbox' } }, caller: 'demo' })
+
+  expect(answer).toMatchObject({ value: { id: 'bg-devbox', title: 'Upgrade the dependencies', isBackground: true } })
+  expect(devbox.started).toEqual([{ session: 'test-session', task: { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', device: 'devbox' } }])
+  devbox.close()
+})
+
+test("a call on a session no sessions provider holds rejects with the last provider's not-held message, and a device no provider serves starts no task", async () => {
+  const devbox = devboxProvider()
+  const opener = await connected(devbox.serve(), 'test-session')
+  const act = (session: string, action: string, input: unknown) => opener.served.answer({ to: 'cmod', method: conversationMethods.act, input: { session, action, input }, caller: 'demo' })
+
+  expect(await act('nowhere', 'surfaces', null)).toEqual({ deny: 'No session nowhere on devbox.' })
+  expect(await act('test-session', 'startBackgroundTask', { title: 'Upgrade', prompt: 'Upgrade.', device: 'pi' })).toEqual({ deny: 'no mod starts sessions on pi, so the task did not start. Leave device out to start it on test-computer.' })
+  devbox.close()
+})
+
+type UiPart = { readonly mod: string; readonly id: string }
+
+type UiOnServe = {
+  views(session: string): Promise<unknown>
+  pages(session: string): Promise<unknown>
+  draw(session: string, part: UiPart, at: { readonly columns: number; readonly surface: string; readonly area?: string }): Promise<unknown>
+  press(session: string, handler: number, input: { readonly surface: string; readonly key?: string }): Promise<unknown>
+  open(session: string, part: UiPart): Promise<unknown>
+  onChange(listener: (change: unknown) => void): Subscription
+  onRedraw(listener: (redraw: unknown) => void): Subscription
+  onOpen(listener: (opened: unknown) => void): Subscription
+  onClose(listener: (closed: unknown) => void): Subscription
+}
+
+const startedAs = (name: string) => async () => ({ name, root: `/plugins/${name}`, version: coreVersion, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} })
+
+async function uiOnServe<State extends object>(definition: ModDefinition<State>) {
+  const cmod = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const demo = fakeClaude({ name: definition.name, root: `/plugins/${definition.name}` })
+  Object.assign(cmod.fakes.fs, fakeFiles({}))
+  const plugin = createLifecycle(defineMod({ name: 'cmod', setup() {} }), undefined, {}, true, serveCmodPlugin)
+  const mod = createLifecycle(definition)
+  const askedBy =
+    (caller: string, lifecycle: Pick<Lifecycle<object>, 'route'>) =>
+    async ({ to, method, input }: { readonly to: string; readonly method: string; readonly input: unknown }) =>
+      calledAnswer(caller, await lifecycle.route('cmod.call', { to, method, input, caller } as never, async () => ({ deny: notInstalled(to) })))
+  cmod.fakes.cmod.call = (call) => askedBy('cmod', call.to === definition.name ? mod : plugin)(call)
+  demo.fakes.cmod.call = askedBy(definition.name, plugin)
+  await plugin.start(cmod.claude, startedAs('cmod'))
+  await plugin.route('classic.SessionStart', { session_id: 'test-session', source: 'startup' } as never, async () => ({}))
+  await mod.start(demo.claude, startedAs(definition.name))
+  const settle = () => settled({ fake: cmod }, { fake: demo })
+  await settle()
+  const listeners = interfaceListeners({
+    report: (error) => {
+      throw error
+    },
+  })
+  const client = connectRpc({
+    call: addressCall((url, init) => cmod.serve.fetch(url, init), 'unix:/test/home/.local/share/cmod/serve.sock'),
+    handle: async (method, params, signal) => (await listeners.handler(method, params, signal))?.result ?? null,
+    onConnect: (connected) => listeners.replay(connected),
+    wait: async () => undefined,
+  })
+  const call =
+    (method: string) =>
+    (...args: unknown[]) =>
+      client.request(methodName(uiInterface, method), args)
+  const on = (event: string) => (listener: (payload: unknown) => void) => listeners.listen(client, listeningOf(uiInterface, 'on', event, [], undefined), listener)
+  const ui: UiOnServe = { views: call('views'), pages: call('pages'), draw: call('draw'), press: call('press'), open: call('open'), onChange: on('Change'), onRedraw: on('Redraw'), onOpen: on('Open'), onClose: on('Close') }
+  return { ui, plugin, mod, settle, close: () => client.close() }
+}
+
+const handlerOf = (data: unknown): number => {
+  const found = JSON.stringify(data).match(/"\$cmodHandler":(\d+)/)
+  if (found === null) throw new Error(`no handler in ${JSON.stringify(data)}`)
+  return Number(found[1])
+}
+
+const runsAndLog = (pressed: unknown[]) =>
+  defineMod({
+    name: 'demo',
+    state: { session: { runs: 7 } },
+    setup(mod) {
+      mod.views.add({ id: 'runs', title: 'Runs', render: (current) => Button({ key: 'rerun', label: `Run again after run ${current.state.session.runs}`, onPress: (press) => void pressed.push(press) }) })
+      mod.pages.add({ id: 'log', title: 'Log', render: (current, { columns, surface }) => Text({ children: `run ${current.state.session.runs} at ${columns} columns in the ${surface}` }) })
+    },
+  })
+
+test("cmod/UI on cmod serve lists a mod's views and pages, and draws a page with the columns and surface its renderer gives", async () => {
+  const { ui, close } = await uiOnServe(runsAndLog([]))
+
+  expect(await ui.views('test-session')).toEqual([{ mod: 'demo', id: 'runs', title: 'Runs' }])
+  expect(await ui.pages('test-session')).toEqual([{ mod: 'demo', id: 'log', title: 'Log' }])
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'log' }, { columns: 72, surface: 'browser' })).toEqual({ $cmodElement: 'Text', props: { children: 'run 7 at 72 columns in the browser' } })
+  await close()
+})
+
+test('cmod/UI draws a widget for the area its renderer shows it in, the Dashboard when it names none, and refuses an area the widget does not list', async () => {
+  const { ui, close } = await uiOnServe(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt, Dashboard], render: (_mod, { area, columns }) => Text({ children: `main in ${area} at ${columns} columns` }) })
+      },
+    }),
+  )
+
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'herdr', area: BelowPrompt })).toEqual({ $cmodElement: 'Text', props: { children: 'main in belowPrompt at 30 columns' } })
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'herdr' })).toEqual({ $cmodElement: 'Text', props: { children: 'main in dashboard at 30 columns' } })
+  await expect(ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'herdr', area: Working })).rejects.toThrow('The Branch widget of demo draws in belowPrompt and dashboard, not working.')
+  await close()
+})
+
+test('cmod/UI draws a widget for the surface its renderer gives, and draws it again for another surface', async () => {
+  const { ui, close } = await uiOnServe(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], render: (_mod, { surface }) => Text({ children: `main in the ${surface}` }) })
+      },
+    }),
+  )
+
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'browser' })).toEqual({ $cmodElement: 'Text', props: { children: 'main in the browser' } })
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'terminal' })).toEqual({ $cmodElement: 'Text', props: { children: 'main in the terminal' } })
+  await close()
+})
+
+test('a press on a widget through cmod/UI names the component of the area it drew for', async () => {
+  const pressed: unknown[] = []
+  const { ui, settle, close } = await uiOnServe(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt, Dashboard], render: () => Button({ key: 'switch', label: 'Switch', onPress: (press) => void pressed.push(press.component) }) })
+      },
+    }),
+  )
+
+  await ui.press('test-session', handlerOf(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'browser', area: BelowPrompt })), { surface: 'browser', key: 'demo/branch:switch' })
+  await ui.press('test-session', handlerOf(await ui.draw('test-session', { mod: 'demo', id: 'branch' }, { columns: 30, surface: 'browser' })), { surface: 'browser', key: 'demo/branch:switch' })
+  await settle()
+
+  expect(pressed).toEqual(['PromptHint', 'Pane'])
+  await close()
+})
+
+test('cmod/UI draws a turnEnd widget with the last finished turn, tells Redraw when a turn finishes, and draws nothing before the first one', async () => {
+  const { ui, plugin, settle, close } = await uiOnServe(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        mod.widgets.add({ id: 'took', title: 'Took', areas: [TurnEnd, Dashboard], render: (_mod, context) => Text({ children: context.area === TurnEnd ? `ended ${context.turn.prompt.text}` : 'no turn here' }) })
+      },
+    }),
+  )
+  const redraws: unknown[] = []
+  ui.onRedraw((redraw) => void redraws.push(redraw))
+  const append = (appended: object) => plugin.route('session.append', appended as never, async () => appended as never)
+  const before = await ui.draw('test-session', { mod: 'demo', id: 'took' }, { columns: 40, surface: 'herdr', area: TurnEnd })
+
+  await append({ uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Ship it' }] } })
+  await append({ uuid: 'd1', door: 'system', origin: { kind: 'engine' }, message: { type: 'system', name: 'turn_duration', content: [] } })
+  await settle()
+
+  expect(before).toBeNull()
+  expect(redraws).toContainEqual({ session: 'test-session', mod: 'demo', id: 'took' })
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'took' }, { columns: 40, surface: 'herdr', area: TurnEnd })).toEqual({ $cmodElement: 'Text', props: { children: 'ended Ship it' } })
+  await close()
+})
+
+test("a press through cmod/UI runs the mod's handler with the surface its renderer gave", async () => {
+  const pressed: unknown[] = []
+  const { ui, settle, close } = await uiOnServe(runsAndLog(pressed))
+  const drawn = await ui.draw('test-session', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'browser' })
+
+  await ui.press('test-session', handlerOf(drawn), { surface: 'browser', key: 'demo/runs:rerun' })
+  await settle()
+
+  expect(pressed).toEqual([{ plugin: 'demo', element: 'demo/runs:rerun', component: 'Pane', requestId: 'runs', surface: 'browser' }])
+  await close()
+})
+
+test('a press through cmod/UI on a drawing two draws back runs nothing and rejects, and one on the last two draws runs', async () => {
+  const pressed: unknown[] = []
+  const { ui, settle, close } = await uiOnServe(runsAndLog(pressed))
+  const draws = []
+  for (const columns of [40, 41, 42]) draws.push(handlerOf(await ui.draw('test-session', { mod: 'demo', id: 'runs' }, { columns, surface: 'browser' })))
+  const [oldest, middle, newest] = draws as [number, number, number]
+
+  await expect(ui.press('test-session', oldest, { surface: 'browser', key: 'demo/runs:rerun' })).rejects.toThrow('that button drew before the last redraw. Press the one it shows now.')
+  await ui.press('test-session', middle, { surface: 'browser', key: 'demo/runs:rerun' })
+  await ui.press('test-session', newest, { surface: 'browser', key: 'demo/runs:rerun' })
+  await settle()
+
+  expect(new Set(draws).size).toBe(3)
+  expect(pressed).toHaveLength(2)
+  await close()
+})
+
+test('a listener on cmod serve hears Change of views when a mod adds a view, and Redraw when its page draws new data', async () => {
+  const { ui, mod, settle, close } = await uiOnServe(runsAndLog([]))
+  const changes: unknown[] = []
+  const redraws: unknown[] = []
+  const heardChange = new Promise((resolve) => ui.onChange((change) => resolve(changes.push(change))))
+  const heardRedraw = new Promise((resolve) => ui.onRedraw((redraw) => resolve(redraws.push(redraw))))
+  await ui.draw('test-session', { mod: 'demo', id: 'log' }, { columns: 72, surface: 'browser' })
+
+  ;(mod.mod as Mod).views.add({ id: 'deploys', title: 'Deploys', render: () => Text({ children: 'no deploys' }) })
+  await settle()
+  await heardChange
+  ;(mod.mod as Mod<{ session: { runs: number } }>).state.session.runs = 8
+  await settle()
+  await heardRedraw
+
+  expect(changes).toEqual([{ session: 'test-session', part: 'views' }])
+  expect(redraws).toContainEqual({ session: 'test-session', mod: 'demo', id: 'log' })
+  expect(await ui.draw('test-session', { mod: 'demo', id: 'log' }, { columns: 72, surface: 'browser' })).toEqual({ $cmodElement: 'Text', props: { children: 'run 8 at 72 columns in the browser' } })
+  await close()
+})
+
+test('a listener on cmod serve hears Open and Close when a mod opens and closes its own page, and neither when an app opens one', async () => {
+  const { ui, settle, close } = await uiOnServe(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        const log = mod.pages.add({ id: 'log', title: 'Log', render: () => Text({ children: 'the log' }) })
+        mod.views.add({
+          id: 'runs',
+          title: 'Runs',
+          render: () =>
+            Box({
+              children: [Button({ key: 'show', label: 'Show the log', onPress: () => void log.open() }), Button({ key: 'hide', label: 'Hide the log', onPress: () => void log.close() })],
+            }),
+        })
+      },
+    }),
+  )
+  const heard: unknown[] = []
+  ui.onOpen((opened) => void heard.push(['Open', opened]))
+  ui.onClose((closed) => void heard.push(['Close', closed]))
+  const drawn = JSON.stringify(await ui.draw('test-session', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'browser' }))
+  const handlerOfKey = (key: string) => Number(new RegExp(`"key":"${key}"[^}]*"onPress":\\{"\\$cmodHandler":(\\d+)`).exec(drawn)?.[1])
+
+  await ui.open('test-session', { mod: 'demo', id: 'log' })
+  await ui.press('test-session', handlerOfKey('demo/runs:show'), { surface: 'browser', key: 'demo/runs:show' })
+  await settle()
+  await ui.press('test-session', handlerOfKey('demo/runs:hide'), { surface: 'browser', key: 'demo/runs:hide' })
+  await settle()
+
+  expect(heard).toEqual([
+    ['Open', { session: 'test-session', mod: 'demo', id: 'log' }],
+    ['Close', { session: 'test-session', mod: 'demo', id: 'log' }],
+  ])
+  await close()
+})
+
+test("cmod/UI lists a released core's mod.sidebar.add page as a view, and its Settings page as neither", async () => {
+  const { ui, plugin, close } = await uiOnServe(runsAndLog([]))
+
+  await plugin.route('cmod.call', { to: 'cmod', method: partMethods.changed, input: { parts: { widgets: [], pages: [{ id: 'trash', title: 'Trash', place: 'sidebar' }, { id: 'rules', title: 'Rules', place: 'settings' }] } }, caller: 'older' } as never, async () => ({ deny: 'unanswered' }))
+
+  expect(await ui.views('test-session')).toEqual([
+    { mod: 'demo', id: 'runs', title: 'Runs' },
+    { mod: 'older', id: 'trash', title: 'Trash' },
+  ])
+  expect(await ui.pages('test-session')).toEqual([{ mod: 'demo', id: 'log', title: 'Log' }])
+  await close()
 })

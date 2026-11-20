@@ -20,7 +20,7 @@ test.concurrent("a cmod run script reads every session cmod serve reads through 
     'list.ts': "import { sessions } from '@cmodjs/core/mod.js'\nconst found = await sessions.list({ everyProject: true })\nconst first = await sessions.get(Bun.argv[2] ?? '')\nconsole.log(JSON.stringify({ ids: found.map((session) => session.id), title: first.title }))\n",
   })
   const serving = startCmod(home, 'serve')
-  await serving.waitForOutput('unix:')
+  await serving.firstLine()
 
   const ran = await cmodWith(home, {}, 'run', 'list.ts', 's1')
   serving.child.kill()
@@ -37,5 +37,5 @@ test.concurrent('cmod run names a script it cannot find, and a script that impor
   const session = await cmodWith(home, {}, 'run', 'files.ts')
 
   expect([missing.exitCode, missing.stderr]).toEqual([1, `cmod run: there is no script at ${join(home, 'gone.ts')}.\n`])
-  expect([session.exitCode, session.stderr]).toEqual([1, 'cmod run: a cmod run script imports only sessions from @cmodjs/core/mod.js, because fs belongs to a Claude Code session.\n'])
+  expect([session.exitCode, session.stderr]).toEqual([1, 'cmod run: a cmod run script imports only sessions, provide and providers from @cmodjs/core/mod.js, because fs belongs to a Claude Code session.\n'])
 }, 30_000)

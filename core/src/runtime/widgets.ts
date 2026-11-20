@@ -1,4 +1,4 @@
-import type { ElementTable, MarkdownProps, RenderElement } from 'claude-code'
+import type { ElementTable, MarkdownProps, RenderComponent, RenderElement } from 'claude-code'
 import { isObject, storeChangedPath, widgetsPath } from '../records.js'
 import type { TurnData } from '../session/conversation.js'
 import { AbovePrompt, areas, BelowPrompt, TurnEnd, Working, type Area } from '../ui/areas.js'
@@ -29,6 +29,8 @@ export const builtInWidgets: readonly PlacedWidget[] = [
   { key: claudeModes, mod: 'claude', title: "Claude Code's mode labels", areas: [BelowPrompt] },
 ]
 
+export const areaComponents: Readonly<Record<Area, RenderComponent>> = { abovePrompt: 'AbovePrompt', belowPrompt: 'PromptHint', working: 'Spinner', turnEnd: 'TurnDuration', dashboard: 'Pane' }
+
 const promptIndent = 4
 
 const transcriptIndent = 2
@@ -45,7 +47,7 @@ export type Widgets = {
   change(edit: (layout: WidgetLayout) => WidgetLayout): Promise<void>
   reload(): Promise<void>
   recheck(): Promise<void>
-  rows(area: Area, columns: number): RenderElement[]
+  rows(area: Area, at: StyledAt): RenderElement[]
   draw(area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]>
 }
 
@@ -97,7 +99,7 @@ export function moved(layout: WidgetLayout, widget: PlacedWidget, move: Move): W
   return withAreas({ [area]: without, [next]: landing })
 }
 
-function declarationsOf(input: unknown): WidgetDeclaration[] {
+export function widgetsOf(input: unknown): WidgetDeclaration[] {
   const listed = isObject(input) && Array.isArray(input['widgets']) ? (input['widgets'] as unknown[]) : []
   return listed.filter(isObject).flatMap((each) => {
     const known = Array.isArray(each['areas']) ? (each['areas'] as unknown[]).filter((area): area is Area => (areas as readonly unknown[]).includes(area)) : []
@@ -180,7 +182,7 @@ export function serveWidgets({
 
   const ask = async (mod: string) => {
     try {
-      declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })))
+      declared.set(mod, widgetsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })))
     } catch (error) {
       declared.delete(mod)
       if (!isNotInstalled(mod, error) && !isStillInstalling(mod, error)) claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`)
@@ -212,20 +214,20 @@ export function serveWidgets({
 
   const widgetOf = (key: string) => placed().find((widget) => widget.key === key)
 
-  const cacheKey = (key: string, area: Area, columns: number, turn: TurnData | undefined) => `${key}\u0000${area}\u0000${columns}\u0000${turn?.prompt.id ?? ''}`
+  const cacheKey = (key: string, area: Area, { columns, surface }: StyledAt, turn: TurnData | undefined) => `${key}\u0000${area}\u0000${columns}\u0000${surface}\u0000${turn?.prompt.id ?? ''}`
 
   const nameOf = (widget: PlacedWidget) => `The ${widget.title} widget of ${widget.mod}`
 
-  const fill = (key: string, area: Area, columns: number, turn: TurnData | undefined): Promise<void> | undefined => {
+  const fill = (key: string, area: Area, at: StyledAt, turn: TurnData | undefined): Promise<void> | undefined => {
     const widget = widgetOf(key)
     if (widget === undefined || !widget.areas.includes(area)) return undefined
-    return parts.fill(widget.mod, cacheKey(key, area, columns, turn), { widget: key.slice(widget.mod.length + 1), area, columns, ...(turn === undefined ? {} : { turn }) }, nameOf(widget))
+    return parts.fill(widget.mod, cacheKey(key, area, at, turn), { widget: key.slice(widget.mod.length + 1), area, columns: at.columns, surface: at.surface, ...(turn === undefined ? {} : { turn }) }, nameOf(widget))
   }
 
-  const elementFor = (key: string, area: Area, columns: number, turn: TurnData | undefined): RenderElement | undefined => {
+  const elementFor = (key: string, area: Area, at: StyledAt, turn: TurnData | undefined): RenderElement | undefined => {
     const widget = widgetOf(key)
     if (widget === undefined) return undefined
-    const element = parts.element(widget.mod, cacheKey(key, area, columns, turn), `${key}:`, nameOf(widget), `widget:${key}`)
+    const element = parts.element(widget.mod, cacheKey(key, area, at, turn), `${key}:`, nameOf(widget), `widget:${key}`)
     return element === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? 'fit'], children: element })
   }
 
@@ -233,26 +235,26 @@ export function serveWidgets({
 
   const shown = (keys: readonly string[]) => keys.filter((key) => !isHidden(key))
 
-  const rowsNow = (area: Area, columns: number, turn: TurnData | undefined): RenderElement[] =>
+  const rowsNow = (area: Area, at: StyledAt, turn: TurnData | undefined): RenderElement[] =>
     layout.areas[area].flatMap((row) => {
-      const side = (keys: readonly string[]) => shown(keys).map((key) => elementFor(key, area, columns, turn)).filter((each) => each !== undefined)
+      const side = (keys: readonly string[]) => shown(keys).map((key) => elementFor(key, area, at, turn)).filter((each) => each !== undefined)
       const left = side(row.left)
       const right = side(row.right)
       const group = (keys: readonly string[], children: readonly RenderElement[]) => Box({ flexShrink: shown(keys).some((key) => widgetOf(key)?.place?.size === 'fill') ? 1 : 0, minWidth: 0, columnGap: 2, children })
-      return left.length + right.length === 0 ? [] : [Box({ justifyContent: 'space-between', width: columns, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })]
+      return left.length + right.length === 0 ? [] : [Box({ justifyContent: 'space-between', width: at.columns, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })]
     })
 
   const keysIn = (area: Area) => layout.areas[area].flatMap((row) => shown([...row.left, ...row.right]))
 
   const draw = async (area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]> => {
-    await Promise.all(keysIn(area).map((key) => fill(key, area, at.columns, turn)))
-    return drawWith(table, () => rowsNow(area, at.columns, turn), markdownIn(table, at))
+    await Promise.all(keysIn(area).map((key) => fill(key, area, at, turn)))
+    return drawWith(table, () => rowsNow(area, at, turn), markdownIn(table, at))
   }
 
-  const rows = (area: Area, columns: number): RenderElement[] => {
-    const started = keysIn(area).flatMap((key) => fill(key, area, columns, undefined) ?? [])
+  const rows = (area: Area, at: StyledAt): RenderElement[] => {
+    const started = keysIn(area).flatMap((key) => fill(key, area, at, undefined) ?? [])
     if (started.length > 0) void Promise.all(started).then(redraw)
-    return rowsNow(area, columns, undefined)
+    return rowsNow(area, at, undefined)
   }
 
   const column = (table: ElementTable, children: readonly RenderElement[]) => drawWith(table, () => Box({ flexDirection: 'column', children }))
@@ -281,7 +283,7 @@ export function serveWidgets({
       if (listing === undefined && redraw !== true) return
       parts.forget(mod)
       if (listing !== undefined) {
-        const listed = declarationsOf(listing)
+        const listed = widgetsOf(listing)
         const isNewList = JSON.stringify(listed) !== JSON.stringify(declared.get(mod) ?? [])
         declared.set(mod, listed)
         if (isNewList) return place()

@@ -2,6 +2,7 @@ import type { Subscription } from '../utils/subscription.js'
 import type { Matcher } from '../utils/matcher.js'
 import type { Sender } from './context/turn/message/sender.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
+import type { Device } from './context/turn/device.js'
 import type { AttachedFile } from './context/turn/message/attached-file.js'
 import type { InstructionFile } from './context/turn/message/instruction-file.js'
 import type { Message, MessageType } from './context/turn/message/message.js'
@@ -72,7 +73,9 @@ export type Usage = {
 
 export type RateLimit = { readonly type: string; readonly percent: number; readonly resetsAt?: string }
 
-export type Surface = 'terminal' | 'desktop' | 'mobile' | 'vscode'
+export const surfaces = ['terminal', 'desktop', 'mobile', 'vscode', 'browser', 'herdr'] as const
+
+export type Surface = (typeof surfaces)[number]
 
 export const sessionEvents = {
   Message: 'message',
@@ -146,7 +149,7 @@ export type TaskStartArgs = {
   readonly name?: string
   readonly cwd?: string
   readonly isBackground?: boolean
-  readonly machine?: string
+  readonly device?: string
 }
 
 export type ToolCallArgs = {
@@ -154,7 +157,7 @@ export type ToolCallArgs = {
   readonly input: Readonly<Record<string, unknown>>
 }
 
-export type Session = RecordPart & {
+export type Session = Pick<RecordPart, 'search'> & {
   readonly id: string
   readonly title: string
   readonly color?: string
@@ -167,6 +170,11 @@ export type Session = RecordPart & {
   readonly lastAt: string
   readonly forkedFrom?: string
   readonly visitedAt?: string
+  readonly device?: Pick<Device, 'id' | 'name'>
+  readonly status?: 'busy' | 'shell' | 'idle' | 'waiting'
+  readonly waitingFor?: { readonly dialog: string; readonly tool?: string; readonly input?: Readonly<Record<string, unknown>>; readonly question?: string }
+  readonly contextPercent?: number
+  readonly lastTurn?: { readonly reason: 'answered' | 'stopped' | 'failed'; readonly at: string; readonly failure?: string }
   readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
@@ -186,7 +194,7 @@ export type Session = RecordPart & {
 
 export type ForkArgs = Pick<TaskStartArgs, 'prompt' | 'title' | 'isBackground'> & { readonly at?: string }
 
-export type TaskOwner = Omit<Session, 'startTask' | 'callTool' | 'fork' | 'delete'>
+export type TaskOwner = Omit<Session, 'startTask' | 'callTool' | 'fork' | 'delete'> & OnMethods & BeforeMethods
 
 type ProcessEvent = { readonly on: string; readonly before?: string }
 
@@ -343,7 +351,7 @@ export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: 
 
 export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessAsked[Name], ProcessAnswer[Name]> }
 
-export type CurrentSession = Omit<Session, 'goal'> & ProcessOnMethods & ProcessBeforeMethods & {
+export type CurrentSession = Omit<Session, 'goal'> & OnMethods & BeforeMethods & ProcessOnMethods & ProcessBeforeMethods & {
   readonly goal: Goal & Pick<ProcessBeforeMethods, 'beforeSessionStart'>
   scrollTo(message: Message, options?: { readonly block?: 'start' | 'center' | 'end' | 'nearest' }): Promise<void>
   caption(toolCall: Message & { readonly type: typeof ToolCall }, text: string | undefined): void
@@ -357,7 +365,7 @@ export type SessionScope = {
 
 export type SearchOptions = SessionScope & { readonly before?: Pick<Message, 'session' | 'id'> }
 
-export type Sessions = OnMethods & {
+export type Sessions = {
   readonly current: CurrentSession
   list(options?: SessionScope): Promise<Session[]>
   get(id: string): Promise<Session>

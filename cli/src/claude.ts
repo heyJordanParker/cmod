@@ -241,6 +241,13 @@ export async function startBackground(args: readonly string[], cwd: string): Pro
   return found.sessionId
 }
 
+export async function startTask(session: string, { title, prompt, cwd, agentType, model, fork }: { readonly title: string; readonly prompt: string; readonly cwd: string; readonly agentType?: string; readonly model?: string; readonly fork?: string }): Promise<TaskData> {
+  const task = { title, ...(fork === undefined ? {} : { forkedFrom: session }), ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), openedBy: '', openedAt: new Date().toISOString(), isBackground: true as const }
+  const settings = JSON.stringify({ env: { CMOD_TASK: JSON.stringify({ session, ...task }) } })
+  const id = await startBackground([...(fork === undefined ? [] : ['--resume', fork]), ...(agentType === undefined ? [] : ['--agent', agentType]), ...(model === undefined ? [] : ['--model', model]), '--settings', settings, '--', prompt], cwd)
+  return { id, ...task }
+}
+
 export async function backgroundAgents(): Promise<{ readonly id: string; readonly sessionId: string; readonly status: string }[]> {
   const entries = parse(await run([claudeCode(), 'agents', '--json', '--all']), 'claude agents --json --all')
   if (!Array.isArray(entries)) throw new Error('claude agents --json --all printed no list. Update Claude Code to 2.1.308 or later.')

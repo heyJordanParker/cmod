@@ -4,24 +4,25 @@ import { syncRules } from '../rules.js'
 
 export const summary = "Link each mod's rules into Claude Code's rules folder."
 
-export const help = `Usage: cmod rules [--project <folder>] [--plugin <folder>] [--json]
+export const help = `Usage: cmod rules sync [--project <folder>] [--plugin <folder>] [--json]
 
 ${summary}
 
-Links the rules/ folder of each mod that is on into Claude Code's rules folder:
-a user mod's at <config>/rules/<mod>, and a mod turned on for one project at
-<project>/.claude/rules/<mod>. It removes the link of a mod that is off or
-removed, then prints the rules it linked. --json prints them as { linked,
-placed, removed, watched }: placed and removed name the mods whose link this run
-made or took away, and watched lists the files and folders whose change can
-change the next run. --plugin names the cmod plugin's own folder, whose rules
-link for every project, because the cmod plugin has no install record. cmod runs
-it after install, update, remove, enable, disable, setup, teardown, link, and
-unlink, and the cmod plugin runs it at each session start.`
+sync links the rules/ folder of each mod that is on into Claude Code's rules
+folder: a user mod's at <config>/rules/<mod>, and a mod turned on for one
+project at <project>/.claude/rules/<mod>. It removes the link of a mod that is
+off or removed, then prints the rules it linked. --json prints them as {
+linked, placed, removed, watched }: placed and removed name the mods whose link
+this run made or took away, and watched lists the files and folders whose
+change can change the next run. --plugin names the cmod plugin's own folder,
+whose rules link for every project, because the cmod plugin has no install
+record. cmod runs it after install, update, remove, enable, disable, setup,
+teardown, link, and unlink, and the cmod plugin runs it at each session start.`
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'string' }, plugin: { type: 'string' }, json: { type: 'boolean', default: false } } })
-  if (positionals.length > 0) throw new Error(`cmod rules takes no names.\n\n${help}`)
+  const [action = 'sync', ...rest] = positionals
+  if (action !== 'sync' || rest.length > 0) throw new Error(`cmod rules takes sync.\n\n${help}`)
   const synced = await syncRules(values.project ?? process.cwd(), [], values.plugin === undefined ? undefined : { mod: cmodPluginName, root: values.plugin })
   process.stdout.write(values.json ? `${JSON.stringify(synced)}\n` : synced.linked.map(({ mod, folder, rules }) => `${mod}  ${folder}  ${rules.map((rule) => rule.name).join(', ')}\n`).join(''))
   return 0

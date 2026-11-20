@@ -1,26 +1,36 @@
 import { existsSync, watch } from 'node:fs'
 import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { setTimeout as after } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
 import { instancePath, interfaceName, processTypes, serviceLogPath, storeFolder, type ProcessType, type ProgramInstance } from '@cmodjs/core/src/records.js'
+import { connectServe } from '@cmodjs/core/src/runtime/bun.js'
+import { providerActs } from '@cmodjs/core/src/runtime/interfaces.js'
+import { isConnectionGone, RpcError, rpcCodes } from '@cmodjs/core/src/runtime/rpc.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
-import { killMs, programsFolder, stopCopy } from '../program.js'
+import { folderEnvironment, killMs, programsFolder, stopCopy } from '../program.js'
 import { removeService, startService } from '../service.js'
 import { isHolding, modLock, startTime, takeLock } from '../store.js'
 import { hasTailnetChanged, readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 
 export const summary = "Run one copy of a mod's program for every session."
 
-export const help = `Usage: cmod program <mod> [--web-app] [--provides <interface>]... [--no-wait | --service [--env <name>]... [--process-type <type>] | --remove-service] -- <command…>
+export const help = `Usage: cmod program <mod> [--web-app] [--no-wait | --service [--env <name>]... [--process-type <type>] | --remove-service] -- <command…>
 
 ${summary}
 
 Each session runs it for a program job with singleInstance. The first one
 holds instances/<mod>/<program>.json.lock in the cmod store, runs the command
 without CLAUDE_CODE_SESSION_ID, because the copy serves every session, writes the command's first line on standard output, its address, to
-instances/<mod>/<program>.json, and prints it. It touches its file in the lock
+instances/<mod>/<program>.json with the copy's pid and start time, and prints
+it. For a command that prints nothing and only provides interfaces, it writes
+the pid and start time there once cmod serve says the copy provided one, and
+prints provided. The command gets CMOD_MOD, the
+mod's name, and CMOD_PROGRAM, the program's, which connect() from
+@cmodjs/core/rpc.js reads to provide interfaces, and CMOD_DATA and CMOD_CACHE,
+the mod's data and cache folders, as an install step gets them. It touches its file in the lock
 every 5 seconds, so a session can tell a live holder from a killed one. Every
 other one prints the address in that file, then each new one, and takes over
 once the holder exits. With --no-wait, another one touches the holder's file,
@@ -41,7 +51,9 @@ makes the holder a service of the computer, com.claudemodmanager.<mod>.<program>
 a launchd agent in ~/Library/LaunchAgents on macOS, and a systemd user service
 in ~/.config/systemd/user on Linux. The service runs cmod program <mod> --
 <command…> at login and again whenever it exits, with HOME, XDG_DATA_HOME,
-CLAUDE_CONFIG_DIR, a PATH of the store's programs folder and the system
+XDG_CACHE_HOME, XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR, and HERDR_APP_HOME as the
+session has them, so the program gets the session's CMOD_DATA and CMOD_CACHE,
+a PATH of the store's programs folder and the system
 folders, CLAUDE_CODE_EXECPATH naming this session's Claude Code by the path
 its updates keep, such as ~/.local/bin/claude, and each --env variable, and
 cmod records it in services/<mod>/<program>.json. On macOS the service writes
@@ -49,9 +61,10 @@ its standard error to services/<mod>/<program>.log, which each holder cuts to
 the last whole lines of its last 512 KiB once it passes 1 MiB, and Linux keeps
 it in the journal. Holding the mod's lock in the cmod store, it loads the
 service when it is new, changed, or not loaded, waits up to 15 seconds for the
-program to print its address, prints held, and exits 0. A service whose
-program printed none by then, and whose lock no holder holds, is removed as
-cmod remove does, and it fails. When the computer does not take the service,
+program to start, prints held, and exits 0. A program has started once it
+printed its address, or once its connection to cmod serve provided an
+interface. A service whose program did neither by then, and whose lock no
+holder holds, is removed as cmod remove does, and it fails. When the computer does not take the service,
 it deletes the service's file and record and runs as --no-wait does. When the
 computer took the service and could not start it, it stops, disables, and
 deletes the service and its record, as cmod remove does, and fails with the
@@ -74,10 +87,6 @@ With --process-type, which a session passes for a program job with
 processType, the launchd agent carries that ProcessType: Interactive runs the
 program at the priority of an app, where launchd throttles a service with
 none, and Background runs it at the lowest. systemd has no such class, so a Linux unit carries none.
-
-With --provides, which a session passes once for each interface a program job
-provides, the holder writes the interface names to the instance file beside
-the address, which providers() reads to find the program.
 
 With --remove-service, which a session passes for each service in
 services/<mod>/ that the mod's setup no longer adds, it stops the program's
@@ -112,7 +121,7 @@ export async function run(argv: string[]): Promise<number> {
     },
   })
   const unnamed = values.provides.find((name) => !interfaceName.test(name))
-  if (unnamed !== undefined) throw new Error(`cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/SessionStore, not ${unnamed}.`)
+  if (unnamed !== undefined) throw new Error(`cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/Sessions, not ${unnamed}.`)
   const processType = values['process-type']
   if (processType !== undefined && !(processTypes as readonly string[]).includes(processType)) throw new Error(`cmod program --process-type takes ${processTypes.join(' or ')}, not ${processType}.`)
   if (processType !== undefined && !values.service) throw new Error('cmod program --process-type names the launchd class of a service, so it goes with --service.')
@@ -205,7 +214,7 @@ async function hold(mod: string, file: string, log: string, executable: string, 
   await trimLog(log)
   const tailnet = isWebApp ? await readTailnet().catch((error: unknown) => ({ reason: messageOf(error) })) : undefined
   const linked = join(programsFolder(), executable)
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID')), ...(tailnet === undefined ? {} : tailnetEnvironment(tailnet)) }
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID')), CMOD_MOD: mod, CMOD_PROGRAM: basename(executable), ...folderEnvironment(mod), ...(tailnet === undefined ? {} : tailnetEnvironment(tailnet)) }
   const child = spawn([existsSync(linked) ? linked : executable, ...args], { env, stdout: 'pipe', stderr: 'inherit' })
   const stopping = () => {
     child.kill('SIGTERM')
@@ -224,24 +233,44 @@ async function hold(mod: string, file: string, log: string, executable: string, 
       )
     }
   }, checkMs)
+  const asking = new AbortController()
+  let provided: Promise<void> = Promise.resolve()
   try {
     const started = await startTime(child.pid)
+    let recorded: Promise<void> = Promise.resolve()
+    const record = (instance: ProgramInstance) => (recorded = recorded.then(() => writeAtomically(file, `${JSON.stringify(instance)}\n`)))
+    provided = isProvidedOnServe(mod, basename(executable), asking.signal)
+      .catch((error: unknown) => {
+        process.stderr.write(`cmod program: cmod serve did not tell whether ${executable} provides an interface: ${messageOf(error)}\n`)
+        return false
+      })
+      .then(async (isProvided) => {
+        if (!isProvided || asking.signal.aborted) return
+        await record({ pid: child.pid, started })
+        process.stdout.write('provided\n')
+      })
+    provided.catch(stopping)
     let shown: Promise<void> | undefined
     await readLines(child.stdout, (line) => {
       const address = line.trim()
+      asking.abort()
       shown ??= (async () => {
         const tailnetUrl = tailnet === undefined ? undefined : await serveOnTailnet(tailnet, mod, executable, address)
-        await writeAtomically(file, `${JSON.stringify({ address, pid: child.pid, started, ...(tailnetUrl === undefined ? {} : { tailnetUrl }), ...(provides.length === 0 ? {} : { provides }) } satisfies ProgramInstance)}\n`)
+        await record({ address, pid: child.pid, started, ...(tailnetUrl === undefined ? {} : { tailnetUrl }), ...(provides.length === 0 ? {} : { provides }) })
         process.stdout.write(`${address}\n`)
       })()
     })
     await shown
     const code = await child.exited
+    asking.abort()
+    await provided
     return ending.aborted ? 0 : code
   } catch (error) {
     stopping()
     throw error
   } finally {
+    asking.abort()
+    await Promise.allSettled([provided])
     clearInterval(ticking)
     ending.removeEventListener('abort', stopping)
     await rm(file, { force: true })
@@ -258,6 +287,28 @@ async function isStartedWithin(file: string, ms: number): Promise<boolean> {
   } while (Date.now() < deadline)
   for (const holder of await readdir(`${file}.lock`).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(`${file}.lock`, holder)))) return true
   return false
+}
+
+async function isProvidedOnServe(mod: string, program: string, signal: AbortSignal): Promise<boolean> {
+  const serve = connectServe({ handle: (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `cmod program answers no ${method}.`)) })
+  try {
+    while (!signal.aborted) {
+      const isProvided = await serve.request(providerActs.provider, { mod, program }, signal).then(
+        () => true,
+        (error: unknown) => {
+          if (signal.aborted || isConnectionGone(error)) return false
+          throw error
+        },
+      )
+      if (isProvided) return true
+      await after(checkMs, undefined, { signal }).catch((error: unknown) => {
+        if (!signal.aborted) throw error
+      })
+    }
+    return false
+  } finally {
+    await serve.close()
+  }
 }
 
 async function trimLog(path: string): Promise<void> {

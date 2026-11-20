@@ -3,8 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { dataFolder, storeFolder } from '@cmodjs/core/src/records.js'
-import type { TaskData } from '@cmodjs/core/src/session/conversation.js'
-import { startBackground } from '../claude.js'
+import { startTask } from '../claude.js'
 import { writeAtomically } from '../files.js'
 import { sessionTranscripts } from '../history.js'
 
@@ -46,25 +45,11 @@ export async function run(argv: string[]): Promise<number> {
   if (values.at !== undefined && !values.clone) throw new Error('cmod task start --at takes --clone, because it names the last message of the fork.')
   const session = process.env['CLAUDE_CODE_SESSION_ID']
   if (session === undefined || session === '') throw new Error('cmod task start runs inside Claude Code, which names the session the task belongs to in CLAUDE_CODE_SESSION_ID.')
-  const task = {
-    title,
-    ...(values.clone ? { forkedFrom: session } : {}),
-    ...(values.agent === undefined ? {} : { agentType: values.agent }),
-    ...(values.model === undefined ? {} : { model: values.model }),
-    openedBy: '',
-    openedAt: new Date().toISOString(),
-    isBackground: true as const,
-  }
-  const settings = JSON.stringify({ env: { CMOD_TASK: JSON.stringify({ session, ...task }) } })
   const cwd = resolve(values.cwd ?? process.cwd())
   const fork = values.clone ? await writeFork(session, cwd, values.at, title) : undefined
-  const id = await startBackground(
-    [...(fork === undefined ? [] : ['--resume', fork]), ...(values.agent === undefined ? [] : ['--agent', values.agent]), ...(values.model === undefined ? [] : ['--model', values.model]), '--settings', settings, '--', prompt],
-    cwd,
-  )
-  const started: TaskData = { id, ...task }
-  await writeAtomically(join(dataFolder(storeFolder(process.env), 'cmod'), 'tasks', session, `${id}.json`), JSON.stringify(started))
-  process.stdout.write(values.json ? `${JSON.stringify(started)}\n` : `${id}  ${title}\n`)
+  const started = await startTask(session, { title, prompt, cwd, ...(values.agent === undefined ? {} : { agentType: values.agent }), ...(values.model === undefined ? {} : { model: values.model }), ...(fork === undefined ? {} : { fork }) })
+  await writeAtomically(join(dataFolder(storeFolder(process.env), 'cmod'), 'tasks', session, `${started.id}.json`), JSON.stringify(started))
+  process.stdout.write(values.json ? `${JSON.stringify(started)}\n` : `${started.id}  ${title}\n`)
   return 0
 }
 

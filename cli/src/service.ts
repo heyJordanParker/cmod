@@ -18,7 +18,7 @@ type Manager = {
   status(label: string, log: string): string
 }
 
-const passedVariables = ['XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR']
+const passedVariables = ['XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'HERDR_APP_HOME']
 
 const systemFolders = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
 

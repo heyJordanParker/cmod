@@ -4,6 +4,7 @@ import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.j
 import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { readDevice } from '../node_modules/@cmodjs/core/runtime/device.js'
+import { providerHoldMs } from '../node_modules/@cmodjs/core/runtime/interfaces.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
 import { cmodPlugin, type CmodPluginState } from '../src/mod.js'
@@ -184,7 +185,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, the Dashboard view, the History view, the Settings view, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -337,7 +338,7 @@ function testSettings(files: Readonly<Record<string, string>> = {}, projectRoot?
   return { tested, ran, called, declare, shown }
 }
 
-test("Settings lists each set-up mod with its Settings pages, options, and hotkeys, and the Sidebar's tabs", async () => {
+test("Settings lists each set-up mod with its views in Settings, options, and hotkeys, and the Sidebar's tabs", async () => {
   const { tested, declare, shown } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
@@ -426,7 +427,7 @@ test('a checkout whose version has no changelog section yet opens the Changelog 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args[0])).toEqual([{ to: { key: 'changelog:Unreleased' }, in: 'sidebar', block: 'start' }])
 })
 
-test('an option saves through cmod option, and a combo binds through cmod hotkey', async () => {
+test('an option saves through cmod options set, and a combo binds through cmod hotkeys set', async () => {
   const { tested, ran } = testSettings()
   await tested.type('/mods demo')
   await tested.settle()
@@ -436,10 +437,10 @@ test('an option saves through cmod option, and a combo binds through cmod hotkey
   await tested.shown.pane.input('hotkey:runs', 'ctrl+shift+r')
   await tested.settle()
 
-  expect(ran).toEqual([`${cmodProgram} option demo branch release`, `${cmodProgram} hotkey demo runs ctrl+shift+r`])
+  expect(ran).toEqual([`${cmodProgram} options set demo branch release`, `${cmodProgram} hotkeys set demo runs ctrl+shift+r`])
 })
 
-test('Settings lists a hotkey without a default as unbound, and a combo binds it through cmod hotkey', async () => {
+test('Settings lists a hotkey without a default as unbound, and a combo binds it through cmod hotkeys set', async () => {
   const { tested, ran, shown } = testSettings({ '/plugins/demo/package.json': JSON.stringify({ cmod: { hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' }, next: { title: 'Open the next run' } } } }) })
   await tested.type('/mods demo')
   await tested.settle()
@@ -451,7 +452,7 @@ test('Settings lists a hotkey without a default as unbound, and a combo binds it
 
   expect(hotkeys).toContain('│ Show the runs                  │\n              │ Combo ctrl+l                   │')
   expect(hotkeys).toContain('│ Open the next run · unbound    │\n              │ Combo                          │')
-  expect(ran).toEqual([`${cmodProgram} hotkey demo next ctrl+shift+n`])
+  expect(ran).toEqual([`${cmodProgram} hotkeys set demo next ctrl+shift+n`])
 })
 
 test('Settings marks a mod turned off in Claude Code, and Turn on runs cmod enable', async () => {
@@ -539,7 +540,7 @@ test('Settings shows the installer steps a mod still needs, and Finish setup run
   expect(await shown()).not.toContain('Needs setup')
 })
 
-test("a mod's page opens as a Sidebar tab with its number, the × closes it, and the last close hides the Sidebar", async () => {
+test("a mod's view opens as a Sidebar tab with its number, the × closes it, and the last close hides the Sidebar", async () => {
   const { tested, called, declare, shown } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
@@ -558,7 +559,36 @@ test("a mod's page opens as a Sidebar tab with its number, the × closes it, and
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
-test("a Sidebar page keeps its last drawing while its mod draws the next one after a state change", async () => {
+test("a mod's page fills the Sidebar's whole width with no panel around it, where a view draws inside its mod's panel", async () => {
+  const { tested, declare } = testSettings()
+  const drawnAt: unknown[] = []
+  const answer = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method === 'cmod:draw') drawnAt.push({ id: (input.input as { page: string }).page, columns: (input.input as { columns: number }).columns })
+    return answer?.(input)
+  }
+  await tested.start()
+  await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }, { id: 'log', title: 'Log' }])
+  const shownAt60 = async (id: string) => {
+    await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: id }] }, caller: 'demo' } as never)
+    await tested.settle()
+    await tested.shown.pane.lines({ columns: 60 })
+    await tested.settle()
+    return (await tested.shown.pane.lines({ columns: 60 })).join('\n')
+  }
+
+  const view = await shownAt60('runs')
+  const page = await shownAt60('log')
+
+  expect(drawnAt).toContainEqual({ id: 'runs', columns: 54 })
+  expect(drawnAt).toContainEqual({ id: 'log', columns: 60 })
+  expect(view).toContain('╭─ demo')
+  expect(page).toContain('2: Log')
+  expect(page).toContain('last run passed')
+  expect(page).not.toContain('╭─ demo')
+})
+
+test("a view keeps its last drawing while its mod draws the next one after a state change", async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
@@ -594,7 +624,7 @@ test("a Sidebar page keeps its last drawing while its mod draws the next one aft
   expect((await tested.shown.pane.lines()).join('\n')).toContain('runs body 2')
 })
 
-test("a Sidebar page whose mod fails to draw it shows the mod's error in place of the drawing placeholder", async () => {
+test("a view whose mod fails to draw it shows the mod's error in place of the drawing placeholder", async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
@@ -618,11 +648,11 @@ test("a Sidebar page whose mod fails to draw it shows the mod's error in place o
 
   const lines = (await tested.shown.pane.lines()).join('\n')
 
-  expect(lines).toContain('The items page of demo could not draw: item 3 has no title')
+  expect(lines).toContain('The items view of demo could not draw: item 3 has no title')
   expect(lines).not.toContain('Drawing')
 })
 
-test('a press on a Sidebar button from an older drawing tells the person nothing ran, and the page draws again', async () => {
+test('a press on a Sidebar button from an older drawing tells the person nothing ran, and the view draws again', async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
@@ -656,7 +686,7 @@ test('a press on a Sidebar button from an older drawing tells the person nothing
   expect(draws).toBe(drawnBefore + 1)
 })
 
-test('a Sidebar page opened with params draws, because the cmod plugin sends a plain copy of them across plugins', async () => {
+test('a view opened with params draws, because the cmod plugin sends a plain copy of them across plugins', async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
@@ -684,7 +714,7 @@ test('a Sidebar page opened with params draws, because the cmod plugin sends a p
   expect(drawnWith).toContainEqual({ project: '/work/app', path: 'src/a.ts' })
 })
 
-test('a Sidebar page keeps its last drawing, and so its place, when its mod fails to draw it during a reload', async () => {
+test('a view keeps its last drawing, and so its place, when its mod fails to draw it during a reload', async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
@@ -716,17 +746,17 @@ test('a Sidebar page keeps its last drawing, and so its place, when its mod fail
   expect((await tested.shown.pane.lines()).join('\n')).toContain('item 7 of 9')
 })
 
-test('a page request of a kind this cmod does not know, from a mod on a newer @cmodjs/core, opens nothing', async () => {
+test('a request of a kind this cmod does not know, from a mod on a newer @cmodjs/core, opens nothing', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await tested.start()
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ pin: 'runs' }] }, caller: 'demo' } as never)
   await tested.settle()
 
-  expect(tested.shown.debug.join('\n')).toContain('demo sent a page request this cmod does not know, so it skips it: {"pin":"runs"}')
+  expect(tested.shown.debug.join('\n')).toContain('demo sent a request this cmod does not know, so it skips it: {"pin":"runs"}')
   expect(tested.state.session.shown).not.toBe('settings')
 })
 
-test("a mod's focus request moves the Sidebar's keyboard to the field its page drew, under the page's prefix", async () => {
+test("a mod's focus request moves the Sidebar's keyboard to the field its view drew, under the view's prefix", async () => {
   const { tested, declare } = testSettings()
   tested.fakes.cmod.call = async (input) => (input.method === 'cmod:draw' ? { draw: 1, tree: { $cmodElement: 'Input', props: { key: 'answer', onSubmit: { $cmodHandler: 0 } } } } : null)
   await tested.start()
@@ -744,7 +774,7 @@ test("a mod's focus request moves the Sidebar's keyboard to the field its page d
   expect(await tested.shown.pane.focusedKey()).toBe('demo/question:answer')
 })
 
-test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the mod hears it shown", async () => {
+test("a mod's view in Settings opens inside Settings, not as a Sidebar tab, and the mod hears it shown", async () => {
   const { tested, declare, shown } = testSettings()
   const told: unknown[] = []
   const answer = tested.fakes.cmod.call
@@ -764,10 +794,10 @@ test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the
   expect(page).not.toContain('1: Runs')
   expect(page).toContain('0.2.0  Turn off  Remove')
   expect(page).toContain('last run passed')
-  expect(told).toContainEqual({ open: [], shown: 'runs', isFocused: true })
+  expect(told).toContainEqual({ open: [], shown: 'runs', isFocused: true, inApps: [] })
 })
 
-test("picking another mod in Settings draws that mod's page without the last mod's params, and tells it the page it shows", async () => {
+test("picking another mod in Settings draws that mod's view without the last mod's params, and tells it the view it shows", async () => {
   const record = (name: string) => JSON.stringify({ name, version: '0.2.0', root: `/plugins/${name}`, installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} })
   const tested = testMod(cmodPlugin, {
     state: { global: { installedPlugins: [], boundHotkeys: allHotkeys } },
@@ -813,7 +843,7 @@ test("picking another mod in Settings draws that mod's page without the last mod
   expect(told).not.toContainEqual(expect.objectContaining({ to: 'other', shown: 'runs' }))
 })
 
-test("a mod's Settings page draws with the params it opened with, and closing it leaves the page", async () => {
+test("a mod's view in Settings draws with the params it opened with, and closing it leaves the view", async () => {
   const { tested, declare, called } = testSettings()
   const draws: unknown[] = []
   const answer = tested.fakes.cmod.call
@@ -833,13 +863,13 @@ test("a mod's Settings page draws with the params it opened with, and closing it
   await tested.settle()
 
   expect(draws).toContainEqual(expect.objectContaining({ page: 'runs', params: { run: 7 } }))
-  expect(tested.state.session.section).not.toBe('page:runs')
+  expect(tested.state.session.section).not.toBe('view:runs')
   expect(called).toContain('demo cmod:shown')
 })
 
 test('a start whose hotkey bind fails tries again at the next start', async () => {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [] } } })
-  tested.fakes.process.run = async (argv) => ({ exitCode: argv[1] === 'hotkey' ? 2 : 0, stdout: '', stderr: 'cmod: unknown command hotkey', isStdoutTruncated: false, isStderrTruncated: false })
+  tested.fakes.process.run = async (argv) => ({ exitCode: argv[1] === 'hotkeys' ? 2 : 0, stdout: '', stderr: 'cmod: unknown command hotkeys', isStdoutTruncated: false, isStderrTruncated: false })
 
   await tested.start()
 
@@ -862,7 +892,7 @@ test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0
 
   await tested.start()
 
-  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkey /test/plugins/cmod settings meta+m`, `${cmodProgram} hotkey /test/plugins/cmod history meta+h`])
+  expect(ran).toEqual([`${cmodProgram} hotkeys set /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkeys set /test/plugins/cmod settings meta+m`, `${cmodProgram} hotkeys set /test/plugins/cmod history meta+h`])
   expect(tested.state.global.boundHotkeys).toEqual(['sidebar', 'settings', 'history'])
   expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'cmod--history', 'mods', 'history']))
 })
@@ -874,7 +904,7 @@ test('a cmod that bound its first hotkeys binds a hotkey a newer cmod adds, and 
 
   await tested.start()
 
-  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod history meta+h`])
+  expect(ran).toEqual([`${cmodProgram} hotkeys set /test/plugins/cmod history meta+h`])
   expect(tested.state.global.boundHotkeys).toEqual(['sidebar', 'settings', 'history'])
 })
 
@@ -1064,7 +1094,7 @@ test('the History hotkey opens History, and pressed again while it shows, closes
 
   expect(opened).toContain('1: History  ×')
   expect(opened).toContain('fix the login bug')
-  expect(tested.state.session.pages).toEqual([])
+  expect(tested.state.session.tabs).toEqual([])
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
@@ -1098,7 +1128,7 @@ test("an empty Dashboard says what goes there, and Arrange widgets opens cmod's 
   expect((await tested.shown.pane.lines()).join('\n')).toContain('Above the prompt')
 })
 
-test("a mod's install page is a Sidebar tab named for the mod, drawn by the mod, and its × closes it", async () => {
+test("a mod's install view is a Sidebar tab named for the mod, drawn by the mod, and its × closes it", async () => {
   const { tested, called, shown } = testSettings()
   await tested.start()
 
@@ -1130,7 +1160,7 @@ test('two mods that install at once each get an install tab, and the later one s
   expect(tested.state.session.shown).toBe('other/cmod:install')
 })
 
-test('Finish setup in Settings opens the install page the mod answers with', async () => {
+test('Finish setup in Settings opens the install view the mod answers with', async () => {
   const { tested, shown } = testSettings()
   const answer = tested.fakes.cmod.call
   tested.fakes.cmod.call = async (input) => (input.method === 'cmod:finishSteps' ? { requests: [{ open: 'cmod:install', focus: true }] } : answer?.(input))
@@ -1175,6 +1205,19 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
   ])
 })
 
+test('Settings lists a loaded mod that told its parts and has no install record', async () => {
+  const { tested, shown } = testSettings()
+  await tested.start()
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+
+  await tested.type('/mods')
+  await tested.settle()
+  await shown()
+  await tested.settle()
+
+  expect(await shown()).toContain('│  ● notes  │')
+})
+
 test('Settings stacks the Mods panel above the mod panel when the Sidebar is too narrow for both side by side', async () => {
   const { tested } = testSettings()
   await tested.type('/mods demo')
@@ -1210,7 +1253,7 @@ test('every Sidebar tab keeps its width whether it shows or not, so switching ta
   expect(dashboardShown).toBe(pageShown)
 })
 
-test("a page tab's × draws as a reversed block, its tab's text color filled behind a glyph in its tab's background, on the shown tab and on every other one", async () => {
+test("a view tab's × draws as a reversed block, its tab's text color filled behind a glyph in its tab's background, on the shown tab and on every other one", async () => {
   const { tested, declare } = testSettings()
   await tested.start()
   await declare([
@@ -1344,7 +1387,8 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
       spawned.push([...request.argv])
       sessions.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
     }
-    const { code, stdout = '', stderr = '' } = answers[request.argv.slice(1, 3).join(' ')] ?? { code: 0 }
+    const line = `${request.argv.slice(1).join(' ')} `
+    const { code, stdout = '', stderr = '' } = Object.entries(answers).find(([command]) => line.startsWith(`${command} `))?.[1] ?? { code: 0 }
     return exited(code, ...(stdout === '' ? [] : [{ stream: 'stdout' as const, text: stdout }]), ...(stderr === '' ? [] : [{ stream: 'stderr' as const, text: stderr }]))
   }
   return { tested, spawned, sessions }
@@ -1392,7 +1436,7 @@ test('a session started with a linked mod starts cmod watch only while no watche
 const askCmod = (tested: ReturnType<typeof cmodAnswering>['tested'], caller: string, method: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method, input, caller } as never)
 
 test("the sessions service asks cmod serve with each request's options, and the session start indexes the conversations", async () => {
-  const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: false }
+  const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: false, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
   const { tested, spawned } = cmodAnswering({})
   const asked: unknown[] = []
   tested.fakes.serve.sessions = (scope) => (asked.push(['sessions', scope]), [session])
@@ -1410,7 +1454,7 @@ test("the sessions service asks cmod serve with each request's options, and the 
     ['read', 's1', 'messages', { project: '/work/app', task: 'a7', after: 'm9', last: 5 }],
     ['search', 'deploy', { project: '/work/app', before: { session: 's1', id: 'm9' }, record: {} }],
   ])
-  expect(spawned).toEqual([[cmodProgram, 'history', 'index']])
+  expect(spawned).toEqual([[cmodProgram, 'sessions', 'index']])
 })
 
 test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
@@ -1418,7 +1462,7 @@ test('the session start builds the history index while one mod besides cmod is s
   await tested.start()
   await tested.settle()
 
-  expect(spawned).toEqual([[cmodProgram, 'history', 'index']])
+  expect(spawned).toEqual([[cmodProgram, 'sessions', 'index']])
 })
 
 test('the session start builds no history index while no mod besides cmod is set up', async () => {
@@ -1429,16 +1473,16 @@ test('the session start builds no history index while no mod besides cmod is set
   expect(spawned).toEqual([])
 })
 
-test("the updateSettings call runs cmod settings for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
-  const { tested, spawned } = cmodAnswering({ 'settings demo': { code: 1, stderr: 'demo is not set up. Run cmod install demo first.\n' } })
+test("the updateSettings call runs cmod settings update for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
+  const { tested, spawned } = cmodAnswering({ 'settings update demo': { code: 1, stderr: 'demo is not set up. Run cmod install demo first.\n' } })
   const update = (mod: string, values: Record<string, unknown>) => tested.fire('cmod.call', { to: 'cmod', method: 'updateSettings', input: { mod, source: 'project', project: '/work/app', values } })
 
   expect(await update('other', { cleanupPeriodDays: 365 })).toEqual({ value: null })
   expect(await update('demo', { statusLine: null })).toEqual({ deny: 'cmod: demo is not set up. Run cmod install demo first.' })
 
   expect(spawned.filter((argv) => argv[1] === 'settings')).toEqual([
-    [cmodProgram, 'settings', 'other', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
-    [cmodProgram, 'settings', 'demo', 'project', '{"statusLine":null}', '--project', '/work/app'],
+    [cmodProgram, 'settings', 'update', 'other', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
+    [cmodProgram, 'settings', 'update', 'demo', 'project', '{"statusLine":null}', '--project', '/work/app'],
   ])
 })
 
@@ -1502,6 +1546,41 @@ test('the cmod plugin answers every method a mod built on @cmodjs/core 7.0.0 add
   }
 
   for (const method of ['cmod:session', 'cmod:providers', 'cmod:provided', 'cmod:listenProvided', 'cmod:unlistenProvided']) expect(await refusal(method)).not.toContain('has no method')
+})
+
+test('the cmod plugin answers every method a mod built on @cmodjs/core 8.0.0 added', async () => {
+  const { tested } = cmodAnswering({})
+  await tested.start()
+
+  const told = await askCmod(tested, 'demo', 'cmod:tellProvided', { interface: 'demo/Echo', event: 'Change', payload: {} }).catch((error: unknown) => ({ deny: String(error) }))
+  const asked = await askCmod(tested, 'demo', 'cmod:askProvided', { interface: 'demo/Echo', event: 'Change', payload: {} }).catch((error: unknown) => ({ deny: String(error) }))
+
+  expect(told).toEqual({ value: null })
+  expect(asked).toEqual({ value: [] })
+})
+
+test("the cmod plugin holds a mod's cmod:provider for a program that has not provided the interface, and answers null once providerHoldMs passes on its clock", async () => {
+  const { tested } = cmodAnswering({})
+  await tested.start()
+  let isAnswered = false
+  let pass: () => void = () => undefined
+  const isHeld = new Promise<void>((resolve) => {
+    tested.fakes.clock.after = (ms, fn) => {
+      if (ms !== providerHoldMs) return void Promise.resolve().then(fn), { cancel: () => undefined }
+      pass = fn
+      resolve()
+      return { cancel: () => undefined }
+    }
+  })
+
+  const answer = askCmod(tested, 'demo', 'cmod:provider', { interface: 'demo/Echo', mod: 'demo', program: 'echo' }).finally(() => (isAnswered = true))
+  await isHeld
+  await tested.settle()
+  const wasAnsweredBeforePass = isAnswered
+  pass()
+
+  expect(wasAnsweredBeforePass).toBe(false)
+  expect(await answer).toEqual({ value: null })
 })
 
 const installedRoot = '/test/home/.claude/plugins/cache/demo/demo/0.2.0'
@@ -1673,7 +1752,7 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   expect(await shown()).toContain('[x] Show errors from installed mods')
 })
 
-test("Claude's start_session tool starts its task in a new background session through cmod task start, and names a machine no mod starts sessions on", async () => {
+test("Claude's start_session tool starts its task in a new background session through cmod task start, and names a device no mod starts sessions on", async () => {
   const started = { id: 'bg-1', title: 'Upgrade', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
   const { tested, spawned, sessions } = cmodAnswering({ 'task start': { code: 0, stdout: `${JSON.stringify(started)}\n` } })
   await tested.start()
@@ -1681,27 +1760,28 @@ test("Claude's start_session tool starts its task in a new background session th
   await tested.settle()
 
   const answer = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', model: 'sonnet' })
-  const elsewhere = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', machine: 'build-box' })
+  const elsewhere = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', device: 'build-box' })
 
   expect(answer).toEqual({ result: 'Started session bg-1. It answers there, not in this conversation. Read it with read_session.' })
   expect(spawned.filter((argv) => argv[1] === 'task')).toEqual([[cmodProgram, 'task', 'start', '--title', 'Upgrade', '--model', 'sonnet', '--cwd', '/work/app', '--json', '--', 'Upgrade every dependency.']])
   expect(sessions[spawned.findIndex((argv) => argv[1] === 'task')]).toBe('test-session')
-  expect(elsewhere).toEqual({ deny: 'The start_session tool failed: cmod: no mod starts sessions on build-box, so the task did not start. Leave machine out to start it on test-computer.' })
+  expect(elsewhere).toEqual({ deny: 'The start_session tool failed: cmod: no mod starts sessions on build-box, so the task did not start. Leave device out to start it on test-computer.' })
 })
 
 test("Claude's session tools list, read, message, and end other sessions through cmod serve", async () => {
-  const other = { id: 's2', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: true }
+  const other = { id: 's2', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: true, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
+  const elsewhere = { id: 's3', title: 'Run the load test', project: '/srv/app', cwd: '/srv/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T09:00:00.000Z', lastAt: '2026-10-11T09:30:00.000Z', isRunning: false, device: { id: '9c41d07e2b5a4f86a3e1c8d2f07b6e95', name: 'build-box' } }
   const { tested } = cmodAnswering({})
   const acted: unknown[] = []
-  tested.fakes.serve.sessions = () => [other]
+  tested.fakes.serve.sessions = () => [other, elsewhere]
   tested.fakes.serve.read = (_id, part) => (part === 'messages' ? [{ id: 'm1', session: 's2', type: Prompt, at: '2026-10-11T10:01:00.000Z', context: 1, turn: 'm1', text: 'rename it', from: { type: 'person' } }] : part === 'state' ? null : part === 'goal' ? { text: '' } : [])
   tested.fakes.serve.unheld = async (id, action) => (acted.push([id, action]), null)
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tested.settle()
 
-  expect(await tested.callTool('list_sessions', {})).toEqual({ result: 's2  running  Rename the tree pane\n  project /work/app, last active 2026-10-11T10:05:00.000Z' })
-  expect(await tested.callTool('read_session', { session: 's2' })).toEqual({ result: 's2  running  Rename the tree pane\n  project /work/app, last active 2026-10-11T10:05:00.000Z\nm1  2026-10-11T10:01:00.000Z  prompt: rename it' })
+  expect(await tested.callTool('list_sessions', {})).toEqual({ result: 's2  running  Rename the tree pane\n  device test-computer, project /work/app, last active 2026-10-11T10:05:00.000Z\ns3  ended  Run the load test\n  device build-box, project /srv/app, last active 2026-10-11T09:30:00.000Z' })
+  expect(await tested.callTool('read_session', { session: 's2' })).toEqual({ result: 's2  running  Rename the tree pane\n  device test-computer, project /work/app, last active 2026-10-11T10:05:00.000Z\nm1  2026-10-11T10:01:00.000Z  prompt: rename it' })
   expect(await tested.callTool('message_session', { session: 's2', text: 'use the new name' })).toEqual({ result: 'Sent session s2 the prompt.' })
   expect(await tested.callTool('end_session', { session: 's2' })).toEqual({ result: 'Session s2 ends once its turn ends.' })
   expect(await tested.callTool('read_screen', { session: 's2' })).toEqual({ deny: 'The read_screen tool failed: no program on this computer provides cmod/Terminal, so the terminal of session s2 is out of reach. A session claude --bg started has none.' })
@@ -2409,11 +2489,11 @@ test('an update whose install record lists what the update granted is offered by
   expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toEqual([])
 })
 
-test('a user settings change Claude Code reports turns a plugin on, and the offer shows once Claude Code has written it', async () => {
+test('a user settings change that turns a plugin on shows the offer once Claude Code loaded it', async () => {
   const { tested, reloads, tick } = await idleSession()
 
-  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   await tick()
 
   expect(offerOf(tested)).toEqual(changedOffer)
@@ -2641,36 +2721,6 @@ function servingWeb(tested: ReturnType<typeof testMod>) {
   }
   return started
 }
-
-const postsToServe = (tested: ReturnType<typeof testMod>) => {
-  const posted: string[] = []
-  tested.fakes.http.fetch = async (url, init) => {
-    if (url.includes('/api/sessions/') && init?.method === 'POST') posted.push(`${init.socketPath ?? ''} ${new URL(url).pathname}`)
-    return url.includes('/api/sessions/') ? { status: 200, ok: true, headers: {}, text: '{}' } : { status: 404, ok: false, headers: {}, text: '' }
-  }
-  return posted
-}
-
-test('a session with the web UI on tells cmod serve about itself over its socket, and starts no server of its own', async () => {
-  const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ servesWebUi: true }) } })
-  const started = servingWeb(tested)
-  const posted = postsToServe(tested)
-  await tested.start()
-  await settledUntil(tested, () => posted.length > 0)
-
-  expect(posted[0]).toBe(`${store}/serve.sock /api/sessions/test-session`)
-  expect(started.filter((argv) => argv.includes('web'))).toEqual([])
-})
-
-test('a session with the web UI off tells cmod serve nothing about itself', async () => {
-  const tested = testMod(cmodPlugin, { state: bound })
-  servingWeb(tested)
-  const posted = postsToServe(tested)
-  await tested.start()
-  await settledUntil(tested, () => posted.length > 0)
-
-  expect(posted).toEqual([])
-})
 
 test('open in browser turns the browser app on and opens the address cmod web prints', async () => {
   const tested = testMod(cmodPlugin, { state: bound })

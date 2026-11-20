@@ -1,21 +1,44 @@
-import { existsSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { existsSync, mkdirSync, watch } from 'node:fs'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Database } from 'bun:sqlite'
 import { dataFolder, isObject, storeFolder } from '@cmodjs/core/src/records.js'
+import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
+import { MissingMachineId, readDevice } from '@cmodjs/core/src/runtime/device.js'
 import { routeSessions, type HoldingOf, type SessionContext, type SessionRouting, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
 import { RpcError, rpcCodes, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData } from '@cmodjs/core/src/session/conversation.js'
-import { startBackground, withBackgroundStatus } from './claude.js'
-import { readJson, writeAtomically } from './files.js'
-import { foldersIn, hasTranscript, listSessions, readContexts, readGoal, readMessages, readState, readTasks, readTurns, readUsage, runningEntries, searchMessages } from './history.js'
+import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
+import { startBackground, startTask, withBackgroundStatus } from './claude.js'
+import { ifMissing, readJson, writeAtomically } from './files.js'
+import { capture } from './process.js'
+import { foldersIn, hasTranscript, listSessions, readContexts, readGoal, readMessages, readState, readTasks, readTurns, readUsage, runningEntries, runningFolder, searchMessages, type RunningEntry } from './history.js'
 
 export type SessionServer = SessionRouting & { visits(): Promise<VisitedAt> }
+
+const olderPluginNames = ['cmod/SessionStore', 'cmod/Session']
+
+const olderPluginPath = /^\/api\/sessions\/[\w-]{1,128}(\/events)?$/
+
+const olderPluginPollMs = 8000
+
+const registryQuietMs = 300
 
 export function serveSessions({ db, report }: { readonly db: Database; readonly report: (doing: string, error: unknown) => void }): SessionServer {
   const visitsPath = join(storeFolder(process.env), 'visited.json')
   let visited: Promise<VisitedAt> | undefined
   let writes = Promise.resolve()
+  const device = readDevice({ process: { run: (command) => capture([...command]) }, fs: { read: (path) => readFile(path, 'utf8') } }).then(
+    ({ id, name }): Pick<SessionData, 'device'> => ({ device: { id, name } }),
+    (error: unknown): Pick<SessionData, 'device'> => {
+      if (!(error instanceof MissingMachineId)) report('names its sessions and providers with no device', error)
+      return {}
+    },
+  )
+  const deviceNamedBy = async (task: unknown) => {
+    const { device: here } = await device
+    return isObject(task) && here !== undefined && (task['device'] === here.id || task['device'] === here.name) ? here : undefined
+  }
 
   const readVisits = (): Promise<VisitedAt> =>
     (visited ??= readJson(visitsPath).then(
@@ -43,14 +66,34 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
     return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
   }
 
+  const startTaskOn = async (here: { readonly name: string }, session: string, task: TaskStartArgs, project: string) => {
+    const cwd = task.cwd ?? project
+    if (!existsSync(cwd)) throw new Error(`${here.name} has no folder ${cwd}, so the task did not start. Give the task a cwd on ${here.name}.`)
+    return startTask(session, { title: task.title, prompt: task.prompt, cwd, ...(task.agentType === undefined ? {} : { agentType: task.agentType }), ...(task.model === undefined ? {} : { model: task.model }) })
+  }
+
   const routing = routeSessions({
+    device: async () => (await device).device ?? { id: '', name: '' },
     now: () => Date.now(),
+    after: (ms, run) => setTimeout(run, ms).unref(),
+    report: (error) => report('missed a message between sessions, programs, and devices', error),
+    aliases: olderPluginNames,
+    programs: {
+      store: storeFolder(process.env),
+      files: {
+        list: async (path) => (await readdir(path, { withFileTypes: true }).catch(ifMissing([]))).map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file' })),
+        read: (path) => readFile(path, 'utf8').catch(ifMissing(undefined)),
+      },
+      fetch: bunFetch,
+      wait: (ms) => Bun.sleep(ms),
+    },
     computer: {
       async sessions(scope, _holding, held) {
-        const visits = await readVisits()
+        const [visits, here] = await Promise.all([readVisits(), device])
         const project = typeof scope['project'] === 'string' ? scope['project'] : undefined
+        const records = new Map(runningEntries().map((entry) => [entry.session, entry]))
         return listSessions(db, { project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) }).map(
-          (session): SessionData => ({ ...session, isRunning: session.isRunning || held.has(session.id), ...(visits[session.id] === undefined ? {} : { visitedAt: visits[session.id] }) }),
+          (session): SessionData => ({ ...session, ...here, isRunning: session.isRunning || held.has(session.id), ...(visits[session.id] === undefined ? {} : { visitedAt: visits[session.id] }), ...recordedStatus(records.get(session.id)) }),
         )
       },
       search(text, options) {
@@ -82,6 +125,8 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
         throw new RpcError(rpcCodes.invalidParams, `A session has no part ${part}. Read messages, turns, contexts, tasks, goal, usage, or state.`)
       },
       async unheld(session, action, input, context, holding) {
+        const named = action === 'startTask' ? await deviceNamedBy(input) : undefined
+        if (named !== undefined) return startTaskOn(named, session, input as TaskStartArgs, projectOf(session, context, holding))
         if (runningEntries().some((entry) => entry.session === session)) throw new RpcError(rpcCodes.notHeld, `Session ${session} runs a cmod plugin from before 7.0.0, so it takes no ${action}. Reload it with /reload-plugins.`)
         const project = projectOf(session, context, holding)
         if (!hasTranscript(session, project)) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
@@ -113,12 +158,66 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
       },
     },
   })
-  return { ...routing, visits: readVisits }
+
+  const following = new AbortController()
+  const statuses = () => new Map(runningEntries().map((entry) => [entry.session, JSON.stringify(recordedStatus(entry))]))
+  let told = statuses()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const tellStatuses = () => {
+    timer = undefined
+    try {
+      const read = statuses()
+      for (const session of new Set([...told.keys(), ...read.keys()])) {
+        if (told.has(session) !== read.has(session)) routing.changed({ session, part: 'running' })
+        else if (told.get(session) !== read.get(session)) routing.changed({ session, part: 'status' })
+      }
+      told = read
+    } catch (error) {
+      report('kept the statuses of the sessions it read last', error)
+    }
+  }
+  mkdirSync(runningFolder(), { recursive: true })
+  watch(runningFolder(), { signal: following.signal })
+    .on('change', () => void (timer ??= setTimeout(tellStatuses, registryQuietMs)))
+    .on('error', (error) => {
+      if (!following.signal.aborted) report('stopped following the session records', error)
+    })
+
+  return {
+    ...routing,
+    visits: readVisits,
+    close: () => {
+      following.abort()
+      clearTimeout(timer)
+      routing.close()
+    },
+  }
+}
+
+function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'status' | 'waitingFor'> {
+  if (entry?.status === undefined) return {}
+  return { status: entry.status, ...(entry.status === 'waiting' && entry.waitingFor !== undefined ? { waitingFor: { dialog: entry.waitingFor } } : {}) }
 }
 
 export function answered(routes: RpcRoutes, request: Request): Promise<Response> | undefined {
   const answer = routes.route({ method: request.method, path: new URL(request.url).pathname, signal: request.signal, json: () => request.json() })
   return answer?.then(({ status, json }) => (json === undefined ? new Response(null, { status }) : Response.json(json, { status })))
+}
+
+export function answeredOlderPlugin(request: Request): Promise<Response> | undefined {
+  const matched = olderPluginPath.exec(new URL(request.url).pathname)
+  if (matched === null) return undefined
+  const isPoll = matched[1] !== undefined
+  if (request.method !== (isPoll ? 'GET' : 'POST')) return undefined
+  if (!isPoll) return Promise.resolve(Response.json({}))
+  return new Promise((resolve) => {
+    const answer = () => {
+      clearTimeout(timer)
+      resolve(Response.json({ views: [], actions: [] }))
+    }
+    const timer = setTimeout(answer, olderPluginPollMs)
+    request.signal.addEventListener('abort', answer, { once: true })
+  })
 }
 
 function taskOf(options: Readonly<Record<string, unknown>>): { readonly task?: string } {

@@ -2,13 +2,13 @@ import { existsSync } from 'node:fs'
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programModifiedMs, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programModifiedMs, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import type { Hotkeys } from '@cmodjs/core/src/hotkeys.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listPlugins, relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { DownloadFailed, fetchProgram, programOf, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
+import { DownloadFailed, fetchProgram, folderEnvironment, moveDownloads, programOf, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
 import { ifMissing, listFiles, readLink, readText, writeAtomically } from '../files.js'
 import { startProgress, type Progress } from '../progress.js'
 import { bindKeys, isLinked, modBindings, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
@@ -213,6 +213,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
   const previousProgram = program === undefined ? undefined : await readLink(join(programsFolder(), program))
+  await moveDownloads(plugin.name)
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
@@ -296,10 +297,11 @@ function keptBindings(mod: string, hotkeys: Hotkeys, previous: Readonly<Record<s
 }
 
 export async function stepEnvironment(root: string, name: string, version: string): Promise<Record<string, string | undefined>> {
-  const data = dataFolder(storeFolder(process.env), name)
-  await mkdir(data, { recursive: true })
+  const folders = folderEnvironment(name)
+  await mkdir(folders.CMOD_DATA, { recursive: true })
+  await mkdir(folders.CMOD_CACHE, { recursive: true })
   const path = [dirname(process.execPath), programsFolder(), process.env['PATH']].filter(Boolean).join(':')
-  return { ...process.env, PATH: path, CMOD_PLUGIN_ROOT: root, CMOD_DATA: data, CMOD_VERSION: version }
+  return { ...process.env, PATH: path, CMOD_PLUGIN_ROOT: root, ...folders, CMOD_VERSION: version }
 }
 
 async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {

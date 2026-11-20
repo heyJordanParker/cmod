@@ -5,9 +5,9 @@ Use `list_sessions`, `search_sessions`, and `read_session` to find and read a se
 Never: read or parse the transcripts in `~/.claude/projects` yourself.
 
 ### Automate a session with a cmod run script
-A script that imports `sessions` from `@cmodjs/core/mod.js` gets the `before` and `on` listeners a mod gets, on any session. Run it with `cmod run <file> [arguments…]` in the background, and it lives as long as it runs.
+A script that imports `sessions` from `@cmodjs/core/mod.js` reads and acts on any session, as a mod does. It hears no session: its `before` and `on` listeners throw, because a listener lives in the session it listens to. Run it with `cmod run <file> [arguments…]`, and it ends once its top level has run.
 Example:
-  import { sessions } from '@cmodjs/core/mod.js'
+  import { Prompt, sessions } from '@cmodjs/core/mod.js'
   const worker = await sessions.get(Bun.argv[2])
-  worker.beforeToolCall({ name: 'Bash' }, (call) => (String(call.input.command).includes('rm -rf') ? { refuse: 'Ask before deleting.' } : undefined))
-  worker.onTurnEnd((turn) => console.log(turn.answer))
+  const [last] = await worker.messages({ last: 1 })
+  if (last?.type === 'reply' && last.text.includes('tests fail')) await worker.send({ type: Prompt, text: 'Fix the failing tests.' })

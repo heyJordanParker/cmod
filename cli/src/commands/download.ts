@@ -12,11 +12,14 @@ export const help = `Usage: cmod download <program> <machine> <url> <sha256> [<m
 
 ${summary}
 
-A mod's install script runs it, and cmod setup sets the CMOD_DATA it needs.
-It picks the download listed for this machine, ${machine}, checks its SHA-256,
-unpacks a .tar.gz or .zip or takes the file as is, and moves the file named
-<program> to $CMOD_DATA/bin/<program>. A download whose SHA-256 differs
-installs nothing. It prints progress lines that cmod setup shows in its bar.
+A mod's install script runs it, and cmod setup sets the CMOD_DATA and
+CMOD_CACHE it needs. It picks the download listed for this machine, ${machine},
+checks its SHA-256, unpacks a .tar.gz or .zip or takes the file as is, and
+moves the file named <program> to $CMOD_CACHE/bin/<program>, the mod's cache
+folder, because cmod can download it again. It links cmod's programs folder
+and $CMOD_DATA/bin/<program>, where cmod 7 put it, to that file. A download
+whose SHA-256 differs installs nothing. It prints progress lines that cmod
+setup shows in its bar.
 
 Machines are <os>-<arch>: darwin-arm64, darwin-x64, linux-arm64, linux-x64.
 
@@ -38,7 +41,8 @@ export async function run(argv: string[]): Promise<number> {
     return { machine: listedMachine, url, sha256 }
   })
   const data = process.env['CMOD_DATA']
-  if (!data) throw new Error("CMOD_DATA is not set. Run this from a mod's install script; cmod setup sets CMOD_DATA.")
+  const cache = process.env['CMOD_CACHE']
+  if (!data || !cache) throw new Error(`${cache ? 'CMOD_DATA' : 'CMOD_CACHE'} is not set. Run this from a mod's install script; cmod setup sets CMOD_DATA and CMOD_CACHE.`)
   const chosen = downloads.find((entry) => entry.machine === machine)
   if (chosen === undefined) throw new Error(`${program} has no download for this machine, ${machine}. The install script lists ${downloads.map((entry) => entry.machine).join(', ')}.`)
 
@@ -58,9 +62,9 @@ export async function run(argv: string[]): Promise<number> {
     throw new Error(`${chosen.url} has SHA-256 ${actual}, but the install script lists ${chosen.sha256}, so cmod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`)
   }
 
-  const bin = join(data, 'bin')
+  const bin = join(cache, 'bin')
   await mkdir(bin, { recursive: true })
-  const work = await mkdtemp(join(data, 'download-'))
+  const work = await mkdtemp(join(cache, 'download-'))
   try {
     const name = basename(new URL(chosen.url).pathname)
     const file = join(work, 'download')
@@ -80,7 +84,7 @@ export async function run(argv: string[]): Promise<number> {
   } finally {
     await rm(work, { recursive: true, force: true })
   }
-  await linkDownloaded(program, join(bin, program))
+  await linkDownloaded(program, join(bin, program), join(data, 'bin', program))
   emit(steps, `${program} is installed`)
   return 0
 }

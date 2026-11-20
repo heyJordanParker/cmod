@@ -125,11 +125,11 @@ async function installedMod(setup: () => void) {
   return { fake, lifecycle }
 }
 
-test('a mod listens on every session, with nothing declared in package.json "cmod"', async () => {
-  const { fake, lifecycle } = await installedMod(() => void sessions.onPrompt(() => undefined))
+test('a mod listens on its own session, with nothing declared in package.json "cmod"', async () => {
+  const { fake, lifecycle } = await installedMod(() => void sessions.current.onPrompt(() => undefined))
 
   expect(lifecycle.toasts).toEqual([])
-  expect(fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method: string }).method === conversationMethods.subscribe ? [(input as { input: unknown }).input] : []))).toEqual([{ session: '*', subscriptions: [{ event: 'prompt', matcher: undefined, scope: {} }] }])
+  expect(fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method: string }).method === conversationMethods.subscribe ? [(input as { input: unknown }).input] : []))).toEqual([{ session: 'test-session', subscriptions: [{ event: 'prompt', matcher: undefined, scope: { session: 'test-session', isAgent: true } }] }])
 })
 
 test("a mod's note before a tool call reaches the cmod plugin, with nothing declared in package.json \"cmod\"", async () => {
@@ -192,4 +192,15 @@ test('a beforeToolCall listener that passes its timeoutMs still shows its toast,
 
   expect(answer).toEqual({ value: null })
   expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The beforeToolCall listener failed', description: 'beforeToolCall passed its 0.02 s timeout' }])
+})
+
+test('sessions.current names its device once sessions.list() reads it from the session store', async () => {
+  let current: typeof sessions.current | undefined
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void (current = sessions.current) }))
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const atStart = current?.device
+  await sessions.list()
+
+  expect(atStart).toBeUndefined()
+  expect(current?.device).toEqual({ id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' })
 })

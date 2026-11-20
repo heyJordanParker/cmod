@@ -39,15 +39,15 @@ export type Pane<Params = undefined> = {
   remove(): void
 }
 
-export type PageProps<Params> = { readonly params: Params; readonly isFocused: boolean; readonly columns: number }
+export type ViewProps<Params> = { readonly params: Params; readonly isFocused: boolean; readonly columns: number; readonly surface: Surface }
 
-export type PageInit<State extends object = Record<never, never>, Params = undefined> = {
+export type ViewInit<State extends object = Record<never, never>, Params = undefined> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: PageProps<Params>): JSX.Element
+  render(mod: Mod<State>, props: ViewProps<Params>): JSX.Element
 }
 
-export type Page<Params = undefined> = {
+export type View<Params = undefined> = {
   readonly id: string
   readonly isOpen: boolean
   readonly isShown: boolean
@@ -61,17 +61,24 @@ export type Page<Params = undefined> = {
   remove(): void
 }
 
+export type PageProps<Params> = ViewProps<Params>
+
+export type PageInit<State extends object = Record<never, never>, Params = undefined> = ViewInit<State, Params>
+
+export type Page<Params = undefined> = View<Params>
+
 const partId = /^[A-Za-z0-9_-]{1,64}$/
 
 export const sizeKeys = ['columns', 'rows'] as const
 
-export function checkPart(name: string, kind: string, id: string, title: string): void {
+export function checkPart(name: string, kind: string, id: string, title: string, takenBy: string | undefined): void {
   if (!partId.test(id)) throw new Error(`${name}: "${id}" is not a ${kind} id. Use 1 to 64 letters, digits, "_", or "-".`)
   if (title.trim() === '') throw new Error(`${name}: the ${kind} "${id}" needs a title, the label its tab shows.`)
+  if (takenBy !== undefined) throw new Error(`${name}: the ${takenBy} "${id}" is already added. Give the ${kind} another id.`)
 }
 
-export function checkPane<State extends object, Params>(name: string, pane: PaneInit<State, Params>): void {
-  checkPart(name, 'pane', pane.id, pane.title)
+export function checkPane<State extends object, Params>(name: string, pane: PaneInit<State, Params>, takenBy: string | undefined): void {
+  checkPart(name, 'pane', pane.id, pane.title, takenBy)
   for (const key of sizeKeys) {
     const size = pane[key]
     if (typeof size !== 'function' && size !== undefined && (!Number.isInteger(size) || size <= 0)) throw new Error(`${name}: the pane "${pane.id}" has ${key} ${size}. Use a whole number above 0, or leave it out.`)

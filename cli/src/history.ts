@@ -83,7 +83,7 @@ function createIndex(path: string): void {
     const asked = fresh.prepare<{ version: string }, []>('select sqlite_version() as version')
     const version = asked.get()?.version ?? ''
     asked.finalize()
-    if (!isAtLeast(version, '3.43.0')) throw new Error(`cmod history needs SQLite 3.43 or later, and this system has ${version}.`)
+    if (!isAtLeast(version, '3.43.0')) throw new Error(`cmod sessions needs SQLite 3.43 or later, and this system has ${version}.`)
     fresh.exec('pragma journal_mode = wal')
     fresh.exec(schema)
   } finally {
@@ -115,7 +115,9 @@ export function runningFolder(): string {
   return join(configRoot(), 'sessions')
 }
 
-export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: string; readonly waitingFor?: string }
+export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: SessionData['status']; readonly waitingFor?: string }
+
+const recordedStatuses: readonly unknown[] = ['busy', 'shell', 'idle', 'waiting'] satisfies SessionData['status'][]
 
 type RegistryRecord = { readonly changedAt: bigint; readonly size: bigint; readonly entry: RunningEntry | undefined; readonly procStart: string | undefined }
 
@@ -153,7 +155,7 @@ function registryRecordOf(path: string, known: RegistryRecord | undefined): Regi
       pid: row['pid'],
       entrypoint: typeof row['entrypoint'] === 'string' ? row['entrypoint'] : '',
       ...(typeof row['name'] === 'string' && row['name'] !== '' ? { name: row['name'] } : {}),
-      ...(typeof row['status'] === 'string' ? { status: row['status'] } : {}),
+      ...(recordedStatuses.includes(row['status']) ? { status: row['status'] as SessionData['status'] } : {}),
       ...(typeof row['waitingFor'] === 'string' ? { waitingFor: row['waitingFor'] } : {}),
     },
     procStart: typeof row['procStart'] === 'string' ? row['procStart'].replace(/\s+/g, ' ') : undefined,
@@ -225,7 +227,7 @@ export function hasTranscript(session: string, project: string): boolean {
 export function sessionTranscripts(session: string, project: string): Transcript[] {
   const folder = sessionFolder(session, project)
   if (folder === undefined && session === process.env['CLAUDE_CODE_SESSION_ID']) return []
-  if (folder === undefined) throw new Error(`No Claude Code transcript is named ${session}.jsonl under ${projectsFolder()}. cmod history sessions --all lists the sessions.`)
+  if (folder === undefined) throw new Error(`No Claude Code transcript is named ${session}.jsonl under ${projectsFolder()}. cmod sessions list --every-project lists the sessions.`)
   const main = { path: join(folder, `${session}.jsonl`), folder, session, task: undefined }
   return [main, ...taskTranscripts(main)]
 }
@@ -784,7 +786,7 @@ function recordParams(record: RecordScope): (string | number)[] {
 type SearchScope = Scope & { readonly limit?: number; readonly before?: { readonly session: string; readonly id: string }; readonly record?: RecordScope }
 
 export function searchMessages(db: Database, text: string, scope: SearchScope): SessionMessage[] {
-  if ([...text].length < 3) throw new Error('cmod history search takes at least 3 characters.')
+  if ([...text].length < 3) throw new Error('cmod sessions search takes at least 3 characters.')
   const session = scope.record?.session
   const folders = session === undefined ? foldersIn(scope) : []
   const phrase = `"${text.replaceAll('"', '""')}"`

@@ -6,34 +6,62 @@ import { configFolders, isObject } from '@cmodjs/core/src/records.js'
 import { optionsOf, projectOptionsOf } from '@cmodjs/core/src/options.js'
 import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { listPlugins } from '../claude.js'
+import { configurePlugin, listPlugins, type InstalledPlugin } from '../claude.js'
 import { indexedProjects, openHistory } from '../history.js'
 import { capture } from '../process.js'
 import { settingsPath } from '../settings.js'
 import { manifestOptions } from './install.js'
 
-export const summary = "Print a mod's option values at each level: yours and each project's."
+export const summary = "Print a mod's option values at each level, or set one of yours."
 
-export const help = `Usage: cmod options <mod> [--project <folder>]... [--json]
+export const help = `Usage: cmod options get <mod> [--project <folder>]... [--json]
+       cmod options set <mod> <key> <value>
 
 ${summary}
 
-Prints the values of a mod's options in two levels: person, the values you set
-in /config, and projects, the values each project's committed
+get prints the values of a mod's options in two levels: person, the values you
+set in /config, and projects, the values each project's committed
 .claude/cmods/<mod>/options.json sets, keyed by the project's git root as
 git rev-parse --show-toplevel prints it. A project outside git keeps its own
 folder as its key. With no --project, it reads every project cmod's
 conversation index holds a session of, and lists only the projects whose
 options.json exists. A mod's session uses a project's value over yours, and a
-value your organization locks over both. --json prints { person, projects }.`
+value your organization locks over both. --json prints { person, projects }.
+
+set sets the option <key> of an installed plugin through Claude Code, as
+/config does, such as cmod options set my-mod branch main. A list option takes
+its items separated by commas. Settings and the option questions a mod asks at
+its first start run it, and the mod reads the new value at its next start.`
+
+const actions: readonly string[] = ['get', 'set']
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'string', multiple: true }, json: { type: 'boolean', default: false } } })
-  if (positionals.length !== 1) throw new Error(`cmod options takes one mod.\n\n${help}`)
-  const [name] = positionals as [string]
+  const [action = '', ...rest] = positionals
+  if (action === 'get' && rest.length === 1) return printOptions(rest[0] as string, values)
+  if (action === 'set' && rest.length === 3 && values.project === undefined && !values.json) return setOption(...(rest as [string, string, string]))
+  if (positionals.length === 1 && !actions.includes(action)) return printOptions(action, values)
+  throw new Error(`cmod options takes get <mod>, or set <mod> <key> <value>.\n\n${help}`)
+}
+
+async function installedPlugin(name: string): Promise<InstalledPlugin> {
   const copies = (await listPlugins()).filter((plugin) => plugin.name === name || plugin.id === name)
   const installed = copies.find((plugin) => plugin.enabled) ?? copies[0]
   if (installed === undefined) throw new Error(`No installed plugin is named ${name}. cmod list shows the installed plugins.`)
+  return installed
+}
+
+async function setOption(name: string, key: string, value: string): Promise<number> {
+  const installed = await installedPlugin(name)
+  const declared = await manifestOptions(installed.installPath)
+  if (!Object.hasOwn(declared, key)) throw new Error(`${installed.name} has no option ${key}. Its options are: ${Object.keys(declared).join(', ') || 'none'}.`)
+  await configurePlugin(installed.id, { [key]: value })
+  process.stdout.write(`Set ${key} for ${installed.name}.\n`)
+  return 0
+}
+
+async function printOptions(name: string, values: { readonly project?: readonly string[]; readonly json: boolean }): Promise<number> {
+  const installed = await installedPlugin(name)
   const declared = optionsOf(await manifestOptions(installed.installPath))
   const kept = (given: unknown) => (isObject(given) ? Object.fromEntries(Object.entries(given).filter(([key]) => declared[key] !== undefined && declared[key].type !== 'secret')) : {})
   const settings = await readJson(settingsPath())

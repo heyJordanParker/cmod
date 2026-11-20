@@ -160,6 +160,7 @@ export type RpcHttpAnswer = { readonly status: number; readonly json?: unknown }
 
 export type RpcRoutes = {
   route(request: RpcHttpRequest): Promise<RpcHttpAnswer> | undefined
+  channel(send: (message: RpcMessage) => void): RpcConnection
   connections(): RpcConnection[]
   close(): void
 }
@@ -238,8 +239,8 @@ export function rpcRoutes({
         if (each.poll !== answer) return
         each.poll = undefined
         timers.clearTimeout(timer)
-        each.seenAt = now()
         resolve([])
+        drop(each.connection.id, 'the client left its poll')
       })
     })
 
@@ -266,16 +267,41 @@ export function rpcRoutes({
     }
   }
 
+  const channels = new Map<string, RpcConnection>()
+
+  const channel = (send: (message: RpcMessage) => void): RpcConnection => {
+    const id = crypto.randomUUID()
+    const peer = createPeer({ send, handle: (method, params, signal) => handler(method, params, signal) })
+    const connection: RpcConnection = {
+      ...peer,
+      id,
+      close(reason) {
+        if (!channels.delete(id)) return
+        peer.close(reason)
+        onClose?.(connection)
+      },
+    }
+    const handler = handle(connection)
+    channels.set(id, connection)
+    return connection
+  }
+
   return {
     route: (request) => (request.path.startsWith(rpcPath) ? route(request) : undefined),
-    connections: () => [...held.values()].map((each) => each.connection),
+    channel,
+    connections: () => [...[...held.values()].map((each) => each.connection), ...channels.values()],
     close() {
       for (const id of held.keys()) drop(id, 'the server stopped')
+      for (const each of channels.values()) each.close(new Error('the server stopped'))
     },
   }
 }
 
 export class RpcUnreached extends Error {}
+
+export function isConnectionGone(error: unknown): boolean {
+  return error instanceof RpcUnreached || (error instanceof RpcError && error.code === rpcCodes.closed)
+}
 
 class GoneError extends Error {
   constructor(id: string) {
@@ -288,8 +314,8 @@ export type HttpCall = (path: string, init: { readonly method: 'GET' | 'POST' | 
 export type HttpFetch = (url: string, init: { readonly method: string; readonly body?: string; readonly headers?: Readonly<Record<string, string>>; readonly socketPath?: string }) => Promise<{ readonly status: number; readonly text: string }>
 
 export function addressCall(fetch: HttpFetch, address: string): HttpCall {
-  const socketPath = address.startsWith('unix:') ? address.slice('unix:'.length) : undefined
-  const base = socketPath === undefined ? `http://${address}` : 'http://localhost'
+  const socketPath = address.startsWith('unix:') ? address.slice('unix:'.length) : address.startsWith('/') ? address : undefined
+  const base = socketPath !== undefined ? 'http://localhost' : /^https?:\/\//.test(address) ? address.replace(/\/+$/, '') : `http://${address}`
   return async (path, init) => {
     const answer = await fetch(`${base}${path}`, { method: init.method, ...(init.body === undefined ? {} : { body: init.body, headers: { 'content-type': 'application/json' } }), ...(socketPath === undefined ? {} : { socketPath }) })
     return { status: answer.status, text: answer.text }
@@ -365,7 +391,8 @@ export function connectRpc({
 
   const reconnect = () => {
     if (isClosed || !(keepsConnecting || hasConnected)) return
-    void wait(retryMs).then(() => {
+    void wait(retryMs).then(async () => {
+      await Promise.allSettled([connecting])
       if (!isClosed && current === undefined) void connection().catch(() => undefined)
     })
   }

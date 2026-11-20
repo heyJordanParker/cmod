@@ -1,4 +1,4 @@
-import type { Mod, Turn } from '../mod.js'
+import type { Mod, Surface, Turn } from '../mod.js'
 
 export const AbovePrompt = 'abovePrompt'
 export const BelowPrompt = 'belowPrompt'
@@ -10,7 +10,7 @@ export const areas = [AbovePrompt, BelowPrompt, Working, TurnEnd, Dashboard] as 
 
 export type Area = (typeof areas)[number]
 
-export type WidgetContext = { readonly area: typeof TurnEnd; readonly columns: number; readonly turn: Turn } | { readonly area: Exclude<Area, typeof TurnEnd>; readonly columns: number }
+export type WidgetContext = { readonly area: typeof TurnEnd; readonly columns: number; readonly surface: Surface; readonly turn: Turn } | { readonly area: Exclude<Area, typeof TurnEnd>; readonly columns: number; readonly surface: Surface }
 
 export type WidgetInit<State extends object = Record<never, never>> = {
   readonly id: string

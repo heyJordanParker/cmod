@@ -1,10 +1,10 @@
 import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderElement, RenderSurface } from 'claude-code'
-import type { Mod, Turn } from '../mod.js'
+import type { Mod, Surface, Turn } from '../mod.js'
 import { browserCommand, isObject } from '../records.js'
 import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
 import { Box, drawKeyed, drawsFocusable, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
 import type { Block, MarkdownPiece, MarkdownReader } from '../ui/markdown.js'
-import { checkPane, checkPart, sizeKeys, type OpenOptions, type Page, type PageInit, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget } from '../ui/panes.js'
+import { checkPane, checkPart, sizeKeys, type OpenOptions, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget, type View, type ViewInit } from '../ui/panes.js'
 import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleInit } from '../ui/styles.js'
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
@@ -25,17 +25,21 @@ export const partMethods = {
 
 export const stalePress = 'that button drew before the last redraw. Press the one it shows now.'
 
-export type PagePlace = 'sidebar' | 'settings'
+export type ViewPlace = 'sidebar' | 'settings'
 
 export type WidgetDeclaration = { readonly id: string; readonly title: string; readonly areas: readonly Area[]; readonly place?: NonNullable<WidgetInit['place']> }
 
-export type PageDeclaration = { readonly id: string; readonly title: string; readonly place: PagePlace }
+export type ViewDeclaration = { readonly id: string; readonly title: string; readonly place: ViewPlace }
 
-export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[]; readonly provides?: readonly string[] }
+export type PageDeclaration = { readonly id: string; readonly title: string }
+
+export type PartDeclaration = PageDeclaration & { readonly place?: ViewPlace }
+
+export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PartDeclaration[]; readonly provides?: readonly string[] }
 
 export type PartDraw =
-  | { readonly widget: string; readonly area: Area; readonly columns: number; readonly turn?: Turn }
-  | { readonly page: string; readonly params: unknown; readonly columns: number; readonly isFocused: boolean }
+  | { readonly widget: string; readonly area: Area; readonly columns: number; readonly surface: Surface; readonly turn?: Turn }
+  | { readonly page: string; readonly params: unknown; readonly columns: number; readonly isFocused: boolean; readonly surface: Surface }
   | ({ readonly markdown: string } & StyledAt)
 
 export type BorrowedMarkdown = (mod: string, cached: string, input: { readonly markdown: string } & StyledAt, scope: string) => RenderElement | undefined
@@ -66,7 +70,7 @@ export type PartPress = { readonly draw: number; readonly handler: number; reado
 
 export type DrawnPart = { readonly draw: number; readonly tree: unknown }
 
-export type PageRequest =
+export type PartRequest =
   | { readonly open: string; readonly params?: unknown; readonly focus?: true }
   | { readonly close: string }
   | { readonly scroll: string; readonly to: ScrollTarget; readonly block?: ScrollOptions['block'] }
@@ -75,9 +79,9 @@ export type PageRequest =
 
 export type SettingsTab = 'changelog' | 'permissions'
 
-export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PageRequest[]; readonly isAsked?: true; readonly isStart?: true }
+export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PartRequest[]; readonly isAsked?: true; readonly isStart?: true }
 
-export type ShownPages = { readonly open: readonly { readonly id: string; readonly params: unknown }[]; readonly shown: string | null; readonly isFocused: boolean }
+export type ShownParts = { readonly open: readonly { readonly id: string; readonly params: unknown }[]; readonly shown: string | null; readonly isFocused: boolean; readonly inApps?: readonly string[] }
 
 
 type PaneSize = Pick<PaneOpenArgs, 'columns' | 'rows'>
@@ -190,7 +194,7 @@ type MarkdownRender = {
 
 type AddedPane<State extends object> = { readonly init: PaneInit<State, unknown>; params: unknown }
 
-type AddedPage<State extends object> = { readonly init: PageInit<State, unknown>; readonly place: PagePlace; params: unknown }
+type AddedPart<State extends object> = { readonly init: ViewInit<State, unknown>; readonly kind: 'view' | 'page'; readonly place: ViewPlace | undefined; params: unknown }
 
 export type UiOptions<State extends object> = {
   readonly name: string
@@ -206,7 +210,8 @@ export type UiOptions<State extends object> = {
 
 export type UiArea<State extends object> = {
   readonly panes: Mod<State>['panes']
-  readonly sidebar: Mod<State>['sidebar']
+  readonly views: Mod<State>['views']
+  readonly pages: Mod<State>['pages']
   readonly settings: Mod<State>['settings']
   readonly widgets: Mod<State>['widgets']
   readonly styles: Mod<State>['styles']
@@ -249,8 +254,8 @@ export function createUi<State extends object>({ name, claude, router, report, a
   let isResizeQueued = false
   const widgets = new Map<string, WidgetInit<State>>()
   const widgetAreas = new Map<string, Area>()
-  const pages = new Map<string, AddedPage<State>>()
-  let shownPages: ShownPages = { open: [], shown: null, isFocused: false }
+  const parts = new Map<string, AddedPart<State>>()
+  let shownParts: ShownParts = { open: [], shown: null, isFocused: false }
   const draws = new Map<number, { readonly id: string; readonly handlers: readonly Handler[] }>()
   const latestDraws = new Map<string, Map<string, SentDrawing>>()
   const failedDraws = new Set<string>()
@@ -266,7 +271,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     const provides = [...provided(), ...(markdownRenders.size > 0 ? [styleInterface] : [])]
     return {
       widgets: [...widgets.values()].map(({ id, title, areas: listed, place }) => ({ id, title, areas: listed, ...(place === undefined ? {} : { place }) })),
-      pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
+      pages: [...parts.values()].map(({ init: { id, title }, place }) => ({ id, title, ...(place === undefined ? {} : { place }) })),
       ...(provides.length === 0 ? {} : { provides }),
     }
   }
@@ -282,7 +287,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   const treeOf = (render: () => RenderElement | undefined, handlers: Handler[]) => {
     const drawn = render()
-    return drawn === undefined ? null : elementData(drawn, handlers)
+    return drawn === undefined ? null : elementData(drawn, (run) => handlers.push(run) - 1)
   }
 
   const isAnyDrawingChanged = () => {
@@ -323,7 +328,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
           if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
         },
         (error: unknown) => {
-          claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`)
+          claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its widgets, views, and pages: ${messageOf(error)}`)
         },
       )
     }
@@ -512,8 +517,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     })
 
   const addPane = <Params>(init: PaneInit<State, Params>): Pane<Params> => {
-    checkPane(name, init)
-    if (panes.has(init.id)) throw new Error(`${name}: the pane "${init.id}" is already added. Give each pane its own id.`)
+    checkPane(name, init, panes.has(init.id) ? 'pane' : undefined)
     const added: AddedPane<State> = { init, params: undefined }
     panes.set(init.id, added)
     paneLogs.set(init.id, logOnce(`${init.title} pane`))
@@ -565,58 +569,63 @@ export function createUi<State extends object>({ name, claude, router, report, a
     return pane
   }
 
-  const pageEntry = (id: string) => shownPages.open.find((each) => each.id === id)
+  const openEntry = (id: string) => shownParts.open.find((each) => each.id === id)
 
-  const addPage = <Params>(place: PagePlace, init: PageInit<State, Params>): Page<Params> => {
-    checkPart(name, 'page', init.id, init.title)
-    if (pages.has(init.id)) throw new Error(`${name}: the page "${init.id}" is already added. Give each page its own id.`)
-    const added: AddedPage<State> = { init, place, params: undefined }
-    pages.set(init.id, added)
-    announce(place === 'settings' ? `the ${init.title} page in Settings` : `the ${init.title} page in the Sidebar`)
+  const takenBy = (id: string) => (widgets.has(id) ? 'widget' : parts.get(id)?.kind)
+
+  const addPart = <Params>(kind: AddedPart<State>['kind'], init: ViewInit<State, Params>, place?: ViewPlace): View<Params> => {
+    checkPart(name, kind, init.id, init.title, takenBy(init.id))
+    const added: AddedPart<State> = { init, kind, place, params: undefined }
+    const key = `${kind}:${init.id}`
+    let requested: readonly [since: ShownParts, isOpen: boolean] | undefined
+    parts.set(init.id, added)
+    announce(place === 'settings' ? `the ${init.title} view in Settings` : `the ${init.title} ${kind}`)
     void send({ parts: partList() })
-    const page: Page<Params> = {
+    const part: View<Params> = {
       id: init.id,
       get isOpen() {
-        return place === 'settings' ? shownPages.shown === init.id : pageEntry(init.id) !== undefined
+        if (requested?.[0] === shownParts) return requested[1]
+        return place === 'settings' ? shownParts.shown === init.id : openEntry(init.id) !== undefined
       },
       get isShown() {
-        return shownPages.shown === init.id
+        return [shownParts.shown, ...(shownParts.inApps ?? [])].includes(init.id)
       },
       get isFocused() {
-        return shownPages.shown === init.id && shownPages.isFocused
+        return shownParts.shown === init.id && shownParts.isFocused
       },
       get params() {
-        return (pageEntry(init.id)?.params ?? added.params) as Params | undefined
+        return (openEntry(init.id)?.params ?? added.params) as Params | undefined
       },
       async open(...[options]: [OpenOptions<Params>?]) {
         if (options !== undefined && 'params' in options) added.params = options.params
+        requested = [shownParts, true]
         await send({ requests: [{ open: init.id, ...(added.params === undefined ? {} : { params: added.params }), ...(options?.focus === true ? { focus: true } : {}) }] })
       },
-      toggle: (options) => (page.isOpen ? page.close() : (page.open as (options?: OpenOptions<Params>) => Promise<void>)(options as OpenOptions<Params>)),
+      toggle: (options) => (part.isOpen ? part.close() : (part.open as (options?: OpenOptions<Params>) => Promise<void>)(options as OpenOptions<Params>)),
       close: async () => {
+        requested = [shownParts, false]
         await send({ requests: [{ close: init.id }] })
       },
       scrollTo: async (target, options) => {
         await send({ requests: [{ scroll: init.id, to: target, ...(options?.block === undefined ? {} : { block: options.block }) }] })
       },
-      focus: async (key) => {
-        const latest = [...(latestDraws.get(`page:${init.id}`)?.values() ?? [])].at(-1)
-        if (latest === undefined || !drawsFocusable(treeOf(latest.render, []), key)) throw new Error(`${name}: the ${init.title} page draws no Button, Input, or Select with the key "${key}".`)
-        await send({ requests: [{ focus: init.id, key }] })
+      focus: async (focused) => {
+        const latest = [...(latestDraws.get(key)?.values() ?? [])].at(-1)
+        if (latest === undefined || !drawsFocusable(treeOf(latest.render, []), focused)) throw new Error(`${name}: the ${init.title} ${kind} draws no Button, Input, or Select with the key "${focused}".`)
+        await send({ requests: [{ focus: init.id, key: focused }] })
       },
       remove() {
-        if (pages.get(init.id) !== added) return
-        pages.delete(init.id)
-        forgetDraws(`page:${init.id}`)
+        if (parts.get(init.id) !== added) return
+        parts.delete(init.id)
+        forgetDraws(key)
         void send({ parts: partList(), requests: [{ close: init.id }] })
       },
     }
-    return page
+    return part
   }
 
   const addWidget = (init: WidgetInit<State>): Widget => {
-    checkPart(name, 'widget', init.id, init.title)
-    if (widgets.has(init.id)) throw new Error(`${name}: the widget "${init.id}" is already added. Give each widget its own id.`)
+    checkPart(name, 'widget', init.id, init.title, takenBy(init.id))
     widgets.set(init.id, init)
     announce(`the ${init.title} widget`)
     void send({ parts: partList() })
@@ -713,16 +722,18 @@ export function createUi<State extends object>({ name, claude, router, report, a
   const draw = (input: PartDraw): DrawnPart | null => {
     if ('markdown' in input) return drawPart('markdown', 'markdown style', input, () => markdownDrawing(input.markdown, { surface: input.surface, columns: input.columns }))
     if ('page' in input) {
-      const added = pages.get(input.page)
-      if (added === undefined) throw new Error(`${name} has no ${input.page} page.`)
-      const title = `${added.init.title} page`
-      return drawPart(`page:${input.page}`, title, input, () => added.init.render(mod(), { params: input.params, isFocused: input.isFocused, columns: input.columns }), (error) => Text({ color: 'error', children: `The ${title} could not draw: ${messageOf(error)}` }))
+      const { page, ...props } = input
+      const added = parts.get(page)
+      if (added === undefined) throw new Error(`${name} has no view or page ${page}.`)
+      const title = `${added.init.title} ${added.kind}`
+      return drawPart(`${added.kind}:${page}`, title, input, () => added.init.render(mod(), props), (error) => Text({ color: 'error', children: `The ${title} could not draw: ${messageOf(error)}` }))
     }
-    const widget = widgets.get(input.widget)
-    if (widget === undefined || !widget.areas.includes(input.area)) return null
-    widgetAreas.set(widget.id, input.area)
-    const context = (input.area === TurnEnd && input.turn !== undefined ? { area: input.area, columns: input.columns, turn: input.turn } : { area: input.area, columns: input.columns }) as WidgetContext
-    return drawPart(`widget:${widget.id}`, `${widget.title} widget`, input, () => widget.render(mod(), context))
+    const { widget: id, turn, ...given } = input
+    const widget = widgets.get(id)
+    if (widget === undefined || !widget.areas.includes(given.area)) return null
+    widgetAreas.set(id, given.area)
+    const context = (given.area === TurnEnd && turn !== undefined ? { ...given, turn } : given) as WidgetContext
+    return drawPart(`widget:${id}`, `${widget.title} widget`, input, () => widget.render(mod(), context))
   }
 
   const press = async ({ draw: drawn, handler, args }: PartPress, caller: string): Promise<PartsUpdate | null> => {
@@ -744,9 +755,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   return {
     panes: { add: addPane },
-    sidebar: { add: (init) => addPage('sidebar', init) },
+    views: { add: (init) => addPart('view', init, 'sidebar') },
+    pages: { add: (init) => addPart('page', init) },
     settings: {
-      add: (init) => addPage('settings', init),
+      add: (init) => addPart('view', init, 'settings'),
       open: async () => {
         await send({ requests: [{ settings: true }] })
       },
@@ -767,7 +779,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       if (method === partMethods.draw) return Promise.resolve().then(() => ({ value: draw(input as PartDraw) }))
       if (method === partMethods.press) return press(input as PartPress, caller).then((value) => ({ value }))
       if (method === partMethods.shown) {
-        shownPages = input as ShownPages
+        shownParts = input as ShownParts
         return Promise.resolve({ value: null })
       }
       if (method === partMethods.stylers) {
@@ -787,7 +799,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       void send({ ...held, parts: partList(), isStart: true })
     },
     changed() {
-      if (widgets.size > 0 || pages.size > 0) void send({ redraw: true })
+      if (widgets.size > 0 || parts.size > 0) void send({ redraw: true })
       if (panes.size === 0 && styles.size === 0) return
       claude.ui.invalidate('ui.render')
       if (isResizeQueued) return

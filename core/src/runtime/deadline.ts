@@ -7,6 +7,8 @@ export const longestMs = 600_000
 
 export const toolDeadline: Deadline = { ms: 30000, job: 'tool' }
 
+export const callDeadline: Deadline = { ms: 30_000 }
+
 export type ListenOptions = { readonly timeoutMs?: number; readonly onFailure?: 'pass' | 'refuse' }
 
 export type ListenTime = { readonly deadline: number; readonly signal: AbortSignal }
@@ -19,9 +21,9 @@ export class PassedTimeout extends Error {}
 
 const timers = globalThis as unknown as { setTimeout(run: () => void, ms: number): unknown; clearTimeout(timer: unknown): void }
 
-export function listenerOf(name: string, method: string, args: readonly unknown[]): { readonly matcher: unknown; readonly listener: (payload: never, time: ListenTime) => unknown; readonly options: ListenOptions } {
+export function listenerOf<Listener = (payload: never, time: ListenTime) => unknown>(name: string, method: string, args: readonly unknown[]): { readonly matcher: unknown; readonly listener: Listener; readonly options: ListenOptions } {
   const hasMatcher = typeof args[1] === 'function'
-  const listener = (hasMatcher ? args[1] : args[0]) as (payload: never, time: ListenTime) => unknown
+  const listener = (hasMatcher ? args[1] : args[0]) as Listener
   const options = ((hasMatcher ? args[2] : args[1]) ?? {}) as ListenOptions
   if (typeof listener !== 'function') throw new Error(`${name}: ${method} takes a listener, or a matcher and then a listener.`)
   const { timeoutMs, onFailure } = options as { readonly timeoutMs?: unknown; readonly onFailure?: unknown }
@@ -68,11 +70,16 @@ export function settledAfterAbort<Value>(work: Promise<Value>, signal: AbortSign
   })
 }
 
-export function beforeDeadline<Value>(claude: Claude, { ms, job }: Deadline, call: string, task: Promise<Value>): Promise<Value> {
+export function beforeDeadline<Value>(clock: Pick<Claude['clock'], 'after'>, { ms, job }: Deadline, call: string, run: (signal: AbortSignal) => Promise<Value>): Promise<Value> {
+  const passed = new AbortController()
   return new Promise<Value>((resolve, reject) => {
-    const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`
-    const timer = claude.clock.after(ms, () => reject(new Error(`${call} passed ${passed}`)))
-    task.then(
+    const deadline = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`
+    const timer = clock.after(ms, () => {
+      const error = new Error(`${call} passed ${deadline}`)
+      reject(error)
+      passed.abort(error)
+    })
+    run(passed.signal).then(
       (value) => {
         timer.cancel()
         resolve(value)

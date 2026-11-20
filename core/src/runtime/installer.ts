@@ -5,22 +5,22 @@ import type { Option } from '../options.js'
 import { isObject, secretFix } from '../records.js'
 import { Box, elementData, Input, Text, type Handler } from '../ui/elements.js'
 import { filledButton } from './buttons.js'
-import type { PageProps } from '../ui/panes.js'
+import type { ViewProps } from '../ui/panes.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, withBareRefusals } from './dependencies.js'
-import { merged, partMethods, stalePress, type DrawnPart, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
+import { merged, partMethods, stalePress, type DrawnPart, type PartPress, type PartsUpdate, type ShownParts } from './ui.js'
 
-export const installPage = 'cmod:install'
+export const installView = 'cmod:install'
 
 type Question = {
-  draw(props: PageProps<undefined>): RenderElement
+  draw(props: ViewProps<undefined>): RenderElement
   cancel(): void
 }
 
 export type Installer = {
   answer(method: string, input: unknown): Promise<{ readonly value: unknown }> | undefined
-  hear(shown: ShownPages): void
+  hear(shown: ShownParts): void
   options(missing: readonly (readonly [string, Option])[], save: (key: string, value: string) => Promise<string | undefined>): Promise<boolean>
   step<State extends object>(mod: Mod<State>, step: Step<State>, index: number, total: number): Promise<boolean>
   close(): Promise<void>
@@ -46,7 +46,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   const log = (what: string) => (error: unknown) => claude().ui.warn('installer:page', `${name}: ${what}: ${messageOf(error)}`)
 
-  const open = (isAsked: boolean) => send({ requests: [{ open: installPage, focus: true }], ...(isAsked ? { isAsked: true } : {}) })
+  const open = (isAsked: boolean) => send({ requests: [{ open: installView, focus: true }], ...(isAsked ? { isAsked: true } : {}) })
 
   const show = async <Answer>(next: string, build: (answer: (value: Answer) => void) => Omit<Question, 'cancel'>, cancelled: Answer): Promise<Answer> => {
     question?.cancel()
@@ -82,10 +82,10 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   const dialog = (title: RenderElement, ...children: readonly RenderElement[]) => Box({ flexDirection: 'column', gap: 1, children: [title, ...children] })
 
-  const draw = (columns: number, isFocused: boolean): DrawnPart => {
-    if (question === undefined && !isOpen) claude().clock.after(0, () => void send({ requests: [{ close: installPage }] }).catch(log('a leftover install page stayed open')))
+  const draw = (props: ViewProps<undefined>): DrawnPart => {
+    if (question === undefined && !isOpen) claude().clock.after(0, () => void send({ requests: [{ close: installView }] }).catch(log('a leftover install view stayed open')))
     const handlers: Handler[] = []
-    const tree = elementData(question?.draw({ params: undefined, isFocused, columns }) ?? Text({ dimColor: true, children: `${name} needs nothing from you now.` }), handlers)
+    const tree = elementData(question?.draw(props) ?? Text({ dimColor: true, children: `${name} needs nothing from you now.` }), (run) => handlers.push(run) - 1)
     const drawn = nextDraw()
     draws.set(drawn, handlers)
     for (const kept of draws.keys()) if (draws.size > keptDraws) draws.delete(kept)
@@ -112,12 +112,13 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   return {
     answer(method, input) {
-      if (method === partMethods.draw && isObject(input) && input['page'] === installPage) return Promise.resolve({ value: draw(Number(input['columns']), input['isFocused'] === true) })
+      const { page, ...props } = (isObject(input) ? input : {}) as Readonly<Record<string, unknown>>
+      if (method === partMethods.draw && page === installView) return Promise.resolve({ value: draw({ ...(props as ViewProps<unknown>), params: undefined }) })
       if (method === partMethods.press && isObject(input) && typeof input['draw'] === 'number' && draws.has(input['draw'])) return press(input as PartPress).then((value) => ({ value }))
       return undefined
     },
     hear(shown) {
-      if (shown.open.some((each) => each.id === installPage)) {
+      if (shown.open.some((each) => each.id === installView)) {
         isSeen = isOpen
         return
       }
@@ -206,7 +207,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       if (!isOpen) return
       isOpen = false
       isSeen = false
-      await send({ requests: [{ close: installPage }] }).catch(log('the install page stayed open'))
+      await send({ requests: [{ close: installView }] }).catch(log('the install view stayed open'))
     },
     changed() {
       if (question !== undefined && isOpen) redraw()

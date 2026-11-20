@@ -46,8 +46,12 @@ export async function isHeld(claude: Claude, lock: string, staleMs: number): Pro
   return touched.some((at) => now - at < staleMs)
 }
 
+export async function cmodStore(claude: Claude): Promise<string> {
+  return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+}
+
 export async function newestCmodVersion(claude: Claude): Promise<string | undefined> {
-  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+  const store = await cmodStore(claude)
   return readCmodVersion(
     {
       list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
@@ -117,8 +121,7 @@ export function locatingPrograms(claude: Claude): Programs {
       downloading = current
     },
     async refresh() {
-      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()])
-      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`
+      const programs = `${await cmodStore(claude)}/programs`
       names = new Set((await claude.fs.list(programs).catch(ifMissing([]))).map((entry) => entry.name))
       folder = programs
     },

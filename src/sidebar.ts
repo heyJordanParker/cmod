@@ -1,22 +1,21 @@
-import { Dashboard, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
+import { Dashboard, type Mod, type Pane, type Surface } from '../node_modules/@cmodjs/core/mod.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
-import { installPage } from '../node_modules/@cmodjs/core/runtime/installer.js'
-import type { PageRequest, SettingsTab } from '../node_modules/@cmodjs/core/runtime/ui.js'
-import type { SidebarTab } from '../node_modules/@cmodjs/core/runtime/web.js'
+import { installView } from '../node_modules/@cmodjs/core/runtime/installer.js'
+import type { PartRequest, SettingsTab } from '../node_modules/@cmodjs/core/runtime/ui.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import type { HistoryView } from './history.js'
 
-export type OpenPage = { readonly mod: string; readonly page: string; readonly params: unknown }
+export type OpenTab = { readonly mod: string; readonly id: string; readonly params: unknown }
 
-export type SidebarState = { readonly session: { pages: readonly OpenPage[]; shown: string } }
+export type SidebarState = { readonly session: { tabs: readonly OpenTab[]; shown: string } }
 
 const dashboardTab = 'dashboard'
 
 const settingsTab = 'settings'
 
-const pageHotkeys = 8
+const tabHotkeys = 8
 
 const barColor = 'userMessageBackground'
 
@@ -32,6 +31,8 @@ const unfocusedKeys = [['click', 'focus']] as const
 
 const panelColumns = 4
 
+const bodyPadding = 2
+
 type TabView = { readonly key: string; readonly label: string; readonly hotkey: string | undefined; readonly isShown: boolean; readonly onClose: (() => void) | undefined }
 
 const tabText = ({ label, hotkey }: Pick<TabView, 'label' | 'hotkey'>) => (hotkey === undefined ? label : `${hotkey}: ${label}`)
@@ -40,42 +41,48 @@ const closeGlyph = ' × '
 
 const tabColumns = (each: TabView) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 1 + [...closeGlyph].length)
 
-export const sidebarSession: SidebarState['session'] = { pages: [], shown: dashboardTab }
+export const sidebarSession: SidebarState['session'] = { tabs: [], shown: dashboardTab }
 
 export type SettingsView = {
-  draw(columns: number, isFocused: boolean): JSX.Element
-  show(mod: string, section?: SettingsTab | 'widgets' | `page:${string}`, params?: unknown): Promise<void>
-  shownPage(): Pick<OpenPage, 'mod' | 'page'> | undefined
-  closePage(mod: string, page: string): boolean
+  draw(columns: number, isFocused: boolean, surface: Surface): JSX.Element
+  show(mod: string, section?: SettingsTab | 'widgets' | `view:${string}`, params?: unknown): Promise<void>
+  shownView(): Pick<OpenTab, 'mod' | 'id'> | undefined
+  closeView(mod: string, view: string): boolean
 }
 
-const keyOf = ({ mod, page }: Pick<OpenPage, 'mod' | 'page'>) => `${mod}/${page}`
+const keyOf = ({ mod, id }: Pick<OpenTab, 'mod' | 'id'>) => `${mod}/${id}`
 
 export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView, history: (isShown: () => boolean) => HistoryView, openInBrowser: () => Promise<void>) {
-  const { pages, widgets } = engineOf(mod)
-  if (pages === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its pages and widgets.')
+  const { parts, widgets } = engineOf(mod)
+  if (parts === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its views, pages, and widgets.')
   const told = new Set<string>()
-  let inBrowser: ReadonlySet<string> = new Set()
 
-  const historyPage: OpenPage = { mod: mod.name, page: 'history', params: null }
-  const historyKey = keyOf(historyPage)
-  const isHistory = (open: Pick<OpenPage, 'mod' | 'page'>) => keyOf(open) === historyKey
-  const historyView = history(() => mod.state.session.pages.some(isHistory) && ((pane.isShown && mod.state.session.shown === historyKey) || inBrowser.has(historyKey)))
+  const historyTab: OpenTab = { mod: mod.name, id: 'history', params: null }
+  const historyKey = keyOf(historyTab)
+  const isHistory = (open: Pick<OpenTab, 'mod' | 'id'>) => keyOf(open) === historyKey
+  const historyView = history(() => (mod.state.session.tabs.some(isHistory) && pane.isShown && mod.state.session.shown === historyKey) || historyPart.isShown)
 
-  const titleOf = (open: OpenPage) => (isHistory(open) ? historyView.title : open.page === installPage ? `Install ${open.mod}` : (pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page))
+  const declaredOf = (name: string) => parts.declared().find((each) => each.mod === name)
+  const isPage = ({ mod: name, id }: Pick<OpenTab, 'mod' | 'id'>) => declaredOf(name)?.pages.some((page) => page.id === id) === true
+  const titleOf = (open: OpenTab) => {
+    if (isHistory(open)) return historyView.title
+    if (open.id === installView) return `Install ${open.mod}`
+    const declared = declaredOf(open.mod)
+    return [...(declared?.views ?? []), ...(declared?.pages ?? [])].find((each) => each.id === open.id)?.title ?? open.id
+  }
 
   const tell = () => {
     const shown = mod.state.session.shown
-    const open = mod.state.session.pages.filter((each) => !isHistory(each))
+    const open = mod.state.session.tabs.filter((each) => !isHistory(each))
     const isShown = pane.isShown
-    const inSettings = isShown && shown === settingsTab ? view.shownPage() : undefined
+    const inSettings = isShown && shown === settingsTab ? view.shownView() : undefined
     const mods = new Set([...told, ...open.map((each) => each.mod), ...(inSettings === undefined ? [] : [inSettings.mod])])
     for (const name of mods) {
       const own = open.filter((each) => each.mod === name)
-      const inPane = inSettings?.mod === name ? inSettings.page : isShown ? own.find((each) => keyOf(each) === shown)?.page : undefined
-      const shownPage = inPane ?? own.find((each) => inBrowser.has(keyOf(each)))?.page ?? null
-      pages.tell(name, { open: own.map(({ page, params }) => ({ id: page, params })), shown: shownPage, isFocused: inPane !== undefined && pane.isFocused })
-      if (own.length === 0 && shownPage === null) told.delete(name)
+      const inPane = inSettings?.mod === name ? inSettings.id : isShown ? own.find((each) => keyOf(each) === shown)?.id : undefined
+      const shownId = inPane ?? null
+      parts.tell(name, { open: own.map(({ id, params }) => ({ id, params })), shown: shownId, isFocused: inPane !== undefined && pane.isFocused })
+      if (own.length === 0 && shownId === null) told.delete(name)
       else told.add(name)
     }
   }
@@ -85,12 +92,12 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     tell()
   }
 
-  const closePage = async (key: string) => {
-    const { pages: open, shown } = mod.state.session
+  const closeTab = async (key: string) => {
+    const { tabs: open, shown } = mod.state.session
     const index = open.findIndex((each) => keyOf(each) === key)
     if (index === -1) return
     const left = open.filter((each) => keyOf(each) !== key)
-    mod.state.session.pages = left
+    mod.state.session.tabs = left
     if (shown !== key) return tell()
     const next = left[Math.min(index, left.length - 1)]
     if (next === undefined) {
@@ -139,23 +146,31 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       ],
     })
 
-  const bodyOf = (tab: string, columns: number, isFocused: boolean): JSX.Element => {
-    if (tab === settingsTab) return view.draw(columns, isFocused)
-    const page = mod.state.session.pages.find((each) => keyOf(each) === tab)
-    if (page === undefined) {
-      const rows = widgets.rows(Dashboard, columns - panelColumns)
-      return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
-    }
-    if (isHistory(page)) return Panel({ title: historyView.title, children: historyView.draw(columns - panelColumns) })
-    return Panel({ title: page.mod, children: pages.element(page.mod, page.page, page.params, columns - panelColumns, isFocused) ?? Text({ dimColor: true, children: `Drawing ${titleOf(page)}…` }) })
+  const openTabOf = (tab: string) => mod.state.session.tabs.find((each) => keyOf(each) === tab)
+
+  const drawDashboard = (columns: number, surface: Surface) => {
+    const rows = widgets.rows(Dashboard, { columns: columns - panelColumns, surface })
+    return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
+  }
+
+  const drawHistory = (columns: number) => Panel({ title: historyView.title, children: historyView.draw(columns - panelColumns) })
+
+  const bodyOf = (tab: string, columns: number, isFocused: boolean, surface: Surface): JSX.Element => {
+    if (tab === settingsTab) return view.draw(columns, isFocused, surface)
+    const open = openTabOf(tab)
+    if (open === undefined) return drawDashboard(columns, surface)
+    if (isHistory(open)) return drawHistory(columns)
+    const drawing = `Drawing ${titleOf(open)}…`
+    if (isPage(open)) return parts.element(open.mod, open.id, open.params, columns, isFocused, surface) ?? Text({ dimColor: true, children: drawing })
+    return Panel({ title: open.mod, children: parts.element(open.mod, open.id, open.params, columns - panelColumns, isFocused, surface) ?? Text({ dimColor: true, children: drawing }) })
   }
 
   const tabViews = (shownTab: string): { readonly left: readonly TabView[]; readonly right: TabView } => ({
     left: [
       { key: dashboardTab, label: 'Dashboard', hotkey: '0', isShown: shownTab === dashboardTab, onClose: undefined },
-      ...mod.state.session.pages.map((each, index): TabView => {
+      ...mod.state.session.tabs.map((each, index): TabView => {
         const key = keyOf(each)
-        return { key, label: titleOf(each), hotkey: index < pageHotkeys ? `${index + 1}` : undefined, isShown: key === shownTab, onClose: () => void closePage(key) }
+        return { key, label: titleOf(each), hotkey: index < tabHotkeys ? `${index + 1}` : undefined, isShown: key === shownTab, onClose: () => void closeTab(key) }
       }),
     ],
     right: { key: settingsTab, label: 'Settings', hotkey: '9', isShown: shownTab === settingsTab, onClose: undefined },
@@ -165,11 +180,13 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     id: 'sidebar',
     title: 'Sidebar',
     closeOnEscape: true,
-    render(current, { bodyColumns, isFocused, placement, scroll }) {
-      const { pages: open, shown } = current.state.session
-      const isPageShown = open.some((each) => keyOf(each) === shown)
-      const shownTab = shown === settingsTab || isPageShown ? shown : dashboardTab
+    render(current, { bodyColumns, isFocused, placement, scroll, surface }) {
+      const { tabs: open, shown } = current.state.session
+      const isTabShown = open.some((each) => keyOf(each) === shown)
+      const shownTab = shown === settingsTab || isTabShown ? shown : dashboardTab
       const { left, right } = tabViews(shownTab)
+      const shownOpen = openTabOf(shownTab)
+      const fillsWidth = shownOpen !== undefined && isPage(shownOpen)
       const tabBar = Box({
         flexDirection: 'column',
         children: [
@@ -189,7 +206,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         flexDirection: 'column',
         gap: 1,
         ...(placement === 'dock' ? { minHeight: scroll.bodyRows } : {}),
-        children: [tabBar, Box({ flexDirection: 'column', flexGrow: 1, paddingX: 1, children: bodyOf(shownTab, bodyColumns - 2, isFocused) }), keyBar],
+        children: [tabBar, Box({ flexDirection: 'column', flexGrow: 1, ...(fillsWidth ? {} : { paddingX: 1 }), children: bodyOf(shownTab, fillsWidth ? bodyColumns : bodyColumns - bodyPadding, isFocused, surface) }), keyBar],
       })
     },
     onClose: () => tell(),
@@ -197,26 +214,31 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
 
   const view = settings(pane, () => tell())
 
-  const placeOf = (name: string, page: string) => pages.declared().find((each) => each.mod === name)?.pages.find((each) => each.id === page)?.place
+  mod.views.add({ id: dashboardTab, title: 'Dashboard', render: (_current, { columns, surface }) => drawDashboard(columns, surface) })
+  const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: (_current, { columns }) => drawHistory(columns) })
+  mod.views.add({ id: settingsTab, title: 'Settings', render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) })
+  const isFixedTab = (name: string, id: string) => name === mod.name && (id === dashboardTab || id === settingsTab)
 
-  const addTab = (opened: OpenPage) => {
-    const open = mod.state.session.pages
-    mod.state.session.pages = open.some((each) => keyOf(each) === keyOf(opened)) ? open.map((each) => (keyOf(each) === keyOf(opened) ? opened : each)) : [...open, opened]
+  const placeOf = (name: string, id: string) => declaredOf(name)?.views.find((each) => each.id === id)?.place
+
+  const addTab = (opened: OpenTab) => {
+    const open = mod.state.session.tabs
+    mod.state.session.tabs = open.some((each) => keyOf(each) === keyOf(opened)) ? open.map((each) => (keyOf(each) === keyOf(opened) ? opened : each)) : [...open, opened]
   }
 
-  const apply = async (name: string, requests: readonly PageRequest[]) => {
+  const apply = async (name: string, requests: readonly PartRequest[]) => {
     for (const request of requests) {
       if ('open' in request && placeOf(name, request.open) === 'settings') {
         show(settingsTab)
         await pane.open({ focus: true })
-        await view.show(name, `page:${request.open}`, request.params)
+        await view.show(name, `view:${request.open}`, request.params)
       } else if ('open' in request) {
-        const opened: OpenPage = { mod: name, page: request.open, params: request.params }
+        const opened: OpenTab = { mod: name, id: request.open, params: request.params }
         addTab(opened)
         show(keyOf(opened))
         await pane.open(request.focus === true ? { focus: true } : {})
       } else if ('close' in request) {
-        if (!view.closePage(name, request.close)) await closePage(keyOf({ mod: name, page: request.close }))
+        if (!view.closeView(name, request.close)) await closeTab(keyOf({ mod: name, id: request.close }))
       } else if ('scroll' in request) {
         const to = typeof request.to === 'string' ? request.to : { key: `${name}/${request.scroll}:${request.to.key}` }
         await pane.scrollTo(to, request.block === undefined ? {} : { block: request.block })
@@ -227,15 +249,21 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         await pane.open({ focus: true })
         await view.show(name, request.tab)
       } else {
-        engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a page request this cmod does not know, so it skips it: ${JSON.stringify(request)}`)
+        engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a request this cmod does not know, so it skips it: ${JSON.stringify(request)}`)
       }
     }
     tell()
   }
-  pages.apply(apply)
+  parts.apply(apply)
+  parts.onOpen(async (name, id, isOpen) => {
+    if (isFixedTab(name, id)) return
+    if (isOpen) addTab({ mod: name, id, params: openTabOf(keyOf({ mod: name, id }))?.params ?? null })
+    else await closeTab(keyOf({ mod: name, id }))
+    tell()
+  })
 
   const openHistory = async () => {
-    addTab(historyPage)
+    addTab(historyTab)
     show(historyKey)
     historyView.refresh()
     await pane.open({ focus: true })
@@ -265,22 +293,8 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     },
     openHistory,
     async toggleHistory() {
-      if (pane.isShown && mod.state.session.shown === historyKey) return closePage(historyKey)
+      if (pane.isShown && mod.state.session.shown === historyKey) return closeTab(historyKey)
       await openHistory()
-    },
-    tabs(): SidebarTab[] {
-      const { left, right } = tabViews(mod.state.session.shown)
-      return [...left, right].map(({ key, label, onClose }) => ({ key, label, isClosable: onClose !== undefined }))
-    },
-    draw: (tab: string, columns: number) => bodyOf(tab, columns, true),
-    closeTab: (tab: string) => closePage(tab),
-    addTab(opened: OpenPage) {
-      addTab(opened)
-      tell()
-    },
-    showInBrowser(tabs: ReadonlySet<string>) {
-      inBrowser = tabs
-      tell()
     },
   }
 }

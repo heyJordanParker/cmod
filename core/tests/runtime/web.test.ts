@@ -6,7 +6,7 @@ import { Box, Button, Code, elementData, Image, Input, Markdown, Raster, Select,
 
 const drawn = (element: unknown) => {
   const handlers: Handler[] = []
-  return { html: htmlOf(elementData(element, handlers)), handlers }
+  return { html: htmlOf(elementData(element, (run) => handlers.push(run) - 1)), handlers }
 }
 
 test('a Box draws as a flex box in cells, its Text in the theme colors, and a key the browser keeps across redraws', () => {
@@ -110,18 +110,27 @@ test('Code numbers its lines from startLine, and a diff marks the lines it adds 
   expect(drawn(Code({ source: '@@ -1 +1 @@\n-a\n+b', format: 'diff' })).html).toBe('<pre class="code"><span class="line hunk">@@ -1 +1 @@</span>\n<span class="line removed">-a</span>\n<span class="line added">+b</span></pre>')
 })
 
-test('an Svg, a PNG Image, and an Image of raw pixels draw as images, and an Image from a file draws its alt text', () => {
-  expect(drawn(Image({ source: { rgba: 'AAAA/w==', width: 1, height: 1 }, columns: 2, rows: 1, alt: 'a dot' })).html).toBe('<canvas class="image" width="1" height="1" data-rgba="AAAA/w==" aria-label="a dot" style="width:2ch;height:calc(1 * var(--row))"></canvas>')
-  expect(drawn(Svg({ source: '<svg/>', alt: 'a dot', width: 20 })).html).toBe('<img class="svg" alt="a dot" src="data:image/svg+xml,%3Csvg%2F%3E" style="width:20px">')
-  expect(drawn(Image({ source: { png: 'iVBORw0KGgo=' }, columns: 4, rows: 2, alt: 'logo' })).html).toBe('<img class="image" alt="logo" src="data:image/png;base64,iVBORw0KGgo=" style="width:4ch;height:calc(2 * var(--row))">')
-  expect(drawn(Image({ source: { file: '/tmp/a.png', format: 'png' }, columns: 4, rows: 2, alt: 'logo' } as never)).html).toBe('<span class="t dim" style="width:4ch;height:calc(2 * var(--row))">logo</span>')
+test('an Svg, a PNG Image, and an Image of raw pixels draw as images named by their label, and an Image from a file draws its label', () => {
+  expect(drawn(Image({ source: { rgba: 'AAAA/w==', width: 1, height: 1 }, columns: 2, rows: 1, label: 'a dot' })).html).toBe('<canvas class="image" width="1" height="1" data-rgba="AAAA/w==" aria-label="a dot" style="width:2ch;height:calc(1 * var(--row))"></canvas>')
+  expect(drawn(Svg({ source: '<svg/>', label: 'a dot', width: 20 })).html).toBe('<img class="svg" alt="a dot" src="data:image/svg+xml,%3Csvg%2F%3E" style="width:20px">')
+  expect(drawn(Image({ source: { png: 'iVBORw0KGgo=' }, columns: 4, rows: 2, label: 'logo' })).html).toBe('<img class="image" alt="logo" src="data:image/png;base64,iVBORw0KGgo=" style="width:4ch;height:calc(2 * var(--row))">')
+  expect(drawn(Image({ source: { file: '/tmp/a.png', format: 'png' }, columns: 4, rows: 2, label: 'logo' } as never)).html).toBe('<span class="t dim" style="width:4ch;height:calc(2 * var(--row))">logo</span>')
 })
 
-test('a Raster draws each cell as its glyph in its colors, one row per line', () => {
+test("a released core's Image and Svg, which name their picture with alt, keep that name in the browser", () => {
+  expect(htmlOf({ $cmodElement: 'Image', props: { source: { png: 'iVBORw0KGgo=' }, columns: 4, rows: 2, alt: 'logo' } })).toBe('<img class="image" alt="logo" src="data:image/png;base64,iVBORw0KGgo=" style="width:4ch;height:calc(2 * var(--row))">')
+  expect(htmlOf({ $cmodElement: 'Svg', props: { source: '<svg/>', alt: 'a dot' } })).toBe('<img class="svg" alt="a dot" src="data:image/svg+xml,%3Csvg%2F%3E">')
+})
+
+test('a Button that shows only an icon takes its label as its accessible name', () => {
+  expect(drawn(Button({ key: 'close', label: 'Close the run', onPress: () => undefined, children: Text({ children: '×' }) })).html).toBe('<button type="button" class="button" aria-label="Close the run" data-key="close" data-press="0"><span class="t">×</span></button>')
+})
+
+test('a Raster draws each cell as its glyph in its colors, one row per line, as one image named by its label', () => {
   const words = Uint32Array.of(0x2588, 0xff8800, 0x01000000, 0x41, 0x01000000, 0x000000)
   const cells = btoa(String.fromCharCode(...new Uint8Array(words.buffer)))
 
-  expect(drawn(Raster({ key: 'grid', columns: 1, rows: 2, cells })).html).toBe('<pre class="raster"><span style="color:#ff8800">█</span>\n<span style="background:#000000">A</span></pre>')
+  expect(drawn(Raster({ key: 'grid', columns: 1, rows: 2, cells, label: 'the build grid' })).html).toBe('<pre class="raster" role="img" aria-label="the build grid"><span style="color:#ff8800">█</span>\n<span style="background:#000000">A</span></pre>')
 })
 
 test('an element this cmod web does not know draws a note naming it, so a newer cmod plugin never breaks an older server', () => {

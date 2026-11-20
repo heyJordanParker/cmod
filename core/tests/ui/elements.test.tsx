@@ -64,7 +64,7 @@ test('a pane that draws Svg draws under test, with nothing of the Svg in the ter
             render: () => (
               <Box flexDirection="column">
                 <Text>p95 latency</Text>
-                <Svg source="<svg/>" alt="p95 latency" />
+                <Svg source="<svg/>" label="p95 latency" />
               </Box>
             ),
           })
@@ -76,22 +76,22 @@ test('a pane that draws Svg draws under test, with nothing of the Svg in the ter
   expect(await tested.shown.pane.lines()).toEqual(['p95 latency'])
 })
 
-test('Image draws', async () => {
+test("Image draws in Claude Code with its label as Claude Code's alt", async () => {
   const fake = fakeClaude({ name: 'demo', root: '/test/plugins/charts' })
   fake.claude.ui.resolve = () => ({ Image: (props: object) => ({ type: 'Image', props }) }) as unknown as ElementTable
-  const chart = { source: { png: 'iVBORw0KGgo=' }, columns: 40, rows: 12, alt: 'p95 latency' }
+  const chart = { source: { png: 'iVBORw0KGgo=' }, columns: 40, rows: 12 }
   const lifecycle = createLifecycle(
     defineMod({
       name: 'demo',
       async setup(mod) {
-        await mod.panes.add({ id: 'chart', title: 'Chart', render: () => Image(chart) }).open()
+        await mod.panes.add({ id: 'chart', title: 'Chart', render: () => Image({ ...chart, label: 'p95 latency' }) }).open()
       },
     }),
   )
   await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/charts', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'chart', props: { title: 'Chart', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
 
-  expect(await lifecycle.route('ui.render', pane, async () => Box({}))).toEqual({ type: 'Image', props: chart } as unknown as RenderElement)
+  expect(await lifecycle.route('ui.render', pane, async () => Box({}))).toEqual({ type: 'Image', props: { ...chart, alt: 'p95 latency' } } as unknown as RenderElement)
 })
 
 test("a Button with an https href draws as the desktop app's own link, and one with another href as a button that copies it there", async () => {

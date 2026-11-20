@@ -1,25 +1,28 @@
 # UI
 
-A mod draws in five ways: pages in the Sidebar and in Settings, panes of its own, widgets the person places around the prompt and on the Dashboard, styles that change how Claude Code draws a row or a block of a reply, and short messages: toasts and questions. Each part is added with one `add` call in `setup`, and each call returns the part, with `remove()` to take it back.
+A mod draws in six ways: widgets the person places around the prompt and on the Dashboard, views beside the session, pages that fill a window, panes of its own, styles that change how Claude Code draws a row or a block of a reply, and short messages: toasts and questions. Each part is added with one `add` call in `setup`, and each call returns the part, with `remove()` to take it back.
+
+Widgets, views, and pages are the three units every app places, as a VS Code extension adds a Status Bar Item, a View, and an editor, and each workbench places them. Each app draws them with its own renderer: Claude Code, the browser app, and any app that reaches the `cmod/UI` interface ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)). So a mod writes each once, and it works in each app. Panes and styles are Claude Code's own places, and only Claude Code draws them.
 
 ```ts
-mod.sidebar.add<Params>(page: PageInit<State, Params>): Page<Params>
-mod.settings.add<Params>(page: PageInit<State, Params>): Page<Params>
+mod.widgets.add(widget: WidgetInit<State>): Widget
+mod.views.add<Params>(view: ViewInit<State, Params>): View<Params>
+mod.pages.add<Params>(page: PageInit<State, Params>): Page<Params>
+mod.settings.add<Params>(view: ViewInit<State, Params>): View<Params>
 mod.settings.open(): Promise<void>
 mod.panes.add<Params>(pane: PaneInit<State, Params>): Pane<Params>
-mod.widgets.add(widget: WidgetInit<State>): Widget
 mod.styles.add<K extends Kind>(style: StyleInit<K, State>): Style
 mod.toast: Toast
 mod.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
 ```
 
-`mod.js` exports the types: `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `OpenOptions`, `ScrollTarget`, `ScrollOptions`, `WidgetInit`, `Widget`, `WidgetContext`, `Area`, `StyleInit`, `Style`, `StyleProps`, `Kind`, and `Row`.
+`mod.js` exports the types: `ViewInit`, `View`, `ViewProps`, `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `OpenOptions`, `ScrollTarget`, `ScrollOptions`, `WidgetInit`, `Widget`, `WidgetContext`, `Area`, `StyleInit`, `Style`, `StyleProps`, `Kind`, and `Row`.
 
 Claude Mod Manager (cmod) draws the mod again whenever a value in `mod.state` changes. A render reads `mod.state` and returns what to show. It never draws by hand.
 
 ## Every message the person acts on carries a button
 
-A mod never asks the person to type a command. When a toast, a page, or a pane needs the person to do something, it draws a `Button` that does it, or that opens the place where they do it, such as `mod.settings.open()` or a page's `open()`. cmod follows the same rule: a failure caused by a provider that is not installed carries a `Plugins` button, and a secret option carries an `Open /config` button. A failure caused by a permission the person turned off shows no toast, because the person chose it, and goes to the Log in Settings.
+A mod never asks the person to type a command. When a toast, a view, a page, or a pane needs the person to do something, it draws a `Button` that does it, or that opens the place where they do it, such as `mod.settings.open()` or a view's `open()`. cmod follows the same rule: a failure caused by a provider that is not installed carries a `Plugins` button, and a secret option carries an `Open /config` button.
 
 ## Elements
 
@@ -27,15 +30,17 @@ A mod never asks the person to type a command. When a toast, a page, or a pane n
 
 - `Box`, with `BoxProps`, draws a flex container: `flexDirection`, `gap`, `padding`, `margin`, `minWidth`, and the rest.
 - `Text`, with `TextProps`, draws text: `bold`, `dimColor`, `color`, `wrap`, and the rest.
-- `Button`, with `ButtonProps`, draws a button: `label` or one string child, `hotkey`, `key`, `variant`, and either `onPress` or `href`. `onPress` gets a `Press`, which names the `surface` the press came from.
+- `Button`, with `ButtonProps`, draws a button: `label` or one string child, `hotkey`, `key`, `variant`, and either `onPress` or `href`. `onPress` gets a `Press`, which names the `surface` the press came from: `'terminal'`, `'desktop'`, `'mobile'`, `'vscode'`, `'browser'`, or `'herdr'`. A `Button` that shows only an icon as its children takes a `label` too, its accessible name, which a screen reader says in place of the icon.
 - `Code`, with `CodeProps`, draws highlighted code.
 - `Markdown`, with `MarkdownProps`, draws markdown text, as Claude Code draws a reply.
 - `Input`, with `InputProps`, draws a text input. It is one line tall unless `rows` says more: `rows: 4` draws four lines that wrap, as a `<textarea>`, for a note or a comment.
 - `Select`, with `SelectProps`, draws a choice of options.
-- `Image`, with `ImageProps`, draws an image, with `alt` text. Only the terminal draws it.
-- `Raster`, with `RasterProps`, draws a grid of terminal cells, each a glyph with its colors. Only the terminal draws it.
-- `Svg`, with `SvgProps`, draws an SVG drawing, with `alt` text. The desktop and phone apps draw it, and the terminal does not.
-- `Client`, with `ClientProps`, draws a region the mod's own surface module draws and handles input for, named by `module`, a string literal path such as `'./board.tsx'`. It draws only in a pane or a style. A page or widget that draws it shows `The <title> page could not draw` with `Client draws only in panes and styles.` under it.
+- `Image`, with `ImageProps`, draws an image, with a `label`, its accessible name. Only the terminal draws it.
+- `Raster`, with `RasterProps`, draws a grid of terminal cells, each a glyph with its colors, with a `label`, its accessible name. Only the terminal draws it.
+- `Svg`, with `SvgProps`, draws an SVG drawing, with a `label`, its accessible name. The desktop and phone apps draw it, and the terminal does not.
+- `Client`, with `ClientProps`, draws a region the mod's own surface module draws and handles input for, named by `module`, a string literal path such as `'./board.tsx'`. It draws only in a pane or a style. A view, page, or widget that draws it shows `The <title> view could not draw`, or page or widget, with `Client draws only in panes and styles.` under it.
+
+An element with no text needs a `label`, because each app's renderer owns accessibility and says the label where a sighted person sees the picture. Claude Code takes an `Image`'s or an `Svg`'s `label` as its `alt`, and the browser app writes each `label` as the element's accessible name.
 
 Claude Code refuses a whole drawing that holds an element its app does not draw, and draws its own instead. A style reads `surface` to pick what to draw, and a pane reads it from its props.
 
@@ -98,19 +103,21 @@ Progress(props: { value: number; width?: number })
 - `Progress` fills `value` percent of `width` columns, 24 unless given. Put the count or a label beside it in a `Text`, or pass it as a loading toast's `description`.
 - `Tabs`, `Toggle`, `Help`, and `Pagination` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
 
-## The Sidebar and its pages
+## Views and pages
 
-The Sidebar is one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the pages mods opened, and Settings. A mod that asks the person to set an option or to finish a step opens its install page there, the `Install <mod>` tab ([install-steps.md](install-steps.md#steps-in-claude-code)). The person shows or hides it with `meta+0`, switches tabs with `0` for the Dashboard, `1` to `8` for the pages, and `9` for Settings, and closes a page with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
+A view is a part of a mod that shows beside the session, as a VS Code View shows beside the editor. A page fills a window, as a VS Code editor does. Both draw the same way and have the same members, and each app places them: the browser app shows a view in a tab beside the conversation and a page in the whole window.
 
-A page is a part of a mod that draws in the Sidebar. Put each page in its own file in `src/pages/`:
+Claude Code has no place that takes the whole window, so it shows both in the Sidebar, one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the views and pages mods opened, and Settings. A view draws in a panel titled with the mod's name, and a page draws at the Sidebar's full width with no panel. A mod that asks the person to set an option or to finish a step opens its install view there, the `Install <mod>` tab ([install-steps.md](install-steps.md#steps-in-claude-code)). The person shows or hides the Sidebar with `meta+0`, switches tabs with `0` for the Dashboard, `1` to `8` for the views and pages, and `9` for Settings, and closes one with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
+
+Put each view in its own file in `src/views/`, and each page in `src/pages/`:
 
 ```tsx
-import type { PageInit } from '../../node_modules/@cmodjs/core/mod.js'
+import type { ViewInit } from '../../node_modules/@cmodjs/core/mod.js'
 import { Box, Button, Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
 
 export type NotesState = { global: { notes: readonly string[] } }
 
-export const notesPage: PageInit<NotesState> = {
+export const notesView: ViewInit<NotesState> = {
   id: 'notes',
   title: 'Notes',
   render: (mod) => (
@@ -123,13 +130,15 @@ export const notesPage: PageInit<NotesState> = {
 ```
 
 ```ts
-type PageInit<State, Params = undefined> = {
+type ViewInit<State, Params = undefined> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: { readonly params: Params; readonly isFocused: boolean; readonly columns: number }): JSX.Element
+  render(mod: Mod<State>, props: ViewProps<Params>): JSX.Element
 }
 
-type Page<Params = undefined> = {
+type ViewProps<Params> = { readonly params: Params; readonly isFocused: boolean; readonly columns: number; readonly surface: Surface }
+
+type View<Params = undefined> = {
   readonly id: string
   readonly isOpen: boolean
   readonly isShown: boolean
@@ -142,28 +151,34 @@ type Page<Params = undefined> = {
   focus(key: string): Promise<void>
   remove(): void
 }
+
+type PageInit<State, Params = undefined> = ViewInit<State, Params>
+type PageProps<Params> = ViewProps<Params>
+type Page<Params = undefined> = View<Params>
 ```
 
-- `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the mod's pages. `title` labels the page's tab. Either one missing throws `<mod>: "<id>" is not a page id.` or `<mod>: the page "<id>" needs a title, the label its tab shows.`
-- `mod.sidebar.add(page)` adds the page and returns it. Adding two pages with one id throws `<mod>: the page "<id>" is already added. Give each page its own id.`
-- `open` shows the page as a tab of the Sidebar, and shows the Sidebar. `params` is what the page shows, such as a run's number, and the page reads it as `props.params`. A page whose `Params` is not `undefined` must be given `params`. `{ focus: true }` gives it the keyboard.
-- `toggle` closes an open page and opens a closed one. `close` takes its tab away, and the Sidebar hides once no page is left.
-- `isOpen` is true while the page has a tab, `isShown` while its tab is the one on screen, and `isFocused` while it has the keyboard.
-- `scrollTo` brings an element the page drew with that `key` into view, or the page's start or end.
-- `focus` moves the keyboard once to the `Button`, `Input`, or `Select` the page drew with that `key`, while the Sidebar holds the keyboard, such as from a `Button` the person pressed. Unlike `autoFocus`, which takes the keyboard each time the Sidebar shows, it moves it only when called. A key the page does not draw rejects with `<mod>: the <title> page draws no Button, Input, or Select with the key "<key>".` The cmod plugin moves the keyboard after the handler returns, so `focus` resolves once the cmod plugin has the request, and a move Claude Code refuses goes to the Log.
-- `props.columns` is the width the page draws in. The Sidebar draws the page in a panel titled with the mod's name, under its tab bar and above its key bar, so `columns` is the Sidebar's width less 6: its padding of one column on each side, and the panel's border and padding.
-- A page opened from what the person did, such as a slash command they typed, a hotkey, or a `Button` they pressed, shows at any terminal width. A page opened from anything else, such as `setup`, a timer, or a listener, shows only on a terminal 144 columns wide. Below that it waits until the person opens the Sidebar.
-- A page draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects, because the cmod plugin draws it. A `Button`'s `onPress` runs in the mod.
-- A `render` that throws draws `The <title> page could not draw: <error>` in the page, and cmod shows the error toast `The <title> page could not draw` once, until the page draws again.
-- A press on a `Button` from an older drawing, such as one drawn before the mod reloaded, runs nothing. cmod shows the toast `The <mod> button was from an older drawing, so nothing ran` and draws the page again.
+- `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the mod's widgets, views, and pages, because each app names a part by its mod and id. `title` labels the tab. Either one missing throws `<mod>: "<id>" is not a view id.` or `<mod>: the view "<id>" needs a title, the label its tab shows.`, with `page` for a page.
+- `mod.views.add(view)` and `mod.pages.add(page)` add the part and return it. An id the mod already gave a widget, view, or page throws `<mod>: the <widget, view, or page> "<id>" is already added. Give the view another id.`, with `page` for a page.
+- `open` shows the view or page as a tab of the Sidebar, and shows the Sidebar. `params` is what it shows, such as a run's number, and it reads it as `props.params`. One whose `Params` is not `undefined` must be given `params`. `{ focus: true }` gives it the keyboard.
+- `toggle` closes an open view or page and opens a closed one. `close` takes its tab away, and the Sidebar hides once no tab is left.
+- `isOpen` is true while it has a tab, `isShown` while its tab is the one on screen in the Sidebar or in any app, and `isFocused` while it has the keyboard in the Sidebar.
+- `isOpen` turns true the moment `open` is called and false the moment `close` is called, so a slash command or a `Button` handler that awaits `open()` reads `isOpen` true on the next line, though the cmod plugin opens the tab only once the handler returns.
+- `scrollTo` brings an element it drew with that `key` into view, or its start or end.
+- `focus` moves the keyboard once to the `Button`, `Input`, or `Select` it drew with that `key`, while the Sidebar holds the keyboard, such as from a `Button` the person pressed. Unlike `autoFocus`, which takes the keyboard each time the Sidebar shows, it moves it only when called. A key it does not draw rejects with `<mod>: the <title> view draws no Button, Input, or Select with the key "<key>".`, with `page` for a page. The cmod plugin moves the keyboard after the handler returns, so `focus` resolves once the cmod plugin has the request, and a move Claude Code refuses goes to the Log.
+- `props.columns` is the width it draws in. In Claude Code the Sidebar draws a view in its panel, under its tab bar and above its key bar, so a view's `columns` is the Sidebar's width less 6: its padding of one column on each side, and the panel's border and padding. A page's `columns` is the Sidebar's whole width.
+- `props.surface` is the app that draws it: `'terminal'`, `'desktop'`, `'mobile'`, `'vscode'`, `'browser'`, or `'herdr'`.
+- One opened from what the person did, such as a slash command they typed, a hotkey, or a `Button` they pressed, shows at any terminal width. One opened from anything else, such as `setup`, a timer, or a listener, shows only on a terminal 144 columns wide. Below that it waits until the person opens the Sidebar.
+- A view or page draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects, because the cmod plugin draws it. A `Button`'s `onPress` runs in the mod.
+- A `render` that throws draws `The <title> view could not draw: <error>` in its place, with `page` for a page, and cmod shows the error toast `The <title> view could not draw` once, until it draws again.
+- A press on a `Button` from an older drawing, such as one drawn before the mod reloaded, runs nothing. cmod shows the toast `The <mod> button was from an older drawing, so nothing ran` and draws it again.
 
-The person can run their sessions from the browser app too, which `open in browser` on the Sidebar's key bar opens and Settings, under cmod, turns off, and through Tailscale from each of their machines. It lists every running session, and an open session shows its Dashboard, pages, and Settings in tabs beside its conversation, as in the Sidebar. A page needs no change: the browser draws the same `render`, with `props.columns` the browser's width in characters and `props.isFocused` true. A `Button`, `Input`, `Select`, or Markdown link pressed there runs the same handler, with `surface: 'desktop'`, and the page redraws in the browser and in the Sidebar. A page the browser shows counts as `isShown`. The browser draws an `Image` from a file or shared memory as its `alt` text, and `Code` without syntax colors.
+The person can run their sessions from the browser app too, which `open in browser` on the Sidebar's key bar opens and Settings, under cmod, turns off, and through Tailscale from each of their devices. It lists every running session, and an open session shows its views, the cmod plugin's Dashboard, History, and Settings among them, and the pages open in it, in tabs beside its conversation. It reaches them through `cmod/UI`, as every app does. A view or page needs no change: the browser draws the same `render`, with `props.columns` the browser's width in characters, `props.isFocused` true, and `props.surface` `'browser'`. A `Button`, `Input`, `Select`, or Markdown link pressed there runs the same handler, with `surface: 'browser'`, and the view or page redraws in the browser and in the Sidebar. A page the mod opens itself opens in the browser too. A view or page any app shows counts as `isShown`, the browser's included. The browser draws an `Image` from a file or shared memory as its `label`, and `Code` without syntax colors.
 
 A hotkey is the usual way in:
 
 ```tsx
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
-import { notesPage, type NotesState } from './pages/notes.js'
+import { notesView, type NotesState } from './views/notes.js'
 
 const initialState: NotesState = { global: { notes: [] } }
 
@@ -174,19 +189,76 @@ export const myMod = defineMod({
     toggle: { title: 'Show or hide the notes', default: 'alt+shift+n' },
   },
   setup(mod) {
-    const page = mod.sidebar.add(notesPage)
-    mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
+    const view = mod.views.add(notesView)
+    mod.hotkeys.toggle.onPress(() => view.toggle({ focus: true }))
   },
 })
 ```
 
-### Settings pages
+### Views in Settings
 
-`mod.settings.add(page)` adds a page to the mod's entry in Settings, beside the Options, Hotkeys, and Changelog cmod draws for every mod. It takes the same `PageInit` and returns the same `Page`. `mod.settings.open()` shows Settings at the mod's entry. `/mods` and `meta+m` open Settings too.
+`mod.settings.add(view)` adds a view to the mod's entry in Settings, beside the Options, Hotkeys, and Changelog cmod draws for every mod. It takes the same `ViewInit` and returns the same `View`. `mod.settings.open()` shows Settings at the mod's entry. `/mods` and `meta+m` open Settings too.
+
+### Every app reaches them through cmod/UI
+
+Each session's cmod plugin answers the `cmod/UI` interface for its own session, and `cmod serve` sends each call to the plugin that holds the session the call names, so an app reaches every session's widgets, views, and pages through one `cmod serve` ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)):
+
+```ts
+widgets(session): { mod, id, areas }[]
+views(session): { mod, id, title }[]
+pages(session): { mod, id, title }[]
+draw(session, { mod, id }, { columns, surface, area }): element data
+press(session, handler, input)
+open(session, { mod, id })
+close(session, { mod, id })
+show(session, client, { mod, id }[])
+event Change { session, part: 'widgets' | 'views' | 'pages' }
+event Redraw { session, mod, id }
+event Open { session, mod, id }
+event Close { session, mod, id }
+```
+
+- `views` lists the views that show beside the session, and leaves out the views in Settings. The cmod plugin's own Dashboard, History, and Settings are its views `dashboard`, `history`, and `settings`, so an app lists and draws them as it does every mod's.
+- `draw` returns the part's elements as data, the shape `elementData` writes, with each handler as `{ $cmodHandler: <number> }`. A widget draws for `area`, the area the app shows it in, which its `render` reads as `context.area`, and for `surface`, which it reads as `context.surface`, and an area the widget does not list rejects. For `TurnEnd`, `context.turn` is the session's last finished turn, and the widget draws `null` until the first turn finishes, as Claude Code draws no turn's end before it. Each turn that finishes tells `Redraw` for every widget that lists `TurnEnd`. Without `area`, it draws for the Dashboard when it lists the Dashboard, else for its first area. A view or page draws with the params it was opened with.
+- `press` runs the handler with that number, with a `Press` whose `surface` is the one `input` gives, and `input`'s `key`, `kind`, `value`, and `link`. Its `component` is the one the part draws in within Claude Code: `'Pane'` for a view, a page, or a widget drawn for `Dashboard`, and for a widget drawn for another area, `'AbovePrompt'`, `'PromptHint'`, `'Spinner'`, or `'TurnDuration'`. A number from a drawing two draws back or older runs nothing and rejects.
+- `show` tells which views and pages one place an app draws in shows, as VS Code's workbench sets each view's visibility for the extension host, so each one counts as `isShown` in its mod. `client` names that place, a name the app picks, such as one browser tab. Each `show` replaces that client's last list for the session, and an empty list clears it. A list lapses 16 seconds after its client's last `show`, so an app sends it again before then, every 5 seconds as the browser does, and clears it when the place closes.
+- `Change` tells that a mod added or removed a widget, view, or page, and `Redraw` that a part of a mod may draw new data, after a state change the mod drew differently.
+- `Open` and `Close` tell that a mod opened or closed one of its views or pages itself, with `open()` or `close()` on it, from a press, a slash command, or a timer, as a VS Code extension's `reveal` asks the workbench to show its view. An app shows the part on `Open` and takes it away on `Close`. An app's own `open` and `close` tell neither, and neither does a view in Settings.
+
+### Herdr draws them through cmod/UI
+
+The Herdr app shows Claude Code in its terminals, and cmod's Herdr mod draws every mod's widgets, views, and pages beside them, so a mod writes no Herdr code. `cmod serve` places it in `mods/cmod/` of Herdr's home ([cmod serve](commands.md#cmod-serve)), and it reaches each session through [`cmod ui`](commands.md#cmod-ui), with `surface: 'herdr'` and `columns` its width in 8-pixel columns. Toasts and questions stay in Claude Code's own terminal, which Herdr shows.
+
+It shows the session of the focused terminal: the terminal's foreground process, whose `sessions/<pid>.json` in Claude Code's config folder names the session. A terminal of a shell, or on another machine, shows no session. A mod pane taking the keyboard keeps the session it showed.
+
+It never docks itself, because Herdr writes a dock into whichever layout file shows when it first sees the mod, once per Herdr home, and a layout another mod rewrites loses it for good. Herdr shows it in two ways. `mod.open` with `{ "name": "cmod" }` opens the dock as a window over any layout, Herdr's own included, and closes it when run again: from `herdr-app do mod.open:cmod`, a `keys.json` binding such as `"ctrl-shift-m": "mod.open:cmod"`, or another mod's `run`. The window takes no keyboard, so the dock keeps following the focused terminal, and Herdr remembers where it was dragged. A layout author places it anywhere a mod goes instead, with the `props` that say what it shows:
+
+- `{ "mod": "cmod" }`, or `{ "show": "views" }`, shows the focused session's views as tabs, in the order `views` lists them, the cmod plugin's own `dashboard`, `history`, and `settings` among them, and lists the session's pages under them. A page opens as a Herdr tab, `tab.new` with `{ "show": "page", "session", "mod", "id", "title" }`. A page a mod opens itself opens the same way on `Open`, and its tab closes on `Close`. A view a mod opens becomes the shown tab, and a `Close` of the shown view goes back to the first one, as the Sidebar takes a closed view away.
+- `{ "show": "widgets", "area": "belowPrompt" }` draws in a row each widget that lists that area, drawn for that area, for a status bar block. `area` is the value of an area constant: `abovePrompt`, `belowPrompt`, `working`, `turnEnd`, or `dashboard`, the default. In a pane header Herdr gives `props().terminal`, so each pane's header draws its own session's widgets.
+- `{ "show": "page", "session": "<id>", "mod": "<mod>", "id": "<page>" }` draws one page of one session, as the dock's page list opens it.
+
+Each dock and page tab tells `show` the view or page it draws, under a client name it makes once, so the mod's view or page counts as `isShown` while Herdr shows it. It tells again when its shown tab or its focused session changes, renews the list every 5 seconds, and clears it when its focused session changes or the placement closes. A `{ "show": "widgets" }` block tells nothing, because `isShown` is about views and pages.
+
+```json
+{ "id": "cmod", "type": "block", "size": { "px": 360 }, "content": { "mod": "cmod", "props": { "show": "views" } } }
+{ "id": "status", "type": "block", "size": { "px": 28 }, "content": { "mod": "cmod", "props": { "show": "widgets", "area": "belowPrompt" } } }
+```
+
+Each element draws as Herdr's own, and each `label`, or a `Text`'s text, is its accessible name:
+
+- `Box` draws a flex row or column with its gap, padding, margin, sizes, border, and background, a column or row as 8 pixels across, a row as 18 pixels down, and a space step as 6 pixels.
+- `Text` draws its text with its color, weight, and style. A theme color such as `'success'` draws in the Herdr theme's color of the same meaning.
+- `Button` draws Herdr's button. A press runs its handler, and a `Button` with `href` opens an `http:` or `https:` page in the browser, and copies any other link.
+- `Input` draws a field, and `rows` above 1 a text area. Each change runs `onInput`, and Enter runs `onSubmit`.
+- `Select` draws its options as a group of buttons, with the selected one marked.
+- `Markdown` draws Herdr's Markdown text. A link it lists in `pressableLinks`, or any link without them, runs `onLinkPress`, and with no `onLinkPress` it opens as a `Button`'s `href` does.
+- `Code` draws a read-only code view with the language's colors.
+- `Image` and `Svg` draw the picture, which the mod writes under `mods/cmod/.drawn/` first, because Herdr draws only a picture in its home. An image from shared memory draws its `label`.
+- `Raster` draws its cells as rows of colored text.
 
 ## Panes
 
-A pane is a framed region of the mod's own, outside the Sidebar. Claude Code docks it beside the transcript in fullscreen, or shows it above the prompt. Use a page unless the part needs its own size, its own Escape, or to hold back toasts, as a dialog does.
+A pane is a framed region of the mod's own, outside the Sidebar. Claude Code docks it beside the transcript in fullscreen, or shows it above the prompt. Only Claude Code draws a pane, so use a view or a page unless the part needs its own size, its own Escape, or to hold back toasts, as a dialog does.
 
 ```ts
 type PaneInit<State, Params = undefined> = {
@@ -202,7 +274,7 @@ type PaneInit<State, Params = undefined> = {
 }
 ```
 
-`mod.panes.add(pane)` adds the pane and returns a `Pane`, with the same members as a `Page`.
+`mod.panes.add(pane)` adds the pane and returns a `Pane`, with the same members as a `View`.
 
 - `id` is 1 to 64 letters, digits, `_`, or `-`. Another id throws `<mod>: "<id>" is not a pane id.`
 - `title` labels the pane's tab while more than one pane is open.
@@ -213,7 +285,7 @@ type PaneInit<State, Params = undefined> = {
 - `onScroll` runs after this pane's window moved, with a `PaneScroll`. `onClose` runs after the pane closed, by the person or by `close()`, with a `PaneClose`, whose `origin.kind` is `'person'` or `'plugin'`. A handler that throws shows the error toast `The <title> pane's <handler> threw`.
 - `open` asks Claude Code to show the pane, and `isOpen` turns true once Claude Code places it. A pane opened from what the person did shows at any width, and one opened from anything else only at 144 columns, or 110 for a pane the person opened before.
 - `focus` moves the keyboard once to the `Button`, `Input`, or `Select` the pane drew with that `key`, while the pane holds the keyboard. It resolves once the keyboard moved, and rejects with `<mod>: Claude Code did not focus "<key>" in the <title> pane: <reason>` when it did not.
-- Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
+- Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give the pane another id.`
 - A `render` that throws draws `The <title> pane could not draw: <error>` in the pane.
 
 A pane with `closeOnEscape` and `holdToasts`, opened with `focus`, is a dialog:
@@ -237,7 +309,7 @@ export const confirmPane: PaneInit<{ session: { deleting: boolean } }> = {
         <Button label="Delete" onPress={() => void (mod.state.session.deleting = true)} />,
       ]}
     >
-      <Text dimColor wrap="wrap">Its 3 commits are not on main. Deleting it removes them from this machine.</Text>
+      <Text dimColor wrap="wrap">Its 3 commits are not on main. Deleting it removes them from this device.</Text>
     </Dialog>
   ),
 }
@@ -250,7 +322,7 @@ Open it with `mod.panes.add(confirmPane).open({ focus: true })`. It draws as:
  Delete the branch feature/kit?
 
  Its 3 commits are not on main. Deleting it removes them from
- this machine.
+ this device.
 
  [ Keep it ]  [ Delete ]
 ```
@@ -269,8 +341,8 @@ type WidgetInit<State> = {
 }
 
 type WidgetContext =
-  | { readonly area: typeof TurnEnd; readonly columns: number; readonly turn: Turn }
-  | { readonly area: Exclude<Area, typeof TurnEnd>; readonly columns: number }
+  | { readonly area: typeof TurnEnd; readonly columns: number; readonly surface: Surface; readonly turn: Turn }
+  | { readonly area: Exclude<Area, typeof TurnEnd>; readonly columns: number; readonly surface: Surface }
 
 type Widget = { readonly id: string; readonly area: Area | undefined; remove(): void }
 ```
@@ -283,16 +355,16 @@ type Widget = { readonly id: string; readonly area: Area | undefined; remove(): 
 - `TurnEnd` draws under the line that closes each turn, in the transcript.
 - `Dashboard` draws on the Sidebar's Dashboard tab.
 
-- `id` is 1 to 64 letters, digits, `_`, or `-`, unique in the mod. `title` names the widget in Settings, under cmod, Widgets.
+- `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the mod's widgets, views, and pages. `title` names the widget in Settings, under cmod, Widgets.
 - `areas` lists where the person may place the widget. A new widget first draws in the first row of its first area. `area` on the returned `Widget` is where the person placed it.
 - `place.side` is the side of that row a new widget lands on: `'left'`, the default, or `'right'`.
 - `place.size` is how wide the widget draws. `'fit'`, the default, keeps the widget's own width and never shrinks. `'fill'` gives up width when its line runs short, so the `fit` widgets beside it stay whole.
 - A `fill` widget draws its text with `wrap: 'truncate-end'`, so the text ends in `…` where its width runs out. Text that wraps breaks into lines instead.
-- `render` returns the widget's elements, or `undefined` to draw nothing now. `columns` is the width of the row it draws in.
-- In `TurnEnd`, `context.turn` is the [turn](session.md#turn) that closed, so a widget there reads its answer, failure, or usage.
+- `render` returns the widget's elements, or `undefined` to draw nothing now. `columns` is the width of the row it draws in, and `surface` the app that draws it: `'terminal'`, `'desktop'`, `'mobile'`, `'vscode'`, `'browser'`, or `'herdr'`.
+- In `TurnEnd`, `context.turn` is the [turn](session.md#turn-context-goal-and-task) that closed, so a widget there reads its answer, failure, or usage.
 - A widget draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects. A `Button`'s `onPress` runs in the mod.
 - A `render` that throws draws nothing, and cmod shows the error toast `The <title> widget could not draw` once, until the widget draws again. The widgets beside it still draw.
-- Adding two widgets with one id throws `<mod>: the widget "<id>" is already added. Give each widget its own id.`
+- An id the mod already gave a widget, view, or page throws `<mod>: the <widget, view, or page> "<id>" is already added. Give the widget another id.`
 
 ```tsx
 import { BelowPrompt, Dashboard, type WidgetInit } from '../../node_modules/@cmodjs/core/mod.js'
@@ -400,9 +472,9 @@ Each kind of markdown block of a reply is a kind of its own. `ui/markdown.js` ex
 - `ThematicBreak`: a `---` line.
 - `HtmlBlock`: an HTML block, with `value`.
 
-Every block's props hold `text`, its plain text, one line per list item, table row, or quoted line, and `source`, its markdown. `Default` draws the block as Claude Code would, and `<Default source="…" />` draws other markdown in its place. A style may call `Default` once per part, such as once per list item, quoted line, or table cell. Each part, and each `Markdown` a style draws itself, keeps the `dimColor`, `onLinkPress`, and `pressableLinks` of the `Markdown` element that holds the block unless it sets them itself, so a dim element stays dim and its links still run its `onLinkPress`, in a pane, a page, or a widget, whichever mod's style draws it. When that element has a `key`, the first of them without a key of its own takes that key and each later one takes it with `:1`, `:2`, and so on, because Claude Code refuses two `Markdown` elements with one key and needs a key on each one with `onLinkPress`. While a reply streams in, Claude Code draws a block that is not finished yet, and the mod draws it once it is.
+Every block's props hold `text`, its plain text, one line per list item, table row, or quoted line, and `source`, its markdown. `Default` draws the block as Claude Code would, and `<Default source="…" />` draws other markdown in its place. A style may call `Default` once per part, such as once per list item, quoted line, or table cell. Each part, and each `Markdown` a style draws itself, keeps the `dimColor`, `onLinkPress`, and `pressableLinks` of the `Markdown` element that holds the block unless it sets them itself, so a dim element stays dim and its links still run its `onLinkPress`, in a pane, a view, a page, or a widget, whichever mod's style draws it. When that element has a `key`, the first of them without a key of its own takes that key and each later one takes it with `:1`, `:2`, and so on, because Claude Code refuses two `Markdown` elements with one key and needs a key on each one with `onLinkPress`. While a reply streams in, Claude Code draws a block that is not finished yet, and the mod draws it once it is.
 
-A markdown style draws wherever markdown shows: in Claude's replies and in every `Markdown` element any mod or cmod draws, in panes, pages, widgets, the Dashboard, Settings, and changelogs. A `Markdown` element goes through the styles of the mod that draws it first, then through each other mod's, in the order the mods added their first markdown style. A mod that removes its last markdown style and adds one again moves to the end. Another mod's style shows as soon as that mod has drawn the block, and Claude Code's drawing shows until then. When that mod does not answer, Claude Code's drawing stays, and cmod reports `The markdown style of <mod> drew nothing` to the Log, with the reason.
+A markdown style draws wherever markdown shows: in Claude's replies and in every `Markdown` element any mod or cmod draws, in panes, views, pages, widgets, the Dashboard, Settings, and changelogs. A `Markdown` element goes through the styles of the mod that draws it first, then through each other mod's, in the order the mods added their first markdown style. A mod that removes its last markdown style and adds one again moves to the end. Another mod's style shows as soon as that mod has drawn the block, and Claude Code's drawing shows until then. When that mod does not answer, Claude Code's drawing stays, and cmod reports `The markdown style of <mod> drew nothing` to the Log, with the reason.
 
 Claude Code refuses a whole drawing in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements share a key. So cmod puts each block's place in front of every key its style draws, and the keys a style draws need be unique only within the one block it draws, as a component's keys are in React. The place is the block's number in its markdown, from `0`, after the `key` of the `Markdown` element that holds it, or that element's number among the ones drawn without a key. A block that draws again in its place keeps its keys, so Claude Code keeps what the person typed in its `Input`.
 
@@ -458,21 +530,19 @@ type ToastOptions = {
 - `✕` closes the toast. The band shows the newest 3, and `+N more` shows every toast.
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
-Every error cmod catches for a mod, such as a listener that throws, goes to the Log, in Settings on cmod's page, and so does every warning cmod has for a mod, such as a session that did not hear of its listener. A warning never shows a toast. The Log keeps the newest 100 failures of every session, each with the mod, the time, the message, the versions of the mod, its `@cmodjs/core`, cmod, and Claude Code, `Copy`, and `Report`, and the same failure again updates its entry and counts the repeat. `cmod log <mod>` prints the same entries in a terminal ([commands.md](commands.md#cmod-log)).
+Every error cmod catches for a mod, such as a listener that throws, goes to the Log, in Settings in cmod's entry, and so does every warning cmod has for a mod, such as a session that did not hear of its listener. A warning never shows a toast. The Log keeps the newest 100 failures of every session, each with the mod, the time, the message, the versions of the mod, its `@cmodjs/core`, cmod, and Claude Code, `Copy`, and `Report`, and the same failure again updates its entry and counts the repeat. `cmod log <mod>` prints the same entries in a terminal ([commands.md](commands.md#cmod-log)).
 
 An error also shows as a toast when any of these holds:
 
 - it is critical: the mod's install or setup in this session failed, or a button or hotkey the person pressed failed
 - the mod runs from its checkout, linked with [`cmod link`](commands.md#cmod-link) or loaded with `--plugin-dir`, and the session works in that checkout or a folder inside it, because there the person is its author
-- `Show errors from installed mods` is on, in Settings on cmod's page under Preferences
+- `Show errors from installed mods` is on, in Settings in cmod's entry under Preferences
 
 A failure every session meets at once, such as a program every session shares that stopped, is not critical, so it toasts only where its author works.
 
 A failure whose cause is a call another mod did not answer, because it was installing or Claude Code stopped its hook, goes to the Log as a warning, because the mod that did not answer logs its own failure. A failure whose Log call cmod does not answer, such as while cmod installs, waits and tries the Log again after 10 seconds, 1 minute, and 5 minutes, and shows its toast only when cmod still has not answered.
 
-A cmod older than 4.3.0 keeps no Log, so there every error shows its toast.
-
-So a listener or handler that fails throws its error and lets cmod report it. A failure the mod works around and goes on past, such as one rule of many that did not load, goes to [`mod.log`](mod.md#modlog) with a `level`. A `mod.toast.error` for either reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
+So a listener or handler that fails throws its error and lets cmod report it. A failure the mod works around and goes on past, such as one rule of many that did not load, goes to [`mod.log`](mod.md#mod-log) with a `level`. A `mod.toast.error` for either reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
 
 The error toast stays, with its buttons and the time on a line under the message. `Report`, which every error toast has, comes first, at the same column in every error toast, and the buttons only some errors have come after it:
 
@@ -517,8 +587,8 @@ sessions.current.caption(toolCall: ToolCall message, text: string | undefined): 
 ```
 
 - `scrollTo` brings a [message](session.md#message)'s row into view, such as the message a person pressed in a history page. It scrolls only while the mod answers the person's own press or key.
-- `caption` shows `text` as one line under the permission dialog that is open for that tool call, such as `checked by safe-delete`. `undefined` removes the line, and Claude Code removes it on its own once the call is decided.
+- `caption` shows `text` as one line under the permission dialog that is open for that tool call, such as `checked by my-mod`. `undefined` removes the line, and Claude Code removes it on its own once the call is decided.
 
 ## Test the UI
 
-`tested.shown.page` and `tested.shown.pane` read the page or pane the mod shows now, with `lines()`, `press(key)`, `input(key, text)`, `select(key, value)`, and `focusedKey()`. `tested.lines(area)` draws the mod's widgets in an area, and `tested.lines(kind, props)` draws a style. `tested.hotkey(name)` presses a hotkey. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.
+`tested.shown.view`, `tested.shown.page`, and `tested.shown.pane` read the view, page, or pane the mod shows now, with `lines()`, `press(key)`, `input(key, text)`, `select(key, value)`, and `focusedKey()`. `tested.lines(area)` draws the mod's widgets in an area, and `tested.lines(kind, props)` draws a style. `tested.hotkey(name)` presses a hotkey. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.

@@ -245,7 +245,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const call = { isSettled: false }
     try {
       const logged = logFailure(failure).finally(() => void (call.isSettled = true))
-      const answer = await (isShown ? logged : beforeDeadline(claude, { ms: failedCallMs }, failedMethod, logged))
+      const answer = await (isShown ? logged : beforeDeadline(claude.clock, { ms: failedCallMs }, failedMethod, () => logged))
       if (isObject(answer) && typeof answer['showsToast'] === 'boolean') return answer['showsToast']
       throw new Error(`cmod answered ${answer === undefined ? 'nothing' : JSON.stringify(answer)}, not { showsToast: true or false }`)
     } catch (error) {

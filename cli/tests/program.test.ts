@@ -186,6 +186,18 @@ test.concurrent('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves
   expect(serverLog(home)).toEqual(['session none'])
 }, 60000)
 
+const foldersServer = '#!/bin/sh\necho "data $CMOD_DATA" >> "$HOME/server-log"\necho "cache $CMOD_CACHE" >> "$HOME/server-log"\necho "unix:$HOME/$$.sock"\n'
+
+test.concurrent("the copy runs with CMOD_DATA and CMOD_CACHE, the mod's data folder and cache folder, as an install step gets them", async () => {
+  const home = await serverHome()
+  await writeFiles(home, { 'bin/folders-server': foldersServer })
+
+  const { exitCode } = await cmodWith(home, { XDG_CACHE_HOME: join(home, 'caches') }, 'program', 'demo', '--', 'folders-server')
+
+  expect(exitCode).toBe(0)
+  expect(serverLog(home)).toEqual([`data ${home}/.local/share/cmod/data/demo`, `cache ${home}/caches/cmod/demo`])
+}, 60000)
+
 test.concurrent("cmod teardown deletes the removed mod's instances folder and keeps another mod's", async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/instances/demo/fake-server.json': '{}\n', '.local/share/cmod/instances/notes/fake-server.json': '{}\n' })
@@ -310,7 +322,7 @@ test.concurrent("cmod download of a held program, which an install step runs, st
   const builds: Record<string, string> = { first: fakeServer, second: fakeServer.replace('.sock', '-downloaded.sock') }
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: (request) => new Response(builds[new URL(request.url).pathname.slice(1)]) })
   const download = (build: string) =>
-    cmodWith(home, { CMOD_DATA: join(home, '.local/share/cmod/data/demo') }, 'download', 'fake-server', `${process.platform}-${process.arch}`, `${server.url}${build}`, new Bun.CryptoHasher('sha256').update(builds[build] as string).digest('hex'))
+    cmodWith(home, { CMOD_DATA: join(home, '.local/share/cmod/data/demo'), CMOD_CACHE: join(home, '.cache/cmod/demo') }, 'download', 'fake-server', `${process.platform}-${process.arch}`, `${server.url}${build}`, new Bun.CryptoHasher('sha256').update(builds[build] as string).digest('hex'))
   try {
     expect((await download('first')).exitCode).toBe(0)
     const old = await startHolderWithoutBuildCheck(home, join(instances(home), 'fake-server.json'), 'fake-server')
@@ -473,7 +485,7 @@ test.concurrent('cmod program refuses a process type launchd has no class for, a
 
   expect([unknown.exitCode, unknown.stderr]).toEqual([1, 'cmod program: cmod program --process-type takes Interactive or Background, not Urgent.\n'])
   expect([elected.exitCode, elected.stderr]).toEqual([1, 'cmod program: cmod program --process-type names the launchd class of a service, so it goes with --service.\n'])
-  expect([unnamed.exitCode, unnamed.stderr]).toEqual([1, 'cmod program: cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/SessionStore, not Platform.\n'])
+  expect([unnamed.exitCode, unnamed.stderr]).toEqual([1, 'cmod program: cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/Sessions, not Platform.\n'])
 })
 
 test.concurrent("a cmod command the service's program runs finds the Claude Code of the session that wrote the service, though the service's PATH holds no claude", async () => {
@@ -591,6 +603,37 @@ test.concurrent('a second cmod program --service of the same mod and program, fr
 
   await Bun.sleep(1000)
   expect(serverIds(home, 'start')).toHaveLength(1)
+  expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
+}, 60000)
+
+test.concurrent("cmod program --service gives the service the session's XDG_CONFIG_HOME and HERDR_APP_HOME, so cmod serve finds a Herdr home the person moved, and a second session with the same ones loads nothing again", async () => {
+  const home = await serviceHome()
+  const moved = { XDG_CONFIG_HOME: join(home, '.config'), HERDR_APP_HOME: join(home, 'herdr') }
+  expect(await cmodWith(home, moved, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const written = statSync(unitOf(home, 'demo'))
+  const loaded = serviceCalls(home).length
+
+  expect(await cmodWith(home, moved, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+
+  const unit = readFileSync(unitOf(home, 'demo'), 'utf8')
+  expect([unit.includes(moved.XDG_CONFIG_HOME), unit.includes(moved.HERDR_APP_HOME)]).toEqual([true, true])
+  expect([statSync(unitOf(home, 'demo')).ino, statSync(unitOf(home, 'demo')).mtimeMs]).toEqual([written.ino, written.mtimeMs])
+  expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
+}, 60000)
+
+test.concurrent("a service's program runs with the CMOD_DATA and CMOD_CACHE of the session that wrote the service, though the session moved its XDG_CACHE_HOME, and a second session with the same folders loads nothing again", async () => {
+  const home = await serviceHome()
+  await writeExecutables(home, { '.local/share/cmod/programs/fake-server': `${foldersServer.trimEnd()}\nwhile :; do sleep 0.1; done\n` })
+  const moved = { XDG_CACHE_HOME: join(home, 'caches') }
+  expect(await cmodWith(home, moved, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const written = statSync(unitOf(home, 'demo'))
+  const loaded = serviceCalls(home).length
+
+  expect(await cmodWith(home, moved, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+
+  expect(serverLog(home)).toEqual([`data ${home}/.local/share/cmod/data/demo`, `cache ${home}/caches/cmod/demo`])
+  expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toContain(moved.XDG_CACHE_HOME)
+  expect([statSync(unitOf(home, 'demo')).ino, statSync(unitOf(home, 'demo')).mtimeMs]).toEqual([written.ino, written.mtimeMs])
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
 }, 60000)
 

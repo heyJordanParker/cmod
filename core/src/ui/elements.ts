@@ -19,6 +19,7 @@ import type {
   TextProps as ClaudeTextProps,
   UiPressArgument,
 } from 'claude-code'
+import type { Surface } from '../mod.js'
 
 export type BoxProps = ClaudeBoxProps
 export type TextProps = ClaudeTextProps
@@ -26,12 +27,12 @@ export type CodeProps = ClaudeCodeProps
 export type MarkdownProps = ClaudeMarkdownProps
 export type InputProps = ClaudeInputProps
 export type SelectProps = ClaudeSelectProps
-export type ImageProps = ClaudeImageProps
-export type SvgProps = ClaudeSvgProps
-export type RasterProps = ClaudeRasterProps
+export type ImageProps = Omit<ClaudeImageProps, 'alt'> & { readonly label: string }
+export type SvgProps = Omit<ClaudeSvgProps, 'alt'> & { readonly label: string }
+export type RasterProps = ClaudeRasterProps & { readonly label: string }
 export type ClientProps = ClaudeClientProps
 export type Color = ClaudeColor
-export type Press = UiPressArgument
+export type Press = Omit<UiPressArgument, 'surface'> & { readonly surface: Surface }
 
 export type ButtonProps = Omit<ClaudeButtonProps, 'onPress'> & ({ readonly onPress: (press: Press) => void; readonly href?: never } | { readonly href: string; readonly onPress?: never })
 
@@ -100,17 +101,17 @@ const handlerKey = '$cmodHandler'
 
 export type Handler = (...args: unknown[]) => unknown
 
-export function elementData(value: unknown, handlers: Handler[]): unknown {
-  if (typeof value === 'function') return { [handlerKey]: handlers.push(value as Handler) - 1 }
-  if (Array.isArray(value)) return value.map((each: unknown) => elementData(each, handlers))
+export function elementData(value: unknown, numberOf: (run: Handler) => number): unknown {
+  if (typeof value === 'function') return { [handlerKey]: numberOf(value as Handler) }
+  if (Array.isArray(value)) return value.map((each: unknown) => elementData(each, numberOf))
   if (typeof value !== 'object' || value === null) return value
   if (unbuilt in value) {
     const { name, props } = (value as Unbuilt)[unbuilt]
     if (name === 'Client') throw new Error('Client draws only in panes and styles.')
-    return { [elementKey]: name, props: elementData(props, handlers) }
+    return { [elementKey]: name, props: elementData(props, numberOf) }
   }
   if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
-  return Object.fromEntries(Object.entries(value).map(([key, each]) => [key, elementData(each, handlers)]))
+  return Object.fromEntries(Object.entries(value).map(([key, each]) => [key, elementData(each, numberOf)]))
 }
 
 export function elementOf(data: unknown, keyPrefix: string, press: (handler: number, args: readonly unknown[]) => void): unknown {
@@ -139,17 +140,21 @@ export function drawsFocusable(data: unknown, key: string): boolean {
   return Object.values(fields).some((each) => drawsFocusable(each, key))
 }
 
-export function withLinks(table: ElementTable, surface: RenderSurface, open: (href: string, press: Press) => void): ElementTable {
-  const { Button: button, Link: link } = table as CompletedTable
+export function forClaudeCode(table: ElementTable, surface: RenderSurface, open: (href: string, press: UiPressArgument) => void): ElementTable {
+  const { Button: button, Link: link, Image: image, Svg: svg, Raster: raster } = table as CompletedTable
   const opening = (props: Readonly<Record<string, unknown>>) => {
     const { href, ...rest } = props
     if (typeof href !== 'string') return button(props)
     const { label, children } = rest
     const hasChildren = children !== undefined && !(Array.isArray(children) && children.length === 0)
     if (surface !== 'terminal' && href.startsWith('https:')) return link({ href, ...(typeof label === 'string' ? { label } : {}), ...(hasChildren ? { children } : {}) })
-    return button({ ...rest, onPress: (press: Press) => open(href, press) })
+    return button({ ...rest, onPress: (press: UiPressArgument) => open(href, press) })
   }
-  return { ...table, Button: opening }
+  const named =
+    (draw: (props: object) => RenderElement) =>
+    ({ label, ...rest }: Readonly<Record<string, unknown>>) =>
+      draw({ alt: label, ...rest })
+  return { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }: Readonly<Record<string, unknown>>) => raster(rest) }
 }
 
 export const Box = element('Box')
@@ -160,9 +165,9 @@ export const Code = element('Code')
 export const Markdown = element('Markdown')
 export const Input = element('Input')
 export const Select = element('Select')
-export const Image = element('Image')
-export const Svg = element('Svg')
-export const Raster = element('Raster')
+export const Image = element('Image') as unknown as ElementConstructor<ImageProps>
+export const Svg = element('Svg') as unknown as ElementConstructor<SvgProps>
+export const Raster = element('Raster') as unknown as ElementConstructor<RasterProps>
 export const Client = element('Client')
 
 const constructors = { Box, Text, Button, Link, Code, Markdown, Input, Select, Image, Svg, Raster }

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
 import { defineMod } from '../../src/mod.js'
+import { providerHoldMs } from '../../src/runtime/interfaces.js'
 import { testMod } from '../../src/testing.js'
 
 function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: () => void = () => undefined): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -47,8 +48,30 @@ test('a first line unix:/tmp/x.sock resolves ready() to the socket and http://lo
 
   expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/x.sock' })
   expect(started.state).toBe('running')
-  expect(spawned).toEqual([{ argv: ['preview-server', '--port', '0'] }])
+  expect(spawned).toEqual([{ argv: ['preview-server', '--port', '0'], env: { CMOD_DATA: '/test/home/.local/share/cmod/data/demo', CMOD_CACHE: '/test/home/.cache/cmod/demo' } }])
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the preview-server program.')
+})
+
+test("a program runs with CMOD_DATA and CMOD_CACHE, the folders mod.dataFolder and mod.cacheFolder name, beside the program's own environment", async () => {
+  const spawned: ProcessSpawnRequest[] = []
+  let folders: readonly string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        folders = [mod.dataFolder, mod.cacheFolder]
+        mod.use(program({ command: ['preview-server'], environment: { PREVIEW_ROOT: '/srv/site' } }))
+      },
+    }),
+  )
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request)
+    return written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false)
+  }
+
+  await tested.start()
+
+  expect(spawned.map(({ env }) => env)).toEqual([{ CMOD_DATA: folders[0] as string, CMOD_CACHE: folders[1] as string, PREVIEW_ROOT: '/srv/site' }])
 })
 
 test('a first line 127.0.0.1:53211 resolves ready() to its http URL, even when the line comes in two pieces', async () => {
@@ -82,6 +105,86 @@ test('a first line hello fails the start, closes the program, and the notice and
     message: 'The preview-server program stopped',
     description: 'its first line is "hello". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.',
   })
+})
+
+test("a program that fails as ready() counts fatal rejects provider(name) with ready()'s error, whether it was asked before the failure or after", async () => {
+  let printFirstLine: () => void = () => undefined
+  const firstLine = new Promise<void>((resolve) => {
+    printFirstLine = resolve
+  })
+  const { tested, ready } = preview(() =>
+    Object.assign(
+      (async function* () {
+        await firstLine
+        yield { stream: 'stdout' as const, text: 'hello\n' }
+        await new Promise(() => undefined)
+        return { code: 1, signal: null }
+      })(),
+      { result: new Promise<ProcessSpawnResult>(() => undefined) },
+    ),
+    true,
+  )
+  const holds: (() => void)[] = []
+  tested.fakes.clock.after = (ms, fn) => {
+    if (ms === providerHoldMs) holds.push(fn)
+    else void Promise.resolve().then(fn)
+    return { cancel: () => undefined }
+  }
+  const started = await ready()
+
+  const askedBefore = started.provider('demo/Echo').catch((error: unknown) => (error as Error).message)
+  printFirstLine()
+  const before = await askedBefore
+  const after = await started.provider('demo/Echo').catch((error: unknown) => (error as Error).message)
+  const readied = await started.ready().catch((error: unknown) => (error as Error).message)
+
+  expect(holds.length).toBeGreaterThan(0)
+  expect(started.state).toBe('fatal')
+  expect(before).toBe('demo: the preview-server program stopped: its first line is "hello". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.')
+  expect([after, readied]).toEqual([before, before])
+})
+
+test("a singleInstance program whose holder prints provided runs from that line alone, with no cmod:provider call, and ready() asked before or after it rejects with the way to reach the program", async () => {
+  let printProvided: () => void = () => undefined
+  const isProvided = new Promise<void>((resolve) => {
+    printProvided = resolve
+  })
+  const { tested, ready } = preview(
+    () =>
+      Object.assign(
+        (async function* () {
+          await isProvided
+          yield { stream: 'stdout' as const, text: 'provided\n' }
+          await new Promise(() => undefined)
+          return { code: 0, signal: null }
+        })(),
+        { result: new Promise<ProcessSpawnResult>(() => undefined) },
+      ),
+    true,
+  )
+  const asked: string[] = []
+  const answerCmod = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (call) => (asked.push(call.method), answerCmod?.(call))
+  const started = await ready()
+
+  const askedBefore = started.ready().catch((error: unknown) => (error as Error).message)
+  const beforeProvided = started.state
+  printProvided()
+  const before = await askedBefore
+  const after = await started.ready().catch((error: unknown) => (error as Error).message)
+  await tested.settle()
+
+  expect(beforeProvided).toBe('starting')
+  expect(started.state).toBe('running')
+  expect([before, after]).toEqual(Array(2).fill('demo: the preview-server program printed no address, because it only provides interfaces. Reach them through provider(name).'))
+  expect(asked.filter((method) => method === 'cmod:provider')).toEqual([])
+})
+
+test('a program with neither singleInstance nor isService rejects provider(name) at once, because each session runs its own copy', async () => {
+  const { ready } = preview(() => written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false))
+  const started = await ready()
+
+  await expect(started.provider('demo/Echo')).rejects.toThrow('demo: provider(demo/Echo) needs the preview-server program to run as singleInstance or isService, because only one copy of a program can provide an interface.')
 })
 
 test("a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal with its last standard error line, which reaches cmod's Log and toasts only where cmod answers show", async () => {

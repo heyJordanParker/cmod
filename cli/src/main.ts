@@ -18,14 +18,15 @@ const commands: Record<string, () => Promise<Command>> = {
   publish: () => import('./commands/publish.js'),
   setup: () => import('./commands/setup.js'),
   teardown: () => import('./commands/teardown.js'),
-  option: () => import('./commands/option.js'),
   options: () => import('./commands/options.js'),
-  hotkey: () => import('./commands/hotkey.js'),
-  secret: () => import('./commands/secret.js'),
+  hotkeys: () => import('./commands/hotkeys.js'),
+  secrets: () => import('./commands/secrets.js'),
+  data: () => import('./commands/data.js'),
   settings: () => import('./commands/settings.js'),
   rules: () => import('./commands/rules.js'),
   device: () => import('./commands/device.js'),
-  history: () => import('./commands/history.js'),
+  sessions: () => import('./commands/sessions.js'),
+  ui: () => import('./commands/ui.js'),
   log: () => import('./commands/log.js'),
   task: () => import('./commands/task.js'),
   watch: () => import('./commands/watch.js'),
@@ -35,6 +36,8 @@ const commands: Record<string, () => Promise<Command>> = {
   program: () => import('./commands/program.js'),
   download: () => import('./commands/download.js'),
 }
+
+const renamedCommands: Readonly<Record<string, readonly string[]>> = { option: ['options', 'set'], secret: ['secrets'], history: ['sessions'], hotkey: ['hotkeys', 'set'] }
 
 const changesRules: readonly string[] = ['install', 'update', 'remove', 'enable', 'disable', 'link', 'unlink', 'setup', 'teardown']
 
@@ -51,7 +54,8 @@ ${lines.join('\n')}
 Run cmod <command> --help for a command's arguments. cmod --version prints the version.`
 }
 
-const [name, ...argv] = process.argv.slice(2)
+const [called, ...calledArgv] = process.argv.slice(2)
+const [name, ...argv] = called !== undefined && Object.hasOwn(renamedCommands, called) ? [...(renamedCommands[called] as readonly string[]), ...calledArgv] : process.argv.slice(2)
 const ownArguments = argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv
 
 if (name === '--version' || name === '-v') {
@@ -75,7 +79,7 @@ if (name === '--version' || name === '-v') {
     } catch (error) {
       const { interruptProgress } = await import('./progress.js')
       interruptProgress()
-      process.stderr.write(`cmod ${name}: ${messageOf(error)}\n`)
+      process.stderr.write(`cmod ${called}: ${messageOf(error)}\n`)
       process.exitCode = 1
     } finally {
       if (changesPlugins.includes(name)) {

@@ -81,7 +81,7 @@ export async function run(argv: string[]): Promise<number> {
     .flatMap((dependencies) => Object.entries(isObject(dependencies) ? dependencies : {}))
     .filter(([, spec]) => typeof spec === 'string' && /^(file|link):/.test(spec))
   if (local.length > 0) {
-    throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.`)
+    throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this device, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.`)
   }
   const git = (...args: string[]) => runCommand(['git', '-C', plugin.root, ...args])
   const answer = (...args: string[]) => gitAnswer(plugin.root, args)

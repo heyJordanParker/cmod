@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { createDecipheriv } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -225,22 +225,18 @@ const sealedVersion = 'v10'
 
 export async function readSecret(mod: string, key: string): Promise<string | undefined> {
   const value = (await readSecretsFile())[mod]?.[key]
-  if (value === undefined || process.platform !== 'darwin') return value
-  const where = `The secret ${key} of ${mod} in ${tilde(secretsPath())}`
-  const safeKey = await readSafeStorageKey()
-  if (safeKey === undefined) throw new Error(`${where} is sealed, and your login keychain has no ${safeStorage} item to open it. Store the secret again.`)
-  return unseal(value, safeKey, where)
+  if (value === undefined || !isSealed(value)) return value
+  return (await changeSecretsFile(() => undefined))[mod]?.[key]
 }
 
 export async function storeSecret(mod: string, key: string, value: string): Promise<void> {
-  await changeSecretsFile(async (all) => {
-    const kept = process.platform === 'darwin' ? seal(value, await safeStorageKey()) : value
-    all[mod] = Object.assign(all[mod] ?? Object.create(null), { [key]: kept })
+  await changeSecretsFile((all) => {
+    all[mod] = Object.assign(all[mod] ?? Object.create(null), { [key]: value })
   })
 }
 
 export async function deleteSecrets(mod: string, keys?: readonly string[]): Promise<void> {
-  await changeSecretsFile(async (all) => {
+  await changeSecretsFile((all) => {
     const secrets = all[mod]
     if (secrets === undefined) return
     for (const key of keys ?? Object.keys(secrets)) delete secrets[key]
@@ -248,15 +244,31 @@ export async function deleteSecrets(mod: string, keys?: readonly string[]): Prom
   })
 }
 
-async function changeSecretsFile(change: (all: Record<string, Secrets>) => Promise<void>): Promise<void> {
+async function changeSecretsFile(change: (all: Record<string, Secrets>) => void): Promise<Record<string, Secrets>> {
   const lock = await takeLock(storePath('secrets.json.lock'))
   try {
     const all = await readSecretsFile()
     const before = JSON.stringify(all)
-    await change(all)
+    change(all)
+    await unsealSecrets(all)
     if (JSON.stringify(all) !== before) await writeSecretsFile(all)
+    return all
   } finally {
     await lock[Symbol.asyncDispose]()
+  }
+}
+
+async function unsealSecrets(all: Record<string, Secrets>): Promise<void> {
+  let safeKey: Promise<Buffer | undefined> | undefined
+  for (const [mod, secrets] of Object.entries(all)) {
+    for (const [key, value] of Object.entries(secrets)) {
+      if (!isSealed(value)) continue
+      const where = `The secret ${key} of ${mod} in ${tilde(secretsPath())}, which an older cmod sealed,`
+      const fix = `Store it again, or delete it with cmod secrets delete ${mod} ${key}.`
+      const opened = await (safeKey ??= readSafeStorageKey())
+      if (opened === undefined) throw new Error(`${where} needs the ${safeStorage} item in your login keychain to open, and there is none. ${fix}`)
+      secrets[key] = unseal(value, opened, `${where} does not open with the ${safeStorage} key in your login keychain. ${fix}`)
+    }
   }
 }
 
@@ -268,38 +280,25 @@ async function readSafeStorageKey(): Promise<Buffer | undefined> {
   if (!existsSync(loginKeychain())) return undefined
   const found = await capture([security, 'find-generic-password', '-s', safeStorage, '-a', safeStorageAccount, '-w', loginKeychain()])
   if (found.exitCode === itemNotFound) return undefined
-  if (found.exitCode !== 0) throw new Error(`Your login keychain refused cmod its ${safeStorage} key: ${found.stderr.trim().split('\n').at(-1) ?? ''}`)
+  if (found.exitCode !== 0) throw new Error(`Your login keychain refused cmod its ${safeStorage} key, which opens the secrets an older cmod sealed: ${found.stderr.trim().split('\n').at(-1) ?? ''}`)
   const key = Buffer.from(found.stdout.trim(), 'base64')
-  if (key.length !== 32) throw new Error(`The ${safeStorage} item in your login keychain holds no 32-byte key, so cmod opens no secret. Delete it in Keychain Access, then store each secret again.`)
+  if (key.length !== 32) throw new Error(`The ${safeStorage} item in your login keychain holds no 32-byte key, so cmod opens none of the secrets an older cmod sealed. Store each of them again.`)
   return key
 }
 
-async function safeStorageKey(): Promise<Buffer> {
-  const keychain = loginKeychain()
-  if (!existsSync(keychain)) throw new Error(`${tilde(keychain)} does not exist, so cmod has no login keychain to keep the key to its secrets in. Run cmod with HOME set to your home folder.`)
-  const found = await readSafeStorageKey()
-  if (found !== undefined) return found
-  const key = randomBytes(32)
-  const written = await capture([security, '-i'], { stdin: { text: `add-generic-password -s "${safeStorage}" -a "${safeStorageAccount}" -X "${Buffer.from(key.toString('base64')).toString('hex')}" "${keychain}"\n` } })
-  if (written.exitCode !== 0) throw new Error(`Your login keychain did not keep the ${safeStorage} key: security exited ${written.exitCode}.`)
-  return key
+function isSealed(value: string): boolean {
+  const sealed = Buffer.from(value, 'base64')
+  return sealed.length >= sealedVersion.length + 12 + 16 && sealed.subarray(0, sealedVersion.length).toString() === sealedVersion && sealed.toString('base64') === value
 }
 
-function seal(value: string, key: Buffer): string {
-  const nonce = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', key, nonce)
-  return Buffer.concat([Buffer.from(sealedVersion), nonce, cipher.update(value, 'utf8'), cipher.final(), cipher.getAuthTag()]).toString('base64')
-}
-
-function unseal(text: string, key: Buffer, where: string): string {
-  const sealed = Buffer.from(text, 'base64')
-  if (sealed.length < sealedVersion.length + 12 + 16 || sealed.subarray(0, sealedVersion.length).toString() !== sealedVersion) throw new Error(`${where} is not sealed by cmod. Store it again.`)
+function unseal(value: string, key: Buffer, failure: string): string {
+  const sealed = Buffer.from(value, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(sealedVersion.length, sealedVersion.length + 12))
   decipher.setAuthTag(sealed.subarray(-16))
   try {
     return Buffer.concat([decipher.update(sealed.subarray(sealedVersion.length + 12, -16)), decipher.final()]).toString('utf8')
   } catch (error) {
-    throw new Error(`${where} does not open with the ${safeStorage} key in your login keychain. Store it again.`, { cause: error })
+    throw new Error(failure, { cause: error })
   }
 }
 

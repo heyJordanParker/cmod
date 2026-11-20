@@ -16,7 +16,7 @@ export const help = `Usage: cmod new <name> [--project]
 
 ${summary}
 
-Creates a mod in ./<name>: a defineMod with one listener, one pane, and one
+Creates a mod in ./<name>: a defineMod with one listener, one view, and one
 widget below the prompt, a Skill, a rule, and a test. Then installs its
 packages.
 
@@ -87,8 +87,8 @@ What changed in each version of ${name}, for the people who use it. cmod publish
 ## [0.1.0]
 
 ### Added
-- A Sidebar page and a widget below the prompt that count the prompts of this session.
-- The alt+shift+p hotkey, which shows or hides the page.
+- A view and a widget below the prompt that count the prompts of this session.
+- The alt+shift+p hotkey, which shows or hides the view.
 - A rule that tells Claude where to read the count.
 `,
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
@@ -100,8 +100,8 @@ export function register(addHook: AddHook, options: PluginOptions): void {
 }
 `,
     'src/mod.tsx': `import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
-import { promptsPage } from './pages/prompts.js'
 import { initialState } from './state.js'
+import { promptsView } from './views/prompts.js'
 import { promptsWidget } from './widgets/prompts.js'
 
 export const ${definition} = defineMod({
@@ -112,9 +112,9 @@ export const ${definition} = defineMod({
   },
 
   setup(mod) {
-    const page = mod.sidebar.add(promptsPage)
+    const view = mod.views.add(promptsView)
     mod.widgets.add(promptsWidget)
-    mod.hotkeys.toggle.onPress(() => page.toggle())
+    mod.hotkeys.toggle.onPress(() => view.toggle())
 
     sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
@@ -126,11 +126,11 @@ export const ${definition} = defineMod({
 
 export const initialState: ${state} = { session: { prompts: 0 } }
 `,
-    'src/pages/prompts.tsx': `import type { PageInit } from '../../node_modules/@cmodjs/core/mod.js'
+    'src/views/prompts.tsx': `import type { ViewInit } from '../../node_modules/@cmodjs/core/mod.js'
 import { PromptCount } from '../components/prompt-count.js'
 import type { ${state} } from '../state.js'
 
-export const promptsPage: PageInit<${state}> = {
+export const promptsView: ViewInit<${state}> = {
   id: 'prompts',
   title: 'Prompts',
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
@@ -141,7 +141,7 @@ import { PromptCount } from '../components/prompt-count.js'
 import type { ${state} } from '../state.js'
 
 export const promptsWidget: WidgetInit<${state}> = {
-  id: 'prompts',
+  id: 'prompt-count',
   title: 'Prompt count',
   areas: [BelowPrompt, Dashboard],
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
@@ -175,7 +175,7 @@ test('the hotkey shows the prompt count in the Sidebar', async () => {
   const tested = testMod(${definition})
   await tested.add({ type: Prompt, text: 'hello' })
   await tested.hotkey('toggle')
-  expect(await tested.shown.page.lines()).toEqual(['Prompts this session: 1'])
+  expect(await tested.shown.view.lines()).toEqual(['Prompts this session: 1'])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---
@@ -204,8 +204,8 @@ The ${name} mod counts the prompts of this session and shows the count in the Si
 - \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (cmod) work.
 - \`tsc\` reads \`.claude-plugin/types/\`, which Claude Code writes when it loads the mod. \`cmod check\` writes it when it is missing or links into a folder that is gone, such as after \`cmod try\`, so run \`cmod check\` before \`tsc\` in a fresh clone.
 - \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only registers it with Claude Code.
-- \`src/pages/\` holds one Sidebar or Settings page per file, \`src/panes/\` one pane, and \`src/widgets/\` one widget.
-- \`src/components/\` holds the components pages, panes, widgets, and styles draw with.
+- \`src/views/\` holds one view per file, for beside the session or in Settings, \`src/pages/\` one page, \`src/panes/\` one pane, and \`src/widgets/\` one widget.
+- \`src/components/\` holds the components views, pages, panes, widgets, and styles draw with.
 - \`cmod check\` writes the hotkeys \`defineMod\` declares into \`package.json\` \`"cmod.hotkeys"\`, which cmod binds at install.
 - \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on.
 - \`cmod link\` loads this checkout in every Claude Code session, the running ones too. \`cmod unlink\` stops it.

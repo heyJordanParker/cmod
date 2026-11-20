@@ -248,21 +248,30 @@ function watchOutput(child: Started & { stdout: ReadableStream<Uint8Array>; stde
   started.push(child)
   const output = { stdout: '', stderr: '' }
   let isDone = false
+  const printedLine = Promise.withResolvers<void>()
   const read = async (name: 'stdout' | 'stderr') => {
     const decoder = new TextDecoder()
-    for await (const bytes of child[name]) output[name] += decoder.decode(bytes, { stream: true })
+    for await (const bytes of child[name]) {
+      output[name] += decoder.decode(bytes, { stream: true })
+      if (output.stdout.includes('\n')) printedLine.resolve()
+    }
   }
   const done = Promise.all([read('stdout'), read('stderr'), child.exited]).then(([, , exitCode]) => {
     isDone = true
     return { exitCode, ...output }
   })
+  async function firstLine(): Promise<string> {
+    await Promise.race([printedLine.promise, done])
+    if (!output.stdout.includes('\n')) throw new Error(`cmod exited ${child.exitCode} before it printed a line. It printed:\n${output.stderr}`)
+    return output.stdout.slice(0, output.stdout.indexOf('\n'))
+  }
   async function waitForOutput(text: string): Promise<void> {
     while (!output.stdout.includes(text) && !output.stderr.includes(text)) {
       if (isDone) throw new Error(`cmod exited ${child.exitCode} before it printed "${text}". It printed:\n${output.stdout}${output.stderr}`)
       await Bun.sleep(10)
     }
   }
-  return { done, waitForOutput }
+  return { done, waitForOutput, firstLine }
 }
 
 export function environment(home: string): Record<string, string | undefined> {
@@ -272,6 +281,8 @@ export function environment(home: string): Record<string, string | undefined> {
     TMPDIR: join(home, 'tmp'),
     XDG_DATA_HOME: '',
     XDG_CONFIG_HOME: '',
+    XDG_CACHE_HOME: '',
+    HERDR_APP_HOME: '',
     CLAUDE_CONFIG_DIR: '',
     CLAUDE_CODE_EXECPATH: '',
     BROWSER: '',

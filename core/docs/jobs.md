@@ -8,7 +8,7 @@ mod.use<Handle>(job: Job<Handle, State>): Handle
 type Job<Handle, State> = (context: JobContext<State>) => Handle
 ```
 
-Each job function, such as `slashCommand(options)`, returns a `Job`. `mod.use` runs the job and returns its handle. A job that has nothing to hand back returns `void`.
+Each job function, such as `slashCommand(options)`, returns a `Job`. `mod.use` runs the job and returns its handle. `permissions`, `check`, `prompt`, and `schedule` hand back a `Subscription`, whose `remove()` takes the job's feature away.
 
 A job's bad options throw at one of two times. `check`, `permissions`, `prompt`, and `schedule` check their options when the job function is called. `slashCommand`, `tool`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
 
@@ -51,7 +51,7 @@ slashCommand<State>(options: {
   readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => CommandReply | void | Promise<CommandReply | void>
 }): Job<SlashCommand, State>
 
-type CommandReply = string | { text?: string; context?: string } | undefined
+type CommandReply = string | { text?: string; note?: string } | undefined
 type SlashCommand = { readonly name: string; remove(): void }
 ```
 
@@ -60,10 +60,10 @@ type SlashCommand = { readonly name: string; remove(): void }
 - `argumentHint` is drawn dim after the name, such as `[path]`.
 - `immediate: true` runs the command at once while Claude is still working. Without it, the command waits for the turn to end.
 - A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies. `remove()` on the handle stops the mod answering the command.
-- A command's `reply` runs inside the person's own input, so a page or pane it opens shows at any width ([ui.md](ui.md#the-sidebar-and-its-pages)).
+- A command's `reply` runs inside the person's own input, so a view, page, or pane it opens shows at any width ([ui.md](ui.md#views-and-pages)).
 - A key combo is a hotkey, not a command ([mod.md](mod.md#hotkeys)).
 - `reply` gets `args` and `positionals`. `args` is everything after the name as Claude Code passes it, and `''` for a bare `/<name>`. cmod hands it on unchanged. `positionals` is that text split into words the way a shell splits them, so extra spaces never reach it. `tested.type('/todo  milk')` drops the spaces after the name.
-- A `string` reply, or `text`, shows as the command's output. `context` is text Claude reads after the output, and the person never sees. `undefined` shows nothing.
+- A `string` reply, or `text`, shows as the command's output. `note` is text Claude reads after the output, inside the mod's tag, and the person never sees. `undefined` shows nothing.
 - A `reply` that throws shows `/<name> failed: <error>`.
 - Two commands with one name in a mod throw `<mod>: the slash command /<name> is already added. Give each slashCommand its own name.`
 - When Claude Code refuses to add the command, cmod logs `<mod>: /<name> is not added: <error>`.
@@ -83,7 +83,7 @@ export const myMod = defineMod({
         argumentHint: '<item>',
         reply: ({ args }, mod) => {
           mod.state.project.items = [...mod.state.project.items, args]
-          return { text: `Added: ${args}`, context: `The to-do list is now: ${mod.state.project.items.join(', ')}` }
+          return { text: `Added: ${args}`, note: `The to-do list is now: ${mod.state.project.items.join(', ')}` }
         },
       }),
     )
@@ -172,7 +172,7 @@ A `command` pattern is not a glob. cmod splits it into words the way it splits a
 A `deny` rule works in every mod. An `ask` rule needs `"approve": true` in `package.json` `"cmod"`, because `cmod publish` leaves the code that asks out of the bundle of a mod without it ([commands.md](commands.md#cmod-publish)). `cmod check` adds the line when the mod has an `ask` rule.
 
 ```ts
-permissions<State>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<void, State>
+permissions<State>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<Subscription, State>
 
 type PermissionRules<State> = { deny?: Rule<State>[]; ask?: Rule<State>[] }
 
@@ -227,7 +227,7 @@ export const myMod = defineMod({
 ## check
 
 ```ts
-check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State>
+check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<Subscription, State>
 ```
 
 - After each call that matches `after` and succeeds, cmod runs `run`. A call that was denied or failed runs nothing.
@@ -256,7 +256,7 @@ prompt<State>(options: {
   name: string
   prompt: string | ((input: { call?: Call & { folder: string } }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
   after?: Target | Target[]
-}): Job<void, State>
+}): Job<Subscription, State>
 ```
 
 `prompt` adds text that Claude reads. `after` picks when:
@@ -289,7 +289,7 @@ export const myMod = defineMod({
 ## schedule
 
 ```ts
-schedule<State>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<void, State>
+schedule<State>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<Subscription, State>
 
 type ScheduledPrompt = { readonly cron: string; readonly prompt: string }
 ```
@@ -318,26 +318,29 @@ export const myMod = defineMod({
 ## program
 
 ```ts
-program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean; readonly isWebApp?: boolean; readonly provides?: readonly InterfaceName[]; readonly processType?: 'Interactive' | 'Background' }): Job<Program>
+program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean; readonly isWebApp?: boolean; readonly processType?: 'Interactive' | 'Background' }): Job<Program>
 
 type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
   ready(): Promise<{ url: string; socketPath?: string; tailnetUrl?: string }>
+  provider<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>>
 }
 ```
 
-`program` runs a background program, such as a preview server, and hands the mod its address.
+`program` runs a background program, such as a preview server, and hands the mod its address, or its provider of an interface.
 
 - `command` is the program on `PATH` and its arguments. `environment` sets variables for it. An empty `command` throws.
 - The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `http.fetch`, which reaches that address.
-- In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
+- In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()` or `provider(name)`.
+- The program has started once it prints its address, or, with `singleInstance` or `isService`, once it provides any interface through `connect()`. `state` is `'starting'` until then, and `'running'` after. Only an address resolves `ready()`, so once a program that only provides is running, `ready()` rejects with `<mod>: the <program> program printed no address, because it only provides interfaces. Reach them through provider(name).`
 - When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`, which shows `The <program> program stopped` with `Retry` where the mod's errors toast ([ui.md](ui.md#toasts)).
-- `singleInstance: true` runs one copy on the computer, however many sessions load the mod, such as a server that is the only writer of its data. The first session starts the copy through [`cmod program`](commands.md#cmod-program), every other session reads the copy's address from the cmod store and runs no process of its own, and every session's `ready()` resolves that copy's address. When the session running the copy ends, another open session starts a new copy within a few seconds, or within 20 seconds when the copy's session was killed with its `cmod program`, and from then on `ready()` resolves the new address in every session, so ask `ready()` before each use rather than keeping its answer. A copy a killed session left running is stopped before the new one starts. When cmod installs a new version of the mod, or builds a new program from its linked checkout, it stops the copy, whichever cmod started it, so the copy restarts on the new program a few seconds later, and `ready()` resolves the new copy's address. Two `singleInstance` programs with the same program name in one mod throw at `mod.use`.
-- `isService: true` makes the program a service of the computer, so it runs whenever the person is logged in, with no Claude Code open, such as a program that records sessions Claude Code never sees. The first session that starts the mod has [`cmod program`](commands.md#cmod-program) write a launchd agent on macOS, or a systemd user service on Linux, which starts the program at login and again whenever it exits, with `environment`. The service's `PATH` is cmod's programs folder, `/usr/local/bin`, `/opt/homebrew/bin`, and the system folders, unless `environment` sets `PATH`, and its `CLAUDE_CODE_EXECPATH` names the session's Claude Code by the path its updates keep, so a `cmod` command the program runs, such as `cmod options`, finds Claude Code. Every session reads the service's address from the cmod store, as a `singleInstance` program's sessions do, and `ready()` resolves it. The service runs one copy, so `isService` needs no `singleInstance` beside it. The mod writes no service file: the service restarts on the new program when cmod installs a new version of the mod or builds a new program from its linked checkout, and cmod stops and deletes it when the mod is removed. When a new version's setup no longer adds the `isService` program, because it dropped `isService` or renamed the program, the first session that starts that version stops and deletes the old service, so the computer stops running a program the mod no longer ships. Settings shows `Runs as a service of this computer` on the mod's page, and [`cmod list`](commands.md#cmod-list) names the program. On a computer that does not take the service, such as a Linux machine without a systemd user session, the program runs as a `singleInstance` program does. A service the computer took but could not start is removed, and the program fails with the service manager's error, as an exiting program does. A service whose program printed no address within 15 seconds and no longer runs is removed the same way. On macOS the program's standard error goes to `services/<mod>/<program>.log` in the cmod store, which that error names, and on Linux to the systemd journal. Two `isService` programs with the same program name in one mod throw at `mod.use`.
-- `isWebApp: true` puts a program the person opens in a browser on their tailnet, so it opens from each of their machines, with `singleInstance` or `isService` beside it, because the tailnet reaches one copy per computer. A web app with neither throws at `mod.use`. While Tailscale is signed in on the computer with HTTPS on, the program runs with `CMOD_TAILNET_NAME`, the computer's tailnet name, such as `my-computer.my-tailnet.ts.net`, and `CMOD_TAILNET_LOGIN`, the person's Tailscale login, and once it prints `127.0.0.1:<port>`, cmod runs `tailscale serve`, so `https://<CMOD_TAILNET_NAME>:<port>/` reaches it, and `ready()` resolves that address as `tailnetUrl`. The tailnet port stays the first port the program listened on, so the address stays the same when it listens on another port later. Tailscale forwards each request with its own `Host` and sets `Tailscale-User-Login` to the login of the person who sent it, replacing any the request carried. So the program answers a request through the tailnet only when the host name of its `Host` is `CMOD_TAILNET_NAME` and its `Tailscale-User-Login` is `CMOD_TAILNET_LOGIN`, because a work tailnet or a device someone shared reaches other people's devices. The program keeps listening on `127.0.0.1` only. cmod takes the program off the tailnet when it exits, stops and starts it again when the person turns `Open web apps from your other machines` in Settings, under cmod, Preferences, off or on, or when Tailscale becomes ready, which it checks every minute, and takes it off when the mod is removed. Without Tailscale, the program runs on `127.0.0.1` alone, and Settings shows the reason on the mod's page, or its tailnet address when it is on the tailnet. A program that listens on a `unix:` socket stays off the tailnet.
-- `provides` names each interface the program answers, such as `['anyhost/Platform']`, with `singleInstance` or `isService` beside it, because every caller reaches the program's one copy on the computer. cmod writes the names beside the copy's address, `providers()` finds the program by them, and each call reaches it as JSON-RPC over its address ([dependencies.md](dependencies.md#interfaces)). A program that provides an interface with neither, or a name that is no interface name, throws at `mod.use`.
+- `singleInstance: true` runs one copy on the computer, however many sessions load the mod, such as a server that is the only writer of its data. The first session starts the copy through [`cmod program`](commands.md#cmod-program), every other session reads the copy's address from the cmod store and runs no process of its own, and every session's `ready()` resolves that copy's address. When the session running the copy ends, another open session starts a new copy within a few seconds, or within 20 seconds when the copy's session was killed with its `cmod program`, and from then on `ready()` resolves the new address in every session, so ask `ready()` before each use rather than keeping its answer. The cmod store records the running copy's pid and start time, with its address once it prints one, or with no address once it provides an interface, for a program that only provides. A copy a killed session left running is stopped before the new one starts. When cmod installs a new version of the mod, or builds a new program from its linked checkout, it stops the recorded copy, whichever cmod started it, so the copy restarts on the new program a few seconds later, and `ready()` resolves the new copy's address, or `provider(name)` its provider. Two `singleInstance` programs with the same program name in one mod throw at `mod.use`.
+- `isService: true` makes the program a service of the computer, so it runs whenever the person is logged in, with no Claude Code open, such as a program that records sessions Claude Code never sees. The first session that starts the mod has [`cmod program`](commands.md#cmod-program) write a launchd agent on macOS, or a systemd user service on Linux, which starts the program at login and again whenever it exits, with `environment`. The service's `PATH` is cmod's programs folder, `/usr/local/bin`, `/opt/homebrew/bin`, and the system folders, unless `environment` sets `PATH`, and its `CLAUDE_CODE_EXECPATH` names the session's Claude Code by the path its updates keep, so a `cmod` command the program runs, such as `cmod options get`, finds Claude Code. Every session reads the service's address from the cmod store, as a `singleInstance` program's sessions do, and `ready()` resolves it. The service runs one copy, so `isService` needs no `singleInstance` beside it. The mod writes no service file: the service restarts on the new program when cmod installs a new version of the mod or builds a new program from its linked checkout, and cmod stops and deletes it when the mod is removed. When a new version's setup no longer adds the `isService` program, because it dropped `isService` or renamed the program, the first session that starts that version stops and deletes the old service, so the computer stops running a program the mod no longer ships. Settings shows `Runs as a service of this computer` in the mod's entry, and [`cmod list`](commands.md#cmod-list) names the program. On a computer that does not take the service, such as a Linux device without a systemd user session, the program runs as a `singleInstance` program does. A service the computer took but could not start is removed, and the program fails with the service manager's error, as an exiting program does. A service whose program has not started within 15 seconds and no longer runs is removed the same way. On macOS the program's standard error goes to `services/<mod>/<program>.log` in the cmod store, which that error names, and on Linux to the systemd journal. Two `isService` programs with the same program name in one mod throw at `mod.use`.
+- `isWebApp: true` puts a program the person opens in a browser on their tailnet, so it opens from each of their devices, with `singleInstance` or `isService` beside it, because the tailnet reaches one copy per computer. A web app with neither throws at `mod.use`. While Tailscale is signed in on the computer with HTTPS on, the program runs with `CMOD_TAILNET_NAME`, the computer's tailnet name, such as `my-computer.my-tailnet.ts.net`, and `CMOD_TAILNET_LOGIN`, the person's Tailscale login, and once it prints `127.0.0.1:<port>`, cmod runs `tailscale serve`, so `https://<CMOD_TAILNET_NAME>:<port>/` reaches it, and `ready()` resolves that address as `tailnetUrl`. The tailnet port stays the first port the program listened on, so the address stays the same when it listens on another port later. Tailscale forwards each request with its own `Host` and sets `Tailscale-User-Login` to the login of the person who sent it, replacing any the request carried. So the program answers a request through the tailnet only when the host name of its `Host` is `CMOD_TAILNET_NAME` and its `Tailscale-User-Login` is `CMOD_TAILNET_LOGIN`, because a work tailnet or a device someone shared reaches other people's devices. The program keeps listening on `127.0.0.1` only. cmod takes the program off the tailnet when it exits, stops and starts it again when the person turns `Open web apps from your other devices` in Settings, under cmod, Preferences, off or on, or when Tailscale becomes ready, which it checks every minute, and takes it off when the mod is removed. Without Tailscale, the program runs on `127.0.0.1` alone, and Settings shows the reason in the mod's entry, or its tailnet address when it is on the tailnet. A program that listens on a `unix:` socket stays off the tailnet.
+- Every program runs with `CMOD_DATA` and `CMOD_CACHE`, the folders `mod.dataFolder` and `mod.cacheFolder` name, as an install step gets them ([install-steps.md](install-steps.md#how-a-step-runs)), so it keeps its files where its mod does without asking `cmod data`. A service gets the folders of the session that wrote it. A program with `singleInstance` or `isService` also runs with `CMOD_MOD`, the mod's name, and `CMOD_PROGRAM`, the program's, so it provides interfaces for every session on the computer: it calls `connect()` from `rpc.js`, then `provide` from `mod.js` ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)).
+- `provider(name)` starts the program as `ready()` does, and resolves with this program's provider of `name` on this computer once the program provides it, typed from the interface as `providers` types it ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)). Another mod's program that provides the same name never answers it. It rejects as `ready()` rejects once the program is `fatal`. A program with neither `singleInstance` nor `isService` runs a copy per session, and only one copy of a program can provide an interface, so its `provider(name)` rejects at once with `<mod>: provider(<name>) needs the <program> program to run as singleInstance or isService, because only one copy of a program can provide an interface.` A program that only provides prints no address, so its mod waits for it with `provider(name)` instead of `ready()`. A provider that stops and provides again, such as a restarted service, is a new provider: a call on the old one fails with `<mod>'s <program> program does not run, so it answers no <interface>.`, and the mod asks `provider(name)` again, so ask it before each use rather than keeping its answer.
 - `processType` gives a service its launchd class on macOS, with `isService` beside it. launchd throttles a service with none on a loaded Mac, so `'Interactive'` runs one a session waits on at the priority of an app, and `'Background'` runs one nobody waits on at the lowest. systemd has no such class, so a Linux service takes none. A `processType` without `isService`, or another value, throws at `mod.use`.
-- A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
+- A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` runs by its name too, from cmod's programs folder ([install-steps.md](install-steps.md#run-a-program-by-its-name)).
 
 ```ts
 import { defineMod, http } from '../node_modules/@cmodjs/core/mod.js'
@@ -357,6 +360,28 @@ export const myMod = defineMod({
           const response = await http.fetch(`${url}/status`, socketPath === undefined ? {} : { socketPath })
           return response.text
         },
+      }),
+    )
+  },
+})
+```
+
+A mod whose service only provides `demo/Platform` calls it through `provider`:
+
+```ts
+import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { program } from '../node_modules/@cmodjs/core/jobs/program.js'
+import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
+
+export const myMod = defineMod({
+  name: 'my-mod',
+  setup(mod) {
+    const platform = mod.use(program({ command: ['platform-server'], isService: true }))
+    mod.use(
+      slashCommand({
+        name: 'machines',
+        description: 'List the machines in a region',
+        reply: async ({ args }) => (await (await platform.provider('demo/Platform')).machines(args)).join(', '),
       }),
     )
   },

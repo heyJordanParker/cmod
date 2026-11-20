@@ -117,12 +117,12 @@ test("a widget's button runs in the mod that drew it, and the widget draws its n
   expect(tested.state.session.count).toBe(2)
 })
 
-test("a widget's button opens a page of the mod in the Sidebar", async () => {
+test("a widget's button opens a view of the mod in the Sidebar", async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
-        const log = mod.sidebar.add({ id: 'log', title: 'Log', render: () => <Text>3 commits</Text> })
+        const log = mod.views.add({ id: 'log', title: 'Log', render: () => <Text>3 commits</Text> })
         mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], render: () => <Button key="log" label="main" onPress={() => log.open({ focus: true })} /> })
       },
     }),
@@ -130,8 +130,8 @@ test("a widget's button opens a page of the mod in the Sidebar", async () => {
 
   await tested.press(BelowPrompt, 'log')
 
-  expect(tested.shown.page.id).toBe('log')
-  expect(await tested.shown.page.lines()).toEqual(['3 commits'])
+  expect(tested.shown.view.id).toBe('log')
+  expect(await tested.shown.view.lines()).toEqual(['3 commits'])
 })
 
 test('a widget that throws is reported and draws nothing, and the widgets beside it still draw', async () => {
@@ -161,7 +161,7 @@ test('a widget that draws a Client is reported and draws nothing, and a Raster d
     withWidgets(
       'demo',
       { id: 'live', title: 'Live board', areas: [BelowPrompt], render: () => Client({ key: 'board', module: './board.tsx' }) },
-      { id: 'cells', title: 'Cells', areas: [BelowPrompt], render: () => Raster({ key: 'cells', columns: 2, rows: 1, cells: '' }) },
+      { id: 'cells', title: 'Cells', areas: [BelowPrompt], render: () => Raster({ key: 'cells', columns: 2, rows: 1, cells: '', label: 'two cells' }) },
     ),
     { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/live', 'demo/cells'], right: [] }] }) } },
   )
@@ -192,7 +192,14 @@ test('a removed widget draws nothing, and an added one draws at once', async () 
 })
 
 test('a second widget with one id is refused in setup', async () => {
-  await expect(testMod(withWidgets('demo', label('branch', 'main'), label('branch', 'dev'))).start()).rejects.toThrow('demo: the widget "branch" is already added. Give each widget its own id.')
+  await expect(testMod(withWidgets('demo', label('branch', 'main'), label('branch', 'dev'))).start()).rejects.toThrow('demo: the widget "branch" is already added. Give the widget another id.')
+})
+
+test("a view or page that takes a widget's id is refused, because cmod/UI names each part by its mod and id", async () => {
+  const taking = (add: (mod: Mod) => unknown) => testMod(defineMod({ name: 'demo', setup: (mod) => void (mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], render: () => <Text>main</Text> }), add(mod)) })).start()
+
+  await expect(taking((mod) => mod.views.add({ id: 'branch', title: 'Branch', render: () => <Text>main</Text> }))).rejects.toThrow('demo: the widget "branch" is already added. Give the view another id.')
+  await expect(taking((mod) => mod.pages.add({ id: 'branch', title: 'Branch', render: () => <Text>main</Text> }))).rejects.toThrow('demo: the widget "branch" is already added. Give the page another id.')
 })
 
 test('widgets.add refuses an id that is not one', async () => {
@@ -229,6 +236,22 @@ const servedLayout = (layout: string) => {
   return { fake, widgets, tell, saved }
 }
 
+test('a widget draws once for each surface it shows on, and its mod hears which surface each draw is for', async () => {
+  const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
+  const drawnFor: unknown[] = []
+  fake.fakes.cmod.call = async ({ method, input }) => (method === partMethods.draw ? (drawnFor.push((input as { readonly surface: string }).surface), { draw: 1, tree: null }) : null)
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
+  await fake.settle()
+
+  widgets.rows(BelowPrompt, { columns: 40, surface: 'browser' })
+  await fake.settle()
+  widgets.rows(BelowPrompt, { columns: 40, surface: 'terminal' })
+  widgets.rows(BelowPrompt, { columns: 40, surface: 'browser' })
+  await fake.settle()
+
+  expect(drawnFor).toEqual(['browser', 'terminal'])
+})
+
 test('a mod that lists a new widget asks Claude Code for one redraw, not one to place the widget and one to draw it', async () => {
   const { fake, tell } = servedLayout(layout({}))
   await fake.settle()
@@ -250,14 +273,14 @@ test('a fit widget keeps its width, a fill widget gives up width, only a side ho
     { id: 'later', title: 'Later', areas: [BelowPrompt], place: { side: 'center', size: 'half' } },
   ])
   await fake.settle()
-  widgets.rows(BelowPrompt, 40)
+  widgets.rows(BelowPrompt, { columns: 40, surface: 'terminal' })
   await fake.settle()
 
   const widget = (name: string, size: object) => ({ $cmodElement: 'Box', props: { ...size, children: { $cmodElement: 'Text', props: { children: name } } } })
   const side = (shrink: number, children: readonly object[]) => ({ $cmodElement: 'Box', props: { flexShrink: shrink, minWidth: 0, columnGap: 2, children } })
   const fit = { flexShrink: 0 }
   const fill = { flexGrow: 1, flexShrink: 1, minWidth: 0 }
-  expect(elementData(widgets.rows(BelowPrompt, 40), [])).toEqual([
+  expect(elementData(widgets.rows(BelowPrompt, { columns: 40, surface: 'terminal' }), () => 0)).toEqual([
     { $cmodElement: 'Box', props: { justifyContent: 'space-between', width: 40, columnGap: 2, children: [side(1, [widget('path', fill), widget('later', fit)]), side(0, [widget('clock', fit)])] } },
   ])
 })
@@ -356,9 +379,9 @@ test('the cmod plugin keeps the 200 drawings it showed last, and draws an older 
 
 test('a page keeps the handlers of its newest 200 params, so a page shown again with earlier params still takes a press', async () => {
   let pressed = 0
-  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add<{ readonly run: number }>({ id: 'runs', title: 'Runs', render: () => Button({ key: 'go', label: 'Go', onPress: () => void (pressed += 1) }) }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.pages.add<{ readonly run: number }>({ id: 'runs', title: 'Runs', render: () => Button({ key: 'go', label: 'Go', onPress: () => void (pressed += 1) }) }) }))
   await tested.start()
-  const draw = async (run: number) => ((await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { page: 'runs', params: { run }, columns: 80, isFocused: false }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }).value.draw
+  const draw = async (run: number) => ((await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { page: 'runs', params: { run }, columns: 80, isFocused: false, surface: 'terminal' }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }).value.draw
   const press = (draw: number) => tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw, handler: 0, args: [] }, caller: 'cmod' } as never)
   const first = await draw(0)
   const second = await draw(1)
@@ -381,7 +404,7 @@ test('two presses whose handlers overlap leave the mod telling the cmod plugin a
       name: 'demo',
       state: { session: { count: 0 } },
       setup(mod) {
-        mod.sidebar.add({ id: 'runs', title: 'Runs', render: (current) => Box({ children: [Text({ children: `count ${current.state.session.count}` }), Button({ key: 'slow', label: 'slow', onPress: () => slow }), Button({ key: 'fast', label: 'fast', onPress: () => fast })] }) })
+        mod.views.add({ id: 'runs', title: 'Runs', render: (current) => Box({ children: [Text({ children: `count ${current.state.session.count}` }), Button({ key: 'slow', label: 'slow', onPress: () => slow }), Button({ key: 'fast', label: 'fast', onPress: () => fast })] }) })
         return { bump: () => void (mod.state.session.count += 1) }
       },
     }),
@@ -395,7 +418,7 @@ test('two presses whose handlers overlap leave the mod telling the cmod plugin a
   await tested.start()
   await tested.settle()
   const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'demo', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
-  const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true })).value
+  const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true, surface: 'terminal' })).value
 
   const pressSlow = call(partMethods.press, { draw, handler: 0, args: [] })
   await Bun.sleep(5)
@@ -421,7 +444,7 @@ test('a state change that leaves every drawing the same tells the cmod plugin no
       name: 'demo',
       state: { session: { count: 0, label: 'Go' } },
       setup(mod) {
-        mod.sidebar.add({
+        mod.views.add({
           id: 'runs',
           title: 'Runs',
           render: (current) => {
@@ -442,7 +465,7 @@ test('a state change that leaves every drawing the same tells the cmod plugin no
   await tested.start()
   await tested.settle()
   const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'demo', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
-  const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true })).value
+  const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true, surface: 'terminal' })).value
   heard.length = 0
 
   await call('bump', null, 'other')
@@ -505,11 +528,11 @@ test('a draw that was still running when its mod changed is dropped, and the nex
   tell('demo', [{ id: 'branch', title: 'Branch', areas: [Dashboard] }])
   await fake.settle()
 
-  widgets.rows(Dashboard, 80)
+  widgets.rows(Dashboard, { columns: 80, surface: 'terminal' })
   widgets.update('demo', { redraw: true })
   answers.shift()?.({ draw: 1, tree: { $cmodElement: 'Text', props: { children: 'old' } } })
   await fake.settle()
-  widgets.rows(Dashboard, 80)
+  widgets.rows(Dashboard, { columns: 80, surface: 'terminal' })
 
   expect(answers).toHaveLength(1)
 })
@@ -538,8 +561,8 @@ test('the dashboard stops asking for a redraw when a widget placed there has no 
   await fake.settle()
   const start = fake.calls.length
 
-  widgets.rows(Dashboard, 80)
-  widgets.rows(Dashboard, 80)
+  widgets.rows(Dashboard, { columns: 80, surface: 'terminal' })
+  widgets.rows(Dashboard, { columns: 80, surface: 'terminal' })
   await fake.settle()
 
   expect(fake.calls.slice(start).filter(({ call }) => call === 'ui.invalidate')).toEqual([])
@@ -569,10 +592,20 @@ test('moving a widget left and right walks it across its row, and down gives it 
   expect(toggled(toggled(start, 'demo/dirty'), 'demo/dirty').hidden).toEqual([])
 })
 
-test('a widget sends the cmod plugin only text, numbers, plain objects, and the elements cmod knows', () => {
-  const handlers: ((...args: unknown[]) => unknown)[] = []
+test('a drawing sends each handler as the number its caller gives it', () => {
+  const given: unknown[] = []
+  const rerun = () => undefined
 
-  expect(elementData(Text({ children: 'main' }), handlers)).toEqual({ $cmodElement: 'Text', props: { children: 'main' } })
-  expect(() => elementData(new Map(), handlers)).toThrow('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
+  const data = elementData(Button({ key: 'rerun', label: 'Run again', onPress: rerun }), (run) => given.push(run) + 40)
+
+  expect(data).toEqual({ $cmodElement: 'Button', props: { key: 'rerun', label: 'Run again', onPress: { $cmodHandler: 41 } } })
+  expect(given).toEqual([rerun])
+})
+
+test('a widget sends the cmod plugin only text, numbers, plain objects, and the elements cmod knows', () => {
+  const numberOf = () => 0
+
+  expect(elementData(Text({ children: 'main' }), numberOf)).toEqual({ $cmodElement: 'Text', props: { children: 'main' } })
+  expect(() => elementData(new Map(), numberOf)).toThrow('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
   expect(() => elementOf({ $cmodElement: 'Script', props: {} }, 'demo/branch:', () => {})).toThrow('a widget drew Script, which is not an element of ui/elements.js.')
 })

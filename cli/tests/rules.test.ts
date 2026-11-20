@@ -21,11 +21,25 @@ async function modWithRules(home: string, enabled: Record<string, boolean>) {
   return root
 }
 
-test("cmod rules links a mod's rules into Claude Code's rules folder and prints them", async () => {
+test('cmod rules with no verb, which a released cmod plugin runs, links and prints what rules sync does, and another verb fails', async () => {
+  const [synced, released] = [await temporaryHome(), await temporaryHome()]
+  const [syncedRoot, releasedRoot] = [await modWithRules(synced, { 'demo@market': true }), await modWithRules(released, { 'demo@market': true })]
+
+  const sync = await cmod(synced, 'rules', 'sync')
+  const old = await cmod(released, 'rules')
+  const other = await cmod(released, 'rules', 'link')
+
+  expect(sync).toEqual({ exitCode: 0, stdout: `demo  ${join(synced, '.claude/rules/demo')}  sql, tests\n`, stderr: '' })
+  expect(old).toEqual({ exitCode: 0, stdout: `demo  ${join(released, '.claude/rules/demo')}  sql, tests\n`, stderr: '' })
+  expect([await readlink(join(synced, '.claude/rules/demo')), await readlink(join(released, '.claude/rules/demo'))]).toEqual([join(syncedRoot, 'rules'), join(releasedRoot, 'rules')])
+  expect([other.exitCode, other.stderr.split('\n')[0]]).toEqual([1, 'cmod rules: cmod rules takes sync.'])
+})
+
+test("cmod rules sync links a mod's rules into Claude Code's rules folder and prints them", async () => {
   const home = await temporaryHome()
   const root = await modWithRules(home, { 'demo@market': true })
 
-  const result = await cmod(home, 'rules', '--json')
+  const result = await cmod(home, 'rules', 'sync', '--json')
 
   expect(result.exitCode).toBe(0)
   expect(await readlink(join(home, '.claude/rules/demo'))).toBe(join(root, 'rules'))
@@ -47,7 +61,7 @@ test("cmod rules links a mod's rules into Claude Code's rules folder and prints 
     placed: ['demo'],
     removed: [],
   })
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ placed: [], removed: [] })
+  expect(JSON.parse((await cmod(home, 'rules', 'sync', '--json')).stdout)).toMatchObject({ placed: [], removed: [] })
 })
 
 test("a mod whose installed folder is gone leaves every other mod's rules linked", async () => {
@@ -56,7 +70,7 @@ test("a mod whose installed folder is gone leaves every other mod's rules linked
   await writeFiles(home, { '.local/share/cmod/records/gone.json': record(join(home, 'deleted-folder')).replace('"demo"', '"gone"') })
   await writeLinked(home, root)
 
-  const result = await cmod(home, 'rules')
+  const result = await cmod(home, 'rules', 'sync')
 
   expect(result.exitCode).toBe(0)
   expect(await readlink(join(home, '.claude/rules/demo'))).toBe(join(root, 'rules'))
@@ -65,11 +79,11 @@ test("a mod whose installed folder is gone leaves every other mod's rules linked
 test("a mod that is off has no rules linked, and the link goes when it turns off", async () => {
   const home = await temporaryHome()
   await modWithRules(home, { 'demo@market': true })
-  await cmod(home, 'rules')
+  await cmod(home, 'rules', 'sync')
 
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'demo@market': false } }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['demo'] })
+  expect(JSON.parse((await cmod(home, 'rules', 'sync', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['demo'] })
   expect(existsSync(join(home, '.claude/rules/demo'))).toBe(false)
 })
 
@@ -83,7 +97,7 @@ test.each([
   await mkdir(join(home, '.claude/rules'), { recursive: true })
   await symlink(join(home, target), join(home, '.claude/rules/demo'))
 
-  const placing = await cmod(home, 'rules')
+  const placing = await cmod(home, 'rules', 'sync')
 
   expect(placing.exitCode).toBe(1)
   expect(placing.stderr).toContain(`${join(home, '.claude/rules/demo')} links to ${join(home, target)}, which cmod did not link, so cmod leaves it. Move it away, then run the command again.`)
@@ -95,10 +109,10 @@ test("a removed mod's rules leave every project, even one cmod never ran in sinc
   await modWithRules(home, {})
   const project = join(home, 'work/app')
   await writeFiles(home, { 'work/app/.claude/settings.json': JSON.stringify({ enabledPlugins: { 'demo@market': true } }) })
-  await cmod(home, 'rules', '--project', project)
+  await cmod(home, 'rules', 'sync', '--project', project)
   await rm(join(home, '.local/share/cmod/records/demo.json'))
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['demo'] })
+  expect(JSON.parse((await cmod(home, 'rules', 'sync', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['demo'] })
   expect(existsSync(join(project, '.claude/rules/demo'))).toBe(false)
 })
 
@@ -109,12 +123,12 @@ test('a mod on for the user but off for one project keeps its rules out of that 
   const local = join(project, '.claude/settings.local.json')
   await writeFiles(home, { 'work/app/.claude/settings.local.json': JSON.stringify({ enabledPlugins: { 'demo@market': false } }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--project', project, '--json')).stdout)).toMatchObject({ linked: [], placed: ['demo'] })
+  expect(JSON.parse((await cmod(home, 'rules', 'sync', '--project', project, '--json')).stdout)).toMatchObject({ linked: [], placed: ['demo'] })
   expect(JSON.parse(await readFile(local, 'utf8'))).toEqual({ enabledPlugins: { 'demo@market': false }, claudeMdExcludes: [`${join(home, '.claude/rules/demo')}/**`] })
 
   await writeFiles(home, { 'work/app/.claude/settings.local.json': JSON.stringify({ enabledPlugins: { 'demo@market': true }, claudeMdExcludes: [`${join(home, '.claude/rules/demo')}/**`] }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--project', project, '--json')).stdout)).toMatchObject({ linked: [{ mod: 'demo' }] })
+  expect(JSON.parse((await cmod(home, 'rules', 'sync', '--project', project, '--json')).stdout)).toMatchObject({ linked: [{ mod: 'demo' }] })
   expect(JSON.parse(await readFile(local, 'utf8'))).toEqual({ enabledPlugins: { 'demo@market': true } })
 })
 
@@ -125,10 +139,10 @@ test("cmod leaves an exclusion the person wrote, after the mod is back on in the
   const local = join(project, '.claude/settings.local.json')
   const own = `${join(home, '.claude/rules/demo')}/**`
   await writeFiles(home, { 'work/app/.claude/settings.local.json': JSON.stringify({ enabledPlugins: { 'demo@market': false }, claudeMdExcludes: [own] }) })
-  await cmod(home, 'rules', '--project', project)
+  await cmod(home, 'rules', 'sync', '--project', project)
 
   await writeFiles(home, { 'work/app/.claude/settings.local.json': JSON.stringify({ enabledPlugins: { 'demo@market': true }, claudeMdExcludes: [own] }) })
-  await cmod(home, 'rules', '--project', project)
+  await cmod(home, 'rules', 'sync', '--project', project)
 
   expect(JSON.parse(await readFile(local, 'utf8'))).toEqual({ enabledPlugins: { 'demo@market': true }, claudeMdExcludes: [own] })
 })
@@ -160,7 +174,7 @@ test('a rule the person excluded with claudeMdExcludes never reaches the convers
   await modWithRules(home, { 'demo@market': true })
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'demo@market': true }, claudeMdExcludes: [`${join(home, '.claude/rules/demo')}/tests.md`] }) })
 
-  const result = JSON.parse((await cmod(home, 'rules', '--json')).stdout) as { linked: { rules: { name: string }[] }[] }
+  const result = JSON.parse((await cmod(home, 'rules', 'sync', '--json')).stdout) as { linked: { rules: { name: string }[] }[] }
 
   expect(result.linked.flatMap((each) => each.rules.map((rule) => rule.name))).toEqual(['sql'])
 })
@@ -171,7 +185,7 @@ test('a mod turned on for one project links its rules into that project', async 
   const project = join(home, 'work/app')
   await writeFiles(home, { 'work/app/.claude/settings.json': JSON.stringify({ enabledPlugins: { 'demo@market': true } }) })
 
-  await cmod(home, 'rules', '--project', project)
+  await cmod(home, 'rules', 'sync', '--project', project)
 
   expect(await readlink(join(project, '.claude/rules/demo'))).toBe(join(root, 'rules'))
   expect(existsSync(join(home, '.claude/rules/demo'))).toBe(false)

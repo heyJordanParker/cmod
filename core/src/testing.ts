@@ -20,9 +20,9 @@ import type {
   UiSelectArgument,
 } from 'claude-code'
 import type { CommandReply } from './jobs/slash-command.js'
-import type { ModDefinition } from './mod.js'
+import type { InterfaceMethods, InterfaceName, ModDefinition, Provided } from './mod.js'
 import type { Options, OptionValues } from './options.js'
-import { hotkeyCommand, readSteps, storeFolder, type Steps } from './records.js'
+import { hotkeyCommand, readSteps, type Steps } from './records.js'
 import { heldInput, type Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, loadedMethod, notInstalled } from './runtime/dependencies.js'
 import { closingContext, foldBefore, installBefore, withAnswer, type Answers, type Decide } from './runtime/before.js'
@@ -32,6 +32,7 @@ import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
 import { createRouter } from './runtime/router.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
+import { cmodStore } from './runtime/programs.js'
 import { serveCmodPlugin } from './register.js'
 import { MissingOptions } from './runtime/options.js'
 import { conversationMethods, pickedColor, type SessionColor } from './runtime/sessions.js'
@@ -53,13 +54,12 @@ import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, t
 import { listed, messageOf } from './utils/text.js'
 import { componentOf, type KindProps, type Row, type StyledAt } from './ui/styles.js'
 import { AbovePrompt, areas, BelowPrompt, Dashboard, TurnEnd as TurnEndArea, Working, type Area } from './ui/areas.js'
-import { drawWith, elementOf, withLinks, type Press } from './ui/elements.js'
-import { drawnParts } from './runtime/parts.js'
+import { drawWith, elementOf, forClaudeCode } from './ui/elements.js'
+import { drawnParts, pagesOf, providedBy, serveParts, viewsOf } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
 import { engineOf } from './runtime/engine.js'
-import { pagesOf, providedBy, servePages } from './runtime/pages.js'
-import { interfaceMethods, styleInterface, type ProviderList } from './runtime/interfaces.js'
-import { inheriting, openLink, partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
+import { createProviders, interfaceMethods, styleInterface, type Provided as ProvidedHandle, type Providers, type ServedProviders } from './runtime/interfaces.js'
+import { inheriting, openLink, partMethods, type DrawnPart, type PartPress, type PartRequest, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
 export type { FakeSession, MessageDraft, StartedTask } from './testing/fake-sessions.js'
@@ -76,9 +76,13 @@ export type ShownPart = {
   focusedKey(): Promise<string | undefined>
 }
 
-export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent']; readonly pane: ShownPart; readonly page: ShownPart }
+export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent']; readonly pane: ShownPart; readonly view: ShownPart; readonly page: ShownPart }
 
-export type TestOptions<State extends object, Declared extends Options = Options> = {
+export type FakeProvider = {
+  readonly [Name in InterfaceName]: { readonly name: Name; readonly mod: string; readonly program?: string; readonly device?: { readonly id: string; readonly name: string }; readonly methods: InterfaceMethods<Name> }
+}[InterfaceName]
+
+export type TestOptions<State extends object, Declared extends Options = Options, Given extends readonly FakeProvider[] = readonly FakeProvider[]> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly options?: Partial<OptionValues<Declared>>
   readonly scope?: 'user' | 'project'
@@ -89,6 +93,7 @@ export type TestOptions<State extends object, Declared extends Options = Options
   readonly links?: Readonly<Record<string, string>>
   readonly secrets?: Readonly<Record<string, string>>
   readonly sessions?: readonly FakeSession[]
+  readonly providers?: Given
 }
 
 type Placed<Payload> = Omit<Payload, keyof Placement> & Partial<Placement>
@@ -116,7 +121,7 @@ export type Raise = {
 
 type FiredEvent = 'ui.render' | 'ui.scroll' | 'ui.close' | 'cmod.call' | 'tool.check' | 'prompt.context'
 
-export type TestedMod<State extends object> = {
+export type TestedMod<State extends object, Given extends readonly FakeProvider[] = readonly FakeProvider[]> = {
   start(): Promise<void>
   readonly raise: Raise
   fire<N extends FiredEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
@@ -138,6 +143,7 @@ export type TestedMod<State extends object> = {
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
   readonly shown: Shown
+  readonly providers: { readonly [Index in keyof Given]: Provided<Given[Index]['name']> }
 }
 
 const defaultColumns = 80
@@ -159,9 +165,15 @@ function drawnByStyle(key: string): (drawnKey: string) => boolean {
   }
 }
 
-export function testMod<State extends object, Declared extends Options = Options>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared> = {}): TestedMod<State> {
+export function testMod<State extends object, Declared extends Options = Options, const Given extends readonly FakeProvider[] = readonly FakeProvider[]>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared, Given> = {}): TestedMod<State, Given> {
   installJsx()
   const name = definition.name
+  const given: readonly FakeProvider[] = options.providers ?? []
+  for (const each of given) {
+    if (each.program !== undefined) continue
+    if (each.mod === name) throw new Error(`${name} is the tested mod, so its own provide answers ${each.name}. Fake another mod's provider, or a program's with program: '<executable>'.`)
+    if (each.device !== undefined) throw new Error(`${each.mod}'s session code provides ${each.name} only in this session, on this computer, so it takes no device. Give the program that provides it on ${each.device.name}, with program: '<executable>'.`)
+  }
   const isProjectPlugin = options.scope === 'project'
   let projectRoot = options.projectRoot ?? (isProjectPlugin ? '/test/project' : `/test/plugins/${name}`)
   const root = isProjectPlugin ? `${projectRoot}/.claude/skills/${name}` : `/test/plugins/${name}`
@@ -197,6 +209,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const held = conversations.color()
     if (held.color !== undefined) await tellColor(held)
   }
+  let declaredViews: ReturnType<typeof viewsOf> = []
   let declaredPages: ReturnType<typeof pagesOf> = []
   let openPages: { readonly id: string; readonly params: unknown }[] = []
   let shownPage: { readonly id: string; readonly params: unknown; readonly isFocused: boolean } | undefined
@@ -208,10 +221,11 @@ export function testMod<State extends object, Declared extends Options = Options
     return work
   }
   const settle = async () => {
-    do {
-      await fake.settle()
+    await fake.settle()
+    while (modeled.size > 0) {
       await Promise.allSettled(modeled)
-    } while (modeled.size > 0)
+      await fake.settle()
+    }
   }
   let focused: { readonly part: string; readonly key: string } | undefined
   const forgetFocus = (part: string) => {
@@ -221,29 +235,29 @@ export function testMod<State extends object, Declared extends Options = Options
   const refusedFocus = async (isPane: boolean, id: string, key: string): Promise<string | undefined> => {
     const pane = isPane ? id : 'sidebar'
     if (!(await holdsKeyboard(isPane, id))) return `the pane "${pane}" does not hold the keyboard`
-    const drawn = lifecycle.phase === 'active' ? (isPane ? await drawPane(id) : await drawPage(id)).drawing : undefined
+    const drawn = lifecycle.phase === 'active' ? (isPane ? await drawPane(id) : await drawInSidebar(id)).drawing : undefined
     if (drawn === undefined || focusableKey(drawn, (props) => props['key'] === key) === undefined) return `the pane "${pane}" draws no Button, Input, or Select with the key "${key}"`
     return undefined
   }
-  const applyRequests = async (requests: readonly PageRequest[]) => {
+  const applyRequests = async (requests: readonly PartRequest[]) => {
     for (const request of requests) {
       if ('open' in request) {
-        const isSettings = declaredPages.some((page) => page.id === request.open && page.place === 'settings')
+        const isSettings = declaredViews.some((view) => view.id === request.open && view.place === 'settings')
         if (!isSettings) openPages = [...openPages.filter((page) => page.id !== request.open), { id: request.open, params: request.params ?? null }]
         shownPage = { id: request.open, params: request.params ?? null, isFocused: request.focus === true }
-        if (request.focus === true) forgetFocus(`page:${request.open}`)
+        if (request.focus === true) forgetFocus(`sidebar:${request.open}`)
       } else if ('close' in request) {
         openPages = openPages.filter((page) => page.id !== request.close)
         if (shownPage?.id === request.close) shownPage = undefined
       } else if ('focus' in request) {
         const key = `${name}/${request.focus}:${request.key}`
         const refused = await refusedFocus(false, request.focus, key)
-        if (refused === undefined) focused = { part: `page:${request.focus}`, key: request.key }
-        else reportPart(`pages:${name}`, `Could not show the page ${name} asked for`, new Error(`cmod: Claude Code did not focus "${key}" in the Sidebar pane: ${refused}`))
+        if (refused === undefined) focused = { part: `sidebar:${request.focus}`, key: request.key }
+        else reportPart(`pages:${name}`, `Could not show the view or page ${name} asked for`, new Error(`cmod: Claude Code did not focus "${key}" in the Sidebar pane: ${refused}`))
       } else if ('settings' in request) {
-        const first = declaredPages.find((page) => page.place === 'settings')
+        const first = declaredViews.find((view) => view.place === 'settings')
         shownPage = first === undefined ? undefined : { id: first.id, params: null, isFocused: true }
-        if (first !== undefined) forgetFocus(`page:${first.id}`)
+        if (first !== undefined) forgetFocus(`sidebar:${first.id}`)
       }
     }
     await tellShown()
@@ -254,6 +268,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const missedMarkdown = new Map<string, { readonly markdown: string } & StyledAt>()
   const updated = async ({ parts, redraw, requests }: PartsUpdate) => {
     if (parts !== undefined) {
+      declaredViews = viewsOf(parts)
       declaredPages = pagesOf(parts)
       provides = providedBy(parts)
       ownMarkdown.clear()
@@ -283,10 +298,10 @@ export function testMod<State extends object, Declared extends Options = Options
     return draw()
   }
   const reportPart = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
-  const openFromCmod = (href: string, press: Press) => void openLink(fake.claude, href, press.surface).catch((error: unknown) => reportPart('open-link', 'Could not open the link', error))
+  const openFromCmod = (href: string, press: UiPressArgument) => void openLink(fake.claude, href, press.surface).catch((error: unknown) => reportPart('open-link', 'Could not open the link', error))
   const cmodClaude: Claude = {
     ...fake.claude,
-    ui: { ...fake.claude.ui, resolve: (e) => withLinks(fake.claude.ui.resolve(e), e.surface, openFromCmod) },
+    ui: { ...fake.claude.ui, resolve: (e) => forClaudeCode(fake.claude.ui.resolve(e), e.surface, openFromCmod) },
     cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) },
   }
   const tellRefusedPress = (_mod: string, error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' })
@@ -297,7 +312,7 @@ export function testMod<State extends object, Declared extends Options = Options
     return serveWidgets({
       claude: cmodClaude,
       router: cmodPlugin,
-      store: storeFolder({ HOME: await fake.claude.env.home(), XDG_DATA_HOME: await fake.claude.env.dataHome() }),
+      store: await cmodStore(fake.claude),
       report: reportPart,
       turnClosedBy: () => conversations.lastTurn(),
       parts,
@@ -306,13 +321,63 @@ export function testMod<State extends object, Declared extends Options = Options
   }
   const widgetsOf = () => (widgets ??= servedWidgets())
   const cmodBeneath = createRouter()
-  const pages = servePages({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined })
-  pages.apply((_mod, requests) => applyRequests(requests))
-  const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations, () => provides)
+  const servedParts = serveParts({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined, tellUi: () => undefined })
+  servedParts.apply((_mod, requests) => applyRequests(requests))
+  const after: Claude['clock']['after'] = (ms, run) => fake.claude.clock.after(ms, run)
+  const report = (error: unknown) => reportPart('interfaces', 'A provider listener failed', error)
+  const sessionMods = new Map<string, Providers>()
+  const served = fake.serve.connect({
+    tell: (_caller, heard) => new Promise((resolve) => fake.claude.clock.after(0, () => resolve(callMod(interfaceMethods.heard, heard)))),
+    sessionCode: (named) => [...(provides.includes(named) ? [name] : []), ...[...sessionMods].filter(([, each]) => each.provided().includes(named)).map(([mod]) => mod)],
+    device: async () => {
+      const { id, name: deviceName } = await fake.claude.device.read()
+      return { id, name: deviceName }
+    },
+    after,
+    report,
+  })
+  const providedInSession = given.map(({ name: named, mod, program, methods }) => {
+    if (program !== undefined) return undefined
+    const made = sessionMods.get(mod) ?? createProviders({ name: mod, call: (_to, method, input) => served.answer(method, input, mod) ?? Promise.reject(new Error(`${mod} reaches no ${method} in the test kit.`)), changed: () => undefined, after, report })
+    sessionMods.set(mod, made)
+    return made.provide(named, methods)
+  })
+  let fakesReady: Promise<readonly ProvidedHandle[]> | undefined
+  const fakeProviders = () =>
+    (fakesReady ??= (async () => {
+      const programs = await fake.serve.provide(
+        given.flatMap(({ name: named, mod, program, device, methods }) => (program === undefined ? [] : [{ name: named, mod, program, ...(device === undefined ? {} : { device }), methods }])),
+        { after, report },
+      )
+      let next = 0
+      return providedInSession.map((inSession) => inSession ?? (programs[next++] as ProvidedHandle))
+    })())
+  const fakeProvider = (index: number): ProvidedHandle => {
+    const reached = async () => {
+      const each = (await fakeProviders())[index] as ProvidedHandle
+      await fake.settle()
+      return each
+    }
+    return {
+      remove: () => void modeling(reached().then((each) => each.remove())),
+      tell: (event, payload) => void modeling(reached().then((each) => each.tell(event, payload))),
+      ask: (event, payload) => modeling(reached().then((each) => each.ask(event, payload))),
+    }
+  }
+  const fakedPrograms = new Set(given.flatMap(({ mod, program }) => (mod === name && program !== undefined ? [program] : [])))
+  const spawnUnlessFaked = fake.claude.process.spawn
+  fake.claude.process.spawn = (request) => {
+    const [, command, mod] = request.argv
+    const at = request.argv.indexOf('--')
+    const executable = at === -1 ? undefined : request.argv[at + 1]?.split('/').at(-1)
+    if (command !== 'program' || mod !== name || request.argv.includes('--remove-service') || executable === undefined || !fakedPrograms.has(executable)) return spawnUnlessFaked(request)
+    return { [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => undefined) }) } as never
+  }
+  const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations, served, sessionMods)
   fake.fakes.cmod.call = async (call) => {
     if (call.to !== cmodPluginName || call.method !== partMethods.changed) return dependencies(call)
     const { requests, isAsked, ...listing } = call.input as PartsUpdate
-    const isHeld = isAsked === true && requests !== undefined && pages.update(name, { requests, isAsked })
+    const isHeld = isAsked === true && requests !== undefined && servedParts.update(name, { requests, isAsked })
     await updated(isAsked === true ? listing : (call.input as PartsUpdate))
     return { isHeld }
   }
@@ -355,11 +420,11 @@ export function testMod<State extends object, Declared extends Options = Options
   const runProcess = fake.claude.process.run
   fake.claude.process.run = async (argv, init) => {
     const [program, command, action, mod, key] = argv
-    if (program?.split('/').at(-1) !== 'cmod' || command !== 'secret' || mod !== name || key === undefined) return runProcess(argv, init)
+    if (program?.split('/').at(-1) !== 'cmod' || command !== 'secrets' || mod !== name || key === undefined) return runProcess(argv, init)
     const answer = (stdout: string, stderr = '') => ({ exitCode: stderr === '' ? 0 : 1, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
     if (action === 'get') return answer(secrets.get(key) ?? '')
     if (action === 'delete') secrets.delete(key)
-    else if (init?.stdin === undefined || init.stdin === '') return answer('', `cmod secret: cmod secret store read no value from stdin. cmod secret delete ${name} ${key} deletes the secret.\n`)
+    else if (init?.stdin === undefined || init.stdin === '') return answer('', `cmod secrets: cmod secrets store read no value from stdin. cmod secrets delete ${name} ${key} deletes the secret.\n`)
     else secrets.set(key, init.stdin)
     return answer('')
   }
@@ -391,15 +456,17 @@ export function testMod<State extends object, Declared extends Options = Options
   }
 
   const start = async () => {
-    started ??= lifecycle.start(fake.claude, async (claude) => ({
-      name,
-      root,
-      version: '0.0.0',
-      store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
-      isInstalled: true,
-      shouldRecord: false,
-      steps: await modSteps(),
-    }))
+    started ??= fakeProviders().then(() =>
+      lifecycle.start(fake.claude, async (claude) => ({
+        name,
+        root,
+        version: '0.0.0',
+        store: await cmodStore(claude),
+        isInstalled: true,
+        shouldRecord: false,
+        steps: await modSteps(),
+      })),
+    )
     await started
     await fake.settle()
     const { failure } = lifecycle
@@ -502,35 +569,39 @@ export function testMod<State extends object, Declared extends Options = Options
     return { drawing, columns }
   }
 
-  const drawPage = async (pageId: string, columns = defaultColumns) => {
+  const drawInSidebar = async (id: string, columns = defaultColumns) => {
     await start()
-    const page = shownPage
-    if (page?.id !== pageId) throw new Error(`The page "${pageId}" of ${name} no longer shows, and a user sees a page only while it shows.`)
-    const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
+    const shown = shownPage
+    if (shown?.id !== id) throw new Error(`The view or page "${id}" of ${name} no longer shows, and a user sees one only while it shows.`)
+    const drawn = (await callMod(partMethods.draw, { page: id, params: shown.params, columns, isFocused: shown.isFocused, surface: 'terminal' })) as DrawnPart | null
     await fake.settle()
     const tree = drawn?.tree ?? null
-    const table = withLinks(elements, 'terminal', openFromCmod)
-    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(table, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void modeling(pressPart({ draw: drawn.draw, handler, args }))), markdownIn(table, { surface: 'terminal', columns })) as RenderElement)
+    const table = forClaudeCode(elements, 'terminal', openFromCmod)
+    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(table, () => elementOf(tree, `${name}/${id}:`, (handler, args) => void modeling(pressPart({ draw: drawn.draw, handler, args }))), markdownIn(table, { surface: 'terminal', columns })) as RenderElement)
     checkKeys(drawing, cmodPluginName, 'Pane')
     return { drawing, columns }
   }
 
-  const shownNow = (isPane: boolean): { readonly id: string; readonly params: unknown } => {
-    if (isPane) {
+  const shownNow = (kind: 'pane' | 'view' | 'page'): { readonly id: string; readonly params: unknown } => {
+    if (kind === 'pane') {
       const id = [...fake.shown.openPanes].at(-1)
       if (id === undefined) throw new Error(`No pane of ${name} shows. Open one with pane.open(), from a slash command, a hotkey, or setup.`)
       return { id, params: undefined }
     }
-    if (shownPage === undefined) throw new Error(`No page of ${name} shows in the Sidebar. Open one with page.open(), or Settings with mod.settings.open().`)
+    const shownKind = shownPage === undefined ? undefined : declaredPages.some((page) => page.id === shownPage?.id) ? 'page' : 'view'
+    if (shownPage === undefined || shownKind !== kind) {
+      const opening = kind === 'view' ? 'view.open(), or Settings with mod.settings.open()' : 'page.open()'
+      throw new Error(`No ${kind} of ${name} shows in the Sidebar${shownPage === undefined ? '' : `, where its ${shownKind} "${shownPage.id}" shows`}. Open one with ${opening}.`)
+    }
     return shownPage
   }
 
-  const shownPart = (isPane: boolean): ShownPart => {
-    const kind = isPane ? 'pane' : 'page'
+  const shownPart = (kind: 'pane' | 'view' | 'page'): ShownPart => {
+    const isPane = kind === 'pane'
     const draw = async (columns?: number) => {
       await start()
-      const { id } = shownNow(isPane)
-      return { id, ...(isPane ? await drawPane(id, columns) : await drawPage(id, columns)) }
+      const { id } = shownNow(kind)
+      return { id, ...(isPane ? await drawPane(id, columns) : await drawInSidebar(id, columns)) }
     }
     const drawnElement = async (type: 'Button' | 'Input' | 'Select' | 'Markdown', key: string) => {
       const { id, drawing } = await draw()
@@ -542,10 +613,10 @@ export function testMod<State extends object, Declared extends Options = Options
     const eventIn = (id: string, key: string) => ({ plugin: name, element: key, component: 'Pane' as const, requestId: id, surface: 'terminal' as const })
     return {
       get id() {
-        return shownNow(isPane).id
+        return shownNow(kind).id
       },
       get params() {
-        return shownNow(isPane).params
+        return shownNow(kind).params
       },
       lines: async (lineOptions) => {
         const { drawing, columns } = await draw(lineOptions?.columns)
@@ -581,9 +652,9 @@ export function testMod<State extends object, Declared extends Options = Options
       },
       async focusedKey() {
         await start()
-        const { id } = shownNow(isPane)
+        const { id } = shownNow(kind)
         if (!(await holdsKeyboard(isPane, id))) return undefined
-        if (focused?.part === `${kind}:${id}`) return focused.key
+        if (focused?.part === `${isPane ? 'pane' : 'sidebar'}:${id}`) return focused.key
         const autoFocused = focusableKey((await draw()).drawing, (props) => props['autoFocus'] === true)
         return isPane || autoFocused === undefined ? autoFocused : autoFocused.slice(`${name}/${id}:`.length)
       },
@@ -614,6 +685,12 @@ export function testMod<State extends object, Declared extends Options = Options
     return { drawing, columns: defaultColumns }
   }
 
+  const loadSettings = async (answer: EventResult<'classic.ConfigChange'>) => {
+    if (answer.block === undefined) await lifecycle.settingsLoaded()
+    await fake.settle()
+    return answer
+  }
+
   const fire = ((event: string, input: object, below?: unknown, signal?: AbortSignal) => {
     if (event.includes('.')) return route(event as RoutedEvent, input, below, signal)
     if (event === 'SessionStart') {
@@ -638,6 +715,7 @@ export function testMod<State extends object, Declared extends Options = Options
       const started = routed.then((answer) => ((answeredId = startedAs), answer))
       return source === 'startup' || source === 'clear' ? started : started.then(async (answer) => (await tellHeldColor(), answer))
     }
+    if (event === 'ConfigChange') return route('classic.ConfigChange', filled, below, signal).then(loadSettings)
     if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below, signal)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as ClaudeCode['fire']
@@ -708,7 +786,7 @@ export function testMod<State extends object, Declared extends Options = Options
     return value
   }
 
-  const tested: TestedMod<State> = {
+  const tested: TestedMod<State, Given> = {
     start,
     raise,
     fire,
@@ -741,7 +819,7 @@ export function testMod<State extends object, Declared extends Options = Options
         return rowsOf(drawing, columns).map((row) => row.trimEnd())
       }
       const component = componentOf(target as Row)
-      if (props === undefined || component === undefined) throw new Error(`lines takes an area, such as AbovePrompt, or a row kind, such as ToolCall, with its props, and ${target} is neither. Read a pane with tested.shown.pane.lines() and a page with tested.shown.page.lines().`)
+      if (props === undefined || component === undefined) throw new Error(`lines takes an area, such as AbovePrompt, or a row kind, such as ToolCall, with its props, and ${target} is neither. Read a pane with tested.shown.pane.lines(), a view with tested.shown.view.lines(), and a page with tested.shown.page.lines().`)
       const { drawing, columns } = await drawSlot(component, props, requestId)
       return rowsOf(drawing, columns).map((row) => row.trimEnd())
     },
@@ -811,27 +889,31 @@ export function testMod<State extends object, Declared extends Options = Options
         return lifecycle.toasts
       },
       sent: conversations.sent,
-      pane: shownPart(true),
-      page: shownPart(false),
+      pane: shownPart('pane'),
+      view: shownPart('view'),
+      page: shownPart('page'),
     },
+    providers: given.map((_each, index) => fakeProvider(index)) as never,
   }
   keepClaudeCode(tested, { fire })
   return tested
 }
 
-function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions, provides: () => readonly string[]): Claude['cmod']['call'] {
+function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions, served: ServedProviders, sessionMods: ReadonlyMap<string, Providers>): Claude['cmod']['call'] {
   const cmod = {
     forkParent: () => null,
     updateSettings: () => null,
-    [loadedMethod]: ({ name }: { readonly name: string }) => name === caller || name === cmodPluginName || Object.hasOwn(dependencies, name),
-    [interfaceMethods.providers]: ({ name }: { readonly name: string }): ProviderList => ({ mods: provides().includes(name) ? [caller] : [], programs: [] }),
+    [loadedMethod]: ({ name }: { readonly name: string }) => name === caller || name === cmodPluginName || Object.hasOwn(dependencies, name) || sessionMods.has(name),
   }
   const apis = { [cmodPluginName]: cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
+  const provided = ({ to, method, input }: Parameters<Claude['cmod']['call']>[0]) => (to === cmodPluginName ? served.answer(method, input, caller) : sessionMods.get(to)?.answer(method, input, caller, new AbortController().signal))
   return async (call) => {
-    const served = call.to === cmodPluginName ? conversations.answer(caller, call.method, call.input) : undefined
-    if (served !== undefined) return calledAnswer(caller, served as EventResult<'cmod.call'>)
+    const told = call.to === cmodPluginName ? conversations.answer(caller, call.method, call.input) : undefined
+    if (told !== undefined) return calledAnswer(caller, told as EventResult<'cmod.call'>)
+    const answered = provided(call)
+    if (answered !== undefined) return calledAnswer(caller, await answered.then((value): EventResult<'cmod.call'> => ({ value }), (error: unknown) => ({ deny: messageOf(error) })))
     const api = apis[call.to]
-    return calledAnswer(caller, api === undefined ? { deny: notInstalled(call.to) } : await answerCall(call.to, api, call))
+    return calledAnswer(caller, api === undefined ? { deny: sessionMods.has(call.to) ? `${call.to} has no method ${call.method}.` : notInstalled(call.to) } : await answerCall(call.to, api, call))
   }
 }
 

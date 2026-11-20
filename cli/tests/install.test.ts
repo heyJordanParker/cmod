@@ -357,22 +357,22 @@ test('cmod disable and cmod enable turn a mod off and on through Claude Code, an
   expect(existsSync(join(storeOf(home), 'records/demo.json'))).toBe(true)
 })
 
-test('cmod option sets one declared option through claude plugin configure, and refuses an option the plugin lacks', async () => {
+test('cmod options set sets one declared option through claude plugin configure, and refuses an option the plugin lacks', async () => {
   const files = { ...plainFiles('demo'), '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', userConfig: { branch: { type: 'string', title: 'Branch' } } }) }
   const home = await marketplaceHome({ demo: files })
   expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
   await claudeCalls(home)
 
-  const set = await cmod(home, 'option', 'demo', 'branch', 'release')
-  const missing = await cmod(home, 'option', 'demo', 'colour', 'red')
+  const set = await cmod(home, 'options', 'set', 'demo', 'branch', 'release')
+  const missing = await cmod(home, 'options', 'set', 'demo', 'colour', 'red')
 
   expect(set.stdout).toBe('Set branch for demo.\n')
   expect(JSON.parse(await readFile(join(home, 'configured-demo@market'), 'utf8'))).toEqual({ branch: 'release' })
   expect(missing.exitCode).toBe(1)
-  expect(missing.stderr).toBe('cmod option: demo has no option colour. Its options are: branch.\n')
+  expect(missing.stderr).toBe('cmod options: demo has no option colour. Its options are: branch.\n')
 })
 
-test('cmod option sets an option of a linked mod by the id Claude Code lists it under, as Settings and the first-start questions do', async () => {
+test('cmod options set sets an option of a linked mod by the id Claude Code lists it under, as Settings and the first-start questions do', async () => {
   const home = await marketplaceHome({})
   const checkout = join(home, 'Developer/linked')
   await writeFiles(home, {
@@ -380,7 +380,7 @@ test('cmod option sets an option of a linked mod by the id Claude Code lists it 
     'installed/linked@inline': JSON.stringify({ id: 'linked@inline', version: '0.1.0', scope: 'session', enabled: true, installPath: checkout }),
   })
 
-  const set = await cmod(home, 'option', 'linked', 'verbose', 'true')
+  const set = await cmod(home, 'options', 'set', 'linked', 'verbose', 'true')
 
   expect(set.stdout).toBe('Set verbose for linked.\n')
   expect(JSON.parse(await readFile(join(home, 'configured-linked@inline'), 'utf8'))).toEqual({ verbose: 'true' })

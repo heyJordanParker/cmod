@@ -1,10 +1,10 @@
 import { beforeEach, expect, setSystemTime, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement, RenderPropsOf } from 'claude-code'
-import { installPage } from '../../src/runtime/installer.js'
+import { installView } from '../../src/runtime/installer.js'
 import { permissions } from '../../src/jobs/permissions.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { serveCmodPlugin } from '../../src/register.js'
-import { servePages } from '../../src/runtime/pages.js'
+import { serveParts } from '../../src/runtime/parts.js'
 import { drawnParts } from '../../src/runtime/parts.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { partMethods, type DrawnPart, type PartsUpdate } from '../../src/runtime/ui.js'
@@ -19,7 +19,7 @@ import { sessionKeyOf } from '../../src/runtime/state.js'
 import { installFix, oldestCmodVersion, readSteps, scriptsSha256, secretFix } from '../../src/records.js'
 import { runCmod } from '../../src/runtime/programs.js'
 import { createToaster } from '../../src/runtime/toaster.js'
-import { testMod, type ShownToast } from '../../src/testing.js'
+import type { ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
 import { elements, findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
@@ -129,7 +129,7 @@ const abovePrompt = { surface: 'terminal', component: 'AbovePrompt', requestId: 
 
 const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
 
-const installerOpen = { requests: [{ open: installPage, focus: true }] }
+const installerOpen = { requests: [{ open: installView, focus: true }] }
 
 function installRequests(fake: ReturnType<typeof fakeClaude>): unknown[] {
   const sent = fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method?: string }).method === partMethods.changed ? [(input as { input: Record<string, unknown> }).input] : []))
@@ -141,7 +141,7 @@ function askedByCmod(lifecycle: Pick<Lifecycle<object>, 'route'>, name: string, 
 }
 
 async function installerDrawing(lifecycle: Pick<Lifecycle<object>, 'route'>, name = 'demo', columns = 60): Promise<{ readonly drawing: RenderElement; readonly pressed: () => Promise<unknown> }> {
-  const drawn = (await askedByCmod(lifecycle, name, partMethods.draw, { page: installPage, params: null, columns, isFocused: true })) as DrawnPart
+  const drawn = (await askedByCmod(lifecycle, name, partMethods.draw, { page: installView, params: null, columns, isFocused: true, surface: 'terminal' })) as DrawnPart
   let pending: Promise<unknown> = Promise.resolve()
   const drawing = drawWith(elements, () => elementOf(drawn.tree, '', (handler, args) => void (pending = askedByCmod(lifecycle, name, partMethods.press, { draw: drawn.draw, handler, args })))) as RenderElement
   return { drawing, pressed: () => pending }
@@ -192,19 +192,19 @@ function cmodSidebar(name: string) {
     return askedByCmod(loaded, name, call.method, call.input)
   }
   const report = (_id: string, message: string, error: unknown) => void refusals.push(`${message}: ${messageOf(error)}`)
-  const parts = drawnParts({ claude: cmod.claude, report, press: (mod, input) => pages.press(mod, input) })
-  const pages = servePages({ claude: cmod.claude, router: createRouter(), report, tellRefusedPress: (mod, error) => void refusals.push(`${mod} did not take the press: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
+  const parts = drawnParts({ claude: cmod.claude, report, press: (mod, input) => served.press(mod, input) })
+  const served = serveParts({ claude: cmod.claude, router: createRouter(), report, tellRefusedPress: (mod, error) => void refusals.push(`${mod} did not take the press: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined, tellUi: () => undefined })
   const shown = async (page: string) => {
-    pages.element(name, page, null, 60, true)
+    served.element(name, page, null, 60, true, 'terminal')
     await cmod.settle()
-    return drawWith(elements, () => pages.element(name, page, null, 60, true) ?? Text({ children: 'Drawing…' }))
+    return drawWith(elements, () => served.element(name, page, null, 60, true, 'terminal') ?? Text({ children: 'Drawing…' }))
   }
   return {
     refusals,
     shown,
     async load(lifecycle: Lifecycle<object>, fake: ReturnType<typeof fakeClaude>, plugin: Plugin) {
       loaded = lifecycle
-      fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? { isHeld: pages.update(name, call.input as PartsUpdate), stylers: [] } : null)
+      fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? { isHeld: served.update(name, call.input as PartsUpdate), stylers: [] } : null)
       await lifecycle.start(fake.claude, given(plugin))
       await fake.settle()
     },
@@ -366,7 +366,7 @@ test('a draw the cmod plugin asks of a mod that is installing reports nothing, a
   installCmod(fake)
   const step = controlledStream()
   fake.fakes.process.spawn = () => step.stream
-  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'The trash is empty' }) }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.views.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'The trash is empty' }) }) }))
   await cmod.load(lifecycle, fake, pending)
 
   const during = textOf(await cmod.shown('trash'))
@@ -729,7 +729,7 @@ const commandFrom = (isHeld: boolean) => async () => {
     defineMod({
       name: 'other',
       setup(mod) {
-        const page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
+        const page = mod.pages.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
         mod.use(slashCommand({ name: 'runs', description: 'Show the runs', reply: () => page.open() }))
       },
     }),
@@ -765,8 +765,8 @@ test("a press whose handler drops page.open's promise ends only once the cmod pl
     heard.push(update)
     return new Promise((resolve) => (answer = () => resolve({ isHeld: true })))
   }
-  let page: ReturnType<Mod['sidebar']['add']> | undefined
-  const lifecycle = createLifecycle(defineMod({ name: 'other', setup: (mod) => void (page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })) }))
+  let page: ReturnType<Mod['pages']['add']> | undefined
+  const lifecycle = createLifecycle(defineMod({ name: 'other', setup: (mod) => void (page = mod.pages.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })) }))
   await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
   let isPressed = false
@@ -785,10 +785,10 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   const fake = fakeClaude({ name: 'cmod', root })
   const router = createRouter()
   const opened: unknown[] = []
-  const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
-  pages.apply(async (mod, requests) => void opened.push({ mod, requests }))
+  const served = serveParts({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
+  served.apply(async (mod, requests) => void opened.push({ mod, requests }))
 
-  const isHeld = pages.update('other', { requests: [{ open: 'runs' }], isAsked: true })
+  const isHeld = served.update('other', { requests: [{ open: 'runs' }], isAsked: true })
   const passedOn: string[] = []
   const answer = await router.dispatch('command.run', { command: 'runs', args: '', origin: { kind: 'composer' } } as never, async (e) => (passedOn.push((e as Args<'command.run'>).command), { text: 'Claude Code ran it' }))
 
@@ -803,8 +803,8 @@ test("a press waits for the mod it pressed, never for a slower mod an earlier pr
   let answerSlow: (value: unknown) => void = () => undefined
   fake.fakes.cmod.call = async (call) => (call.to === 'demo' ? new Promise((resolve) => (answerSlow = resolve)) : null)
   const router = createRouter()
-  const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
-  const pressIn = (mod: string) => router.dispatch('ui.press', { requestId: 'sidebar', key: 'k' } as never, async () => (pages.press(mod, { handler: 1 } as never), { element: null } as never))
+  const served = serveParts({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
+  const pressIn = (mod: string) => router.dispatch('ui.press', { requestId: 'sidebar', key: 'k' } as never, async () => (served.press(mod, { handler: 1 } as never), { element: null } as never))
   const first = pressIn('demo')
   let isSecondDone = false
 
@@ -820,16 +820,16 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   const told: unknown[] = []
   fake.fakes.cmod.call = async (call) => (told.push({ to: call.to, method: call.method, input: call.input }), null)
   const ownStylers: unknown[] = []
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers) })
-  pages.update('other', { parts: { widgets: [], pages: [] } })
-  pages.update('cmod', { parts: { widgets: [], pages: [] } })
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers), tellUi: () => undefined })
+  served.update('other', { parts: { widgets: [], pages: [] } })
+  served.update('cmod', { parts: { widgets: [], pages: [] } })
 
-  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
-  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
-  pages.update('third', { parts: { widgets: [], pages: [] } })
-  pages.update('other', { parts: { widgets: [], pages: [] } })
+  served.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+  served.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+  served.update('third', { parts: { widgets: [], pages: [] } })
+  served.update('other', { parts: { widgets: [], pages: [] } })
 
-  expect(pages.stylers()).toEqual([])
+  expect(served.stylers()).toEqual([])
   expect(ownStylers).toEqual([['third'], ['third'], []])
   expect(told.filter((call) => (call as { to: string }).to === 'other')).toEqual([
     { to: 'other', method: partMethods.stylers, input: ['third'] },
@@ -842,28 +842,28 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
 test('a mod still installing misses its page list and which mods style markdown with no warning, because the parts it tells at its start hear the stylers back', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   fake.fakes.cmod.call = async ({ to }) => Promise.reject(new Error(`${to} is installing. Try again when it's ready.`))
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
-  pages.update('other', { parts: { widgets: [], pages: [] } })
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
+  served.update('other', { parts: { widgets: [], pages: [] } })
 
-  pages.element('demo', 'items', null, 60, true)
-  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+  served.element('demo', 'items', null, 60, true, 'terminal')
+  served.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
   await fake.settle()
 
   expect(fake.shown.debug).toEqual([])
-  expect(pages.stylers()).toEqual(['third'])
+  expect(served.stylers()).toEqual(['third'])
 })
 
 test("the cmod plugin names each interface's providers in the order they listed, and counts a mod an older core runs, which says stylesMarkdown, as a cmod/Style provider", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   fake.fakes.cmod.call = async () => null
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
 
-  pages.update('older', { parts: { widgets: [], pages: [], stylesMarkdown: true } as never })
-  pages.update('terminal', { parts: { widgets: [], pages: [], provides: ['demo/Terminal', 'cmod/Style'] } })
-  pages.update('other', { parts: { widgets: [], pages: [], provides: ['demo/Terminal'] } })
-  pages.update('terminal', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+  served.update('older', { parts: { widgets: [], pages: [], stylesMarkdown: true } as never })
+  served.update('terminal', { parts: { widgets: [], pages: [], provides: ['demo/Terminal', 'cmod/Style'] } })
+  served.update('other', { parts: { widgets: [], pages: [], provides: ['demo/Terminal'] } })
+  served.update('terminal', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
 
-  expect([pages.stylers(), pages.providers('demo/Terminal'), pages.providers('demo/None')]).toEqual([['older', 'terminal'], ['other'], []])
+  expect([served.stylers(), served.providers('demo/Terminal'), served.providers('demo/None')]).toEqual([['older', 'terminal'], ['other'], []])
 })
 
 test('a press the mod refuses makes the page draw again, so its next buttons work, and the person hears of it', async () => {
@@ -876,15 +876,15 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
   }
   const told: string[] = []
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: (mod, error) => void told.push(`${mod}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts, tellStylers: () => undefined })
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: (mod, error) => void told.push(`${mod}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts, tellStylers: () => undefined, tellUi: () => undefined })
   const draw = async () => {
-    pages.element('other', 'runs', { run: 7 }, 80, false)
+    served.element('other', 'runs', { run: 7 }, 80, false, 'terminal')
     await fake.settle()
-    return pages.element('other', 'runs', { run: 7 }, 80, false)
+    return served.element('other', 'runs', { run: 7 }, 80, false, 'terminal')
   }
 
   await draw()
-  pages.press('other', { draw: 2, handler: 0, args: [] })
+  void served.press('other', { draw: 2, handler: 0, args: [] })
   await fake.settle()
   await draw()
 
@@ -899,9 +899,9 @@ test('a page keeps its drawing while its mod draws it for a focused pane or a ne
     const { columns, isFocused } = call.input as { readonly columns: number; readonly isFocused: boolean }
     return { draw: 1, tree: { $cmodElement: 'Text', props: { children: `runs at ${columns}${isFocused ? ', focused' : ''}` } } }
   }
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
   const shown = async (columns: number, isFocused: boolean, params: unknown = { run: 7 }) => {
-    const drawn = drawWith(elements, () => pages.element('other', 'runs', params, columns, isFocused))
+    const drawn = drawWith(elements, () => served.element('other', 'runs', params, columns, isFocused, 'terminal'))
     await fake.settle()
     return drawn === undefined ? 'Drawing Runs…' : textOf(drawn)
   }
@@ -942,13 +942,13 @@ test('a press on a button from an older drawing tells the person nothing ran, a 
   )
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
   await fake.settle()
-  const pages = engineOf(cmod as Mod).pages
+  const served = engineOf(cmod as Mod).parts
   const pressAndDraw = async (mod: string) => {
-    pages?.element(mod, 'runs', null, 60, true)
+    served?.element(mod, 'runs', null, 60, true, 'terminal')
     await fake.settle()
-    pages?.press(mod, { draw: 1, handler: 0, args: [] })
+    void served?.press(mod, { draw: 1, handler: 0, args: [] })
     await fake.settle()
-    pages?.element(mod, 'runs', null, 60, true)
+    served?.element(mod, 'runs', null, 60, true, 'terminal')
     await fake.settle()
   }
 
@@ -968,22 +968,22 @@ test('after a mod restarts with its install question open, Not now on the shown 
   const signingIn = () => createLifecycle(defineMod({ name: 'other', installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => false }], setup() {} }))
   const installed = { ...pending, name: 'other', isInstalled: true }
   await cmod.load(signingIn(), fake, installed)
-  await cmod.shown(installPage)
+  await cmod.shown(installView)
   const restarted = signingIn()
 
   await cmod.load(restarted, fake, installed)
-  await cmod.press(installPage, 'Not now')
+  await cmod.press(installView, 'Not now')
   await fake.settle()
 
   expect(cmod.refusals).toEqual([])
   expect(restarted.toasts).toContainEqual({ type: 'warning', message: 'Needs one more step', description: 'Starting with Sign in to GitHub.' })
 })
 
-test("after a mod restarts, a press on its Sidebar page runs the restarted module's handler", async () => {
+test("after a mod restarts, a press on its view in the Sidebar runs the restarted module's handler", async () => {
   const cmod = cmodSidebar('demo')
   const fake = fakeClaude({ name: 'demo', root })
   const ranIn: string[] = []
-  const withRuns = (module: string) => defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Button({ key: 'rerun', label: 'Run again', onPress: () => void ranIn.push(module) }) }) })
+  const withRuns = (module: string) => defineMod({ name: 'demo', setup: (mod) => void mod.views.add({ id: 'runs', title: 'Runs', render: () => Button({ key: 'rerun', label: 'Run again', onPress: () => void ranIn.push(module) }) }) })
   const installed = { ...pending, isInstalled: true }
   await cmod.load(createLifecycle(withRuns('first')), fake, installed)
   await cmod.shown('runs')
@@ -995,7 +995,7 @@ test("after a mod restarts, a press on its Sidebar page runs the restarted modul
   expect(ranIn).toEqual(['restarted'])
 })
 
-test("a Sidebar page whose render throws after a state change shows its error, never the last drawing's buttons", async () => {
+test("a page whose render throws after a state change shows its error, never the last drawing's buttons", async () => {
   const cmod = cmodSidebar('demo')
   const fake = fakeClaude({ name: 'demo', root })
   const lifecycle = createLifecycle(
@@ -1003,7 +1003,7 @@ test("a Sidebar page whose render throws after a state change shows its error, n
       name: 'demo',
       state: { session: { item: 'deploy.log' } },
       setup: (mod) =>
-        void mod.sidebar.add({
+        void mod.pages.add({
           id: 'trash',
           title: 'Trash',
           render: (drawn) => {
@@ -1033,10 +1033,10 @@ test("a restarted module refuses a press on a draw number an earlier module of t
     defineMod({
       name: 'demo',
       setup(mod) {
-        for (const id of ['runs', 'logs']) void mod.sidebar.add({ id, title: id, render: () => Button({ key: id, label: id, onPress: () => void ranIn.push(`${module} ${id}`) }) })
+        for (const id of ['runs', 'logs']) void mod.views.add({ id, title: id, render: () => Button({ key: id, label: id, onPress: () => void ranIn.push(`${module} ${id}`) }) })
       },
     })
-  const draw = async (lifecycle: Lifecycle<object>, page: string) => (await askedByCmod(lifecycle, 'demo', partMethods.draw, { page, params: null, columns: 60, isFocused: true })) as DrawnPart
+  const draw = async (lifecycle: Lifecycle<object>, page: string) => (await askedByCmod(lifecycle, 'demo', partMethods.draw, { page, params: null, columns: 60, isFocused: true, surface: 'terminal' })) as DrawnPart
   const installed = given({ ...pending, isInstalled: true })
   const first = createLifecycle(withPages('first'))
   await first.start(fake.claude, installed)
@@ -1052,7 +1052,7 @@ test("a restarted module refuses a press on a draw number an earlier module of t
   expect(ranIn).toEqual([])
 })
 
-test('a page opened in setup reaches the cmod plugin with the first list of parts, which says the mod just started', async () => {
+test('a view opened in setup reaches the cmod plugin with the first list of parts, which says the mod just started', async () => {
   const fake = fakeClaude({ name: 'demo', root })
   const told: unknown[] = []
   fake.fakes.cmod.call = async (call) => void told.push(call)
@@ -1060,7 +1060,8 @@ test('a page opened in setup reaches the cmod plugin with the first list of part
     defineMod({
       name: 'demo',
       async setup(mod) {
-        await mod.sidebar.add({ id: 'hello', title: 'Hello', render: () => Text({ children: 'Hi' }) }).open()
+        await mod.views.add({ id: 'hello', title: 'Hello', render: () => Text({ children: 'Hi' }) }).open()
+        mod.pages.add({ id: 'log', title: 'Log', render: () => Text({ children: 'No runs' }) })
       },
     }),
   )
@@ -1068,7 +1069,7 @@ test('a page opened in setup reaches the cmod plugin with the first list of part
   await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
   await fake.settle()
 
-  expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }] }, requests: [{ open: 'hello' }], isStart: true } }])
+  expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }, { id: 'log', title: 'Log' }] }, requests: [{ open: 'hello' }], isStart: true } }])
 })
 
 function loggingFailures(fake: ReturnType<typeof fakeClaude>, answer: unknown): unknown[] {
@@ -1753,13 +1754,13 @@ test('a missing secret option asks in the installer to set it in /config, with a
   expect(lifecycle.toasts).toEqual(failed('it needs GitHub token', 'Retry asks for it.'))
 })
 
-test('a missing text option saved in the installer through cmod option starts the mod on Next', async () => {
+test('a missing text option saved in the installer through cmod options set starts the mod on Next', async () => {
   const fake = fakeClaude({ name: 'other', root })
   const saved: (readonly string[])[] = []
   const rows: { key: string; value: string }[] = []
   fake.fakes.process.run = async (argv) => {
     saved.push(argv)
-    if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
+    if (argv[1] === 'options' && argv[2] === 'set') rows.push({ key: `${argv[3]}.${argv[4]}`, value: argv[5] ?? '' })
     return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
   fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'other', tier: 'user' }, isLocked: false }) as never)
@@ -1774,7 +1775,7 @@ test('a missing text option saved in the installer through cmod option starts th
   await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
 
-  expect(saved).toContainEqual([cmodProgram, 'option', 'other', 'branch', 'main'])
+  expect(saved).toContainEqual([cmodProgram, 'options', 'set', 'other', 'branch', 'main'])
   expect(lifecycle.phase).toBe('active')
   expect(branch).toBe('main')
 })
@@ -1783,7 +1784,7 @@ test('a mod whose setup fails after the person saved its settings closes its ins
   const fake = fakeClaude({ name: 'other', root })
   const rows: { key: string; value: string }[] = []
   fake.fakes.process.run = async (argv) => {
-    if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
+    if (argv[1] === 'options' && argv[2] === 'set') rows.push({ key: `${argv[3]}.${argv[4]}`, value: argv[5] ?? '' })
     return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
   fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'other', tier: 'user' }, isLocked: false }) as never)
@@ -1805,7 +1806,7 @@ test('a mod whose setup fails after the person saved its settings closes its ins
   await fake.settle()
 
   expect(lifecycle.phase).toBe('failed')
-  expect(installRequests(fake).at(-1)).toEqual({ requests: [{ close: installPage }] })
+  expect(installRequests(fake).at(-1)).toEqual({ requests: [{ close: installView }] })
 })
 
 test("a mod's own installer step opens after it starts, and Finish waits for isDone", async () => {
@@ -1829,7 +1830,7 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   isSignedIn = true
   await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
-  expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
+  expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installView }] }])
 })
 
 test("an installer step redraws when the mod's state changes while it shows", async () => {
@@ -2354,8 +2355,8 @@ test('the install page is a tab of the Sidebar: closing the tab is Not now, and 
 
   start()
   await fake.settle()
-  await tell([installPage], installPage)
-  await tell([installPage], null)
+  await tell([installView], installView)
+  await tell([installView], null)
   await fake.settle()
   const waiting = lifecycle.toasts
   await tell([], null)
@@ -3128,67 +3129,4 @@ test('a mod that finishes installing hears the start of the session it installed
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'second', source: 'clear' }, {})
 
   expect(seen).toEqual(['startup first', 'clear second'])
-})
-
-test("engineOf(mod).onRedraw hears each redraw the mod asks of Claude Code's renders, until it is removed", async () => {
-  const heard: number[] = []
-  const tested = testMod(
-    defineMod({
-      name: 'other',
-      state: { session: { count: 0 } },
-      setup(mod) {
-        mod.panes.add({ id: 'list', title: 'List', render: (current) => Text({ children: `${current.state.session.count}` }) })
-        const redraws = engineOf(mod).onRedraw(() => void heard.push(mod.state.session.count))
-        return {
-          async bump() {
-            mod.state.session.count += 1
-          },
-          async stop() {
-            redraws.remove()
-          },
-        }
-      },
-    }),
-  )
-  await tested.start()
-
-  await tested.api['bump']?.()
-  await tested.settle()
-  await tested.api['stop']?.()
-  await tested.api['bump']?.()
-  await tested.settle()
-
-  expect(heard).toEqual([1])
-  expect(tested.calls.filter((call) => call.call === 'ui.invalidate' && call.args[0] === 'ui.render').length).toBeGreaterThanOrEqual(2)
-})
-
-test("a listener on the engine's onRedraw hears each state change that redraws the mod's pane, and nothing once removed", async () => {
-  const fake = fakeClaude({ name: 'demo', root })
-  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
-  let heard = 0
-  let started: Mod<{ session: { count: number } }> | undefined
-  const lifecycle = createLifecycle(
-    defineMod({
-      name: 'demo',
-      state: { session: { count: 0 } },
-      setup(mod) {
-        mod.panes.add({ id: 'trash', title: 'Trash', render: (current) => Text({ children: `${current.state.session.count}` }) })
-        started = mod
-      },
-    }),
-  )
-  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
-  await fake.settle()
-  const mod = started as Mod<{ session: { count: number } }>
-  const listening = engineOf(mod).onRedraw(() => void (heard += 1))
-
-  mod.state.session.count = 1
-  await fake.settle()
-  const afterChange = heard
-  listening.remove()
-  mod.state.session.count = 2
-  await fake.settle()
-
-  expect(afterChange).toBe(1)
-  expect(heard).toBe(1)
 })

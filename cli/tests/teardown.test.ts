@@ -227,15 +227,32 @@ test("a failed removal's message names the saved step from the record under the 
   expect(result.stdout).toContain('✘ The uninstall step of demo exited 2: zsh: no such file. Fix ~/.local/share/cmod/uninstall/demo/uninstall.sh, then run cmod teardown demo.\n')
 })
 
-test('teardown --events prints missing for a plugin with no record, deletes its data folder, and exits 0', async () => {
+test('teardown --events prints missing for a plugin with no record, deletes its data and cache folders, and exits 0', async () => {
   const home = await temporaryHome()
-  await writeFiles(home, { '.local/share/cmod/data/other-plugin/cache': 'left behind\n' })
+  await writeFiles(home, { '.local/share/cmod/data/other-plugin/cache': 'left behind\n', '.cache/cmod/other-plugin/index': 'left behind\n' })
 
   const result = await cmod(home, 'teardown', 'other-plugin', '--events')
 
   expect(result.stdout).toBe('missing other-plugin\n')
   expect(result.exitCode).toBe(0)
   expect(existsSync(join(home, '.local/share/cmod/data/other-plugin'))).toBe(false)
+  expect(existsSync(join(home, '.cache/cmod/other-plugin'))).toBe(false)
+})
+
+test("setup creates the mod's cache folder with its data folder, and teardown deletes both", async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const cache = join(home, '.cache/cmod/demo')
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  const isCreated = existsSync(cache)
+  await writeFiles(cache, { index: 'rebuildable\n' })
+
+  const result = await cmod(home, 'teardown', 'demo', '--events')
+
+  expect(isCreated).toBe(true)
+  expect(result.stdout).toBe('done demo\n')
+  expect(existsSync(cache)).toBe(false)
+  expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
 
 test('teardown removes every installed version of the program', async () => {

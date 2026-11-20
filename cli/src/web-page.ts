@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-import type { ClosedPage, ElementData, HandlerData, SidebarTab } from '@cmodjs/core/src/runtime/web.js'
+import type { ElementData, HandlerData } from '@cmodjs/core/src/runtime/web.js'
 
 export type Group = 'needs' | 'replied' | 'working' | 'idle'
 
@@ -15,6 +15,10 @@ export type AgentRow = {
   readonly isUnread: boolean
 }
 
+export type UiUnit = { readonly mod: string; readonly id: string; readonly title: string }
+
+export type UnitTab = { readonly key: string; readonly label: string; readonly isClosable: boolean }
+
 export type FeedItem = { readonly id: string; readonly kind: 'prompt' | 'reply' | 'tool'; readonly text: string }
 
 export type OpenAgent = {
@@ -25,8 +29,8 @@ export type OpenAgent = {
   readonly state?: string
   readonly waiting?: string
   readonly feed: readonly FeedItem[]
-  readonly tabs: readonly SidebarTab[]
-  readonly pages: readonly ClosedPage[]
+  readonly tabs: readonly UnitTab[]
+  readonly pages: readonly UiUnit[]
   readonly page?: ElementData
 }
 
@@ -43,6 +47,8 @@ export type Screen = {
 
 export type PressInput = { readonly kind: string; readonly key: string; readonly value?: string; readonly href?: string }
 
+export type On = (key: string, run: (input: PressInput) => void) => HandlerData
+
 export type ScreenActions = {
   move(by: number): void
   open(session: string): void
@@ -51,7 +57,7 @@ export type ScreenActions = {
   toggleIdle(): void
   showTab(tab: string): void
   closeTab(tab: string): void
-  openPage(page: ClosedPage): void
+  openPage(page: UiUnit): void
   prompt(text: string): void
   stop(): void
 }
@@ -133,7 +139,7 @@ export function visibleRows(screen: Pick<Screen, 'rows' | 'cursor' | 'isIdleOpen
   return groupOrder.flatMap((group) => screen.rows.filter((row) => row.group === group && (group !== 'idle' || screen.isIdleOpen || row.id === screen.cursor)))
 }
 
-export function appScreen(screen: Screen, actions: ScreenActions, on: (run: (input: PressInput) => void) => HandlerData): ElementData {
+export function appScreen(screen: Screen, actions: ScreenActions, on: On): ElementData {
   const shown = visibleRows(screen)
   const rowOf = (row: AgentRow) => {
     const isCursor = row.id === screen.cursor
@@ -141,7 +147,7 @@ export function appScreen(screen: Screen, actions: ScreenActions, on: (run: (inp
       plain: true,
       key: `row:${row.id}`,
       ...(isCursor && screen.focus === 'row' ? { autoFocus: true } : {}),
-      onPress: on(() => actions.open(row.id)),
+      onPress: on(`row:${row.id}`, () => actions.open(row.id)),
       children: Box({
         flexDirection: 'column',
         paddingX: 1,
@@ -158,7 +164,7 @@ export function appScreen(screen: Screen, actions: ScreenActions, on: (run: (inp
     if (all.length === 0) return []
     const heading =
       group === 'idle'
-        ? Button({ plain: true, key: 'idle', label: `${screen.isIdleOpen ? '▾' : '▸'} ${groupTitles[group]} ${all.length}`, onPress: on(actions.toggleIdle) })
+        ? Button({ plain: true, key: 'idle', label: `${screen.isIdleOpen ? '▾' : '▸'} ${groupTitles[group]} ${all.length}`, onPress: on('idle', actions.toggleIdle) })
         : Text({ bold: true, ...(group === 'needs' ? { color: 'warning' } : {}), children: `${groupTitles[group]} ${all.length}` })
     return [Box({ key: `group:${group}`, flexDirection: 'column', marginBottom: 1, children: [heading, ...shown.filter((row) => row.group === group).map(rowOf)] })]
   })
@@ -167,10 +173,10 @@ export function appScreen(screen: Screen, actions: ScreenActions, on: (run: (inp
     flexWrap: 'wrap',
     columnGap: 2,
     children: [
-      Button({ plain: true, key: 'next', hotkey: 'j', label: 'next', onPress: on(() => actions.move(1)) }),
-      Button({ plain: true, key: 'previous', hotkey: 'k', label: 'previous', onPress: on(() => actions.move(-1)) }),
-      Button({ plain: true, key: 'done', hotkey: 'e', label: 'done', onPress: on(actions.done) }),
-      Button({ plain: true, key: 'unread', hotkey: 'u', label: 'unread', onPress: on(actions.unread) }),
+      Button({ plain: true, key: 'next', hotkey: 'j', label: 'next', onPress: on('next', () => actions.move(1)) }),
+      Button({ plain: true, key: 'previous', hotkey: 'k', label: 'previous', onPress: on('previous', () => actions.move(-1)) }),
+      Button({ plain: true, key: 'done', hotkey: 'e', label: 'done', onPress: on('done', actions.done) }),
+      Button({ plain: true, key: 'unread', hotkey: 'u', label: 'unread', onPress: on('unread', actions.unread) }),
       Text({ dimColor: true, children: 'enter: open  esc: list' }),
     ],
   })
@@ -185,18 +191,18 @@ export function appScreen(screen: Screen, actions: ScreenActions, on: (run: (inp
   return Box({ flexDirection: 'row', height: '100%', children: [list, screen.open === undefined ? Box({ flexGrow: 1 }) : openView(screen, screen.open, actions, on)] })
 }
 
-function openView(screen: Screen, open: OpenAgent, actions: ScreenActions, on: (run: (input: PressInput) => void) => HandlerData): ElementData {
+function openView(screen: Screen, open: OpenAgent, actions: ScreenActions, on: On): ElementData {
   const { row } = open
   const facts = [row.project, open.model, open.contextPercent === undefined ? '' : `${Math.round(open.contextPercent)}% context`, open.state ?? groupTitles[row.group]].filter((fact) => fact !== '')
   const tab = (key: string, label: string, isClosable: boolean) => [
-    Button({ plain: true, key: `tab:${key}`, label, children: Text({ ...(screen.tab === key ? { bold: true, inverse: true } : { dimColor: true }), children: ` ${label} ` }), onPress: on(() => actions.showTab(key)) }),
-    ...(isClosable ? [Button({ plain: true, key: `close:${key}`, label: '×', dimColor: true, onPress: on(() => actions.closeTab(key)) })] : []),
+    Button({ plain: true, key: `tab:${key}`, label, children: Text({ ...(screen.tab === key ? { bold: true, inverse: true } : { dimColor: true }), children: ` ${label} ` }), onPress: on(`tab:${key}`, () => actions.showTab(key)) }),
+    ...(isClosable ? [Button({ plain: true, key: `close:${key}`, label: '×', dimColor: true, onPress: on(`close:${key}`, () => actions.closeTab(key)) })] : []),
   ]
   const tabs = Box({
     flexDirection: 'row',
     flexWrap: 'wrap',
     columnGap: 2,
-    children: [...tab(conversationTab, 'Conversation', false), ...open.tabs.flatMap((each) => tab(each.key, each.label, each.isClosable)), ...open.pages.map((page) => Button({ plain: true, key: `page:${page.mod}/${page.page}`, label: `+ ${page.title}`, dimColor: true, onPress: on(() => actions.openPage(page)) }))],
+    children: [...tab(conversationTab, 'Conversation', false), ...open.tabs.flatMap((each) => tab(each.key, each.label, each.isClosable)), ...open.pages.map((page) => Button({ plain: true, key: `page:${page.mod}/${page.id}`, label: `+ ${page.title}`, dimColor: true, onPress: on(`page:${page.mod}/${page.id}`, () => actions.openPage(page)) }))],
   })
   const feed = Box({
     key: `feed:${row.id}`,
@@ -233,8 +239,8 @@ function openView(screen: Screen, open: OpenAgent, actions: ScreenActions, on: (
         columnGap: 1,
         alignItems: 'flex-start',
         children: [
-          Input({ key: `prompt:${row.id}:${screen.sent}`, rows: 3, placeholder: `Reply to ${row.title}`, submitLabel: 'send', ...(screen.focus === 'prompt' ? { autoFocus: true } : {}), onSubmit: on(({ value }) => actions.prompt(value ?? '')) }),
-          ...(open.isWorking ? [Button({ key: 'stop', label: 'Stop', onPress: on(actions.stop) })] : []),
+          Input({ key: `prompt:${row.id}:${screen.sent}`, rows: 3, placeholder: `Reply to ${row.title}`, submitLabel: 'send', ...(screen.focus === 'prompt' ? { autoFocus: true } : {}), onSubmit: on(`prompt:${row.id}:${screen.sent}`, ({ value }) => actions.prompt(value ?? '')) }),
+          ...(open.isWorking ? [Button({ key: 'stop', label: 'Stop', onPress: on('stop', actions.stop) })] : []),
         ],
       }),
     ],
@@ -325,7 +331,7 @@ function client(): void {
 
   const say = (text: string) => void (status.textContent = text)
   const press = (body: object) => {
-    void fetch('/api/press', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stream, draw, ...body }) }).then(
+    void fetch('/api/press', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stream, ...body }) }).then(
       (answer) => {
         if (!answer.ok) say(`cmod web did not take that: ${answer.status}`)
       },

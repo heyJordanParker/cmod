@@ -1,9 +1,9 @@
 import { afterAll, expect, test } from 'bun:test'
+import { createCipheriv, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { capture, run } from '../src/process.js'
-import { deleteSecrets, readSecret, storeSecret } from '../src/store.js'
+import { run } from '../src/process.js'
 import { cmod, deleteTemporaryHomes, environment, temporaryHome } from './cmod.js'
 
 const keychainHomes: string[] = []
@@ -22,7 +22,9 @@ const token = 'ghp_s3cret "quoted" é\nsecond line'
 
 const keychainOf = (home: string) => join(home, 'Library/Keychains/login.keychain-db')
 
-const secretsOf = async (home: string) => JSON.parse(await readFile(join(home, '.local/share/cmod/secrets.json'), 'utf8')) as Record<string, Record<string, string>>
+const secretsPathOf = (home: string) => join(home, '.local/share/cmod/secrets.json')
+
+const secretsOf = async (home: string) => JSON.parse(await readFile(secretsPathOf(home), 'utf8')) as Record<string, Record<string, string>>
 
 async function keychainHome(): Promise<string> {
   const home = await realpath(await mkdtemp('/private/tmp/cmod-secret-test-'))
@@ -33,130 +35,140 @@ async function keychainHome(): Promise<string> {
   return home
 }
 
-async function secret(home: string, args: string[], stdin = ''): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, main, 'secret', ...args], { cwd: home, env: environment(home), stdin: new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'pipe' })
+async function secrets(home: string, args: string[], stdin = '', command = 'secrets'): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, main, command, ...args], { cwd: home, env: environment(home), stdin: new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'pipe' })
   const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   return { exitCode, stdout, stderr }
 }
 
+function sealedByOlderCmod(value: string, key: Buffer): string {
+  const nonce = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, nonce)
+  return Buffer.concat([Buffer.from('v10'), nonce, cipher.update(value, 'utf8'), cipher.final(), cipher.getAuthTag()]).toString('base64')
+}
+
+async function writeSecretsFile(home: string, all: Record<string, Record<string, string>>): Promise<void> {
+  await mkdir(join(home, '.local/share/cmod'), { recursive: true })
+  await writeFile(secretsPathOf(home), JSON.stringify(all), { mode: 0o600 })
+}
+
+async function sealingKeyIn(home: string): Promise<Buffer> {
+  const key = randomBytes(32)
+  await run(['/usr/bin/security', 'add-generic-password', '-s', 'cmod Safe Storage', '-a', 'cmod', '-w', key.toString('base64'), keychainOf(home)])
+  return key
+}
+
 const onMac = test.skipIf(process.platform !== 'darwin')
 
-onMac('cmod secret store keeps the value it reads from stdin sealed in secrets.json, mode 600, and get prints it back', async () => {
-  const home = await keychainHome()
+test('cmod secrets store, which mod.secrets.store runs, keeps the value plain in secrets.json, mode 600, in a home with no keychain, and get prints it back', async () => {
+  const home = await temporaryHome()
 
-  const stored = await secret(home, ['store', 'demo', 'token'], token)
-  const got = await secret(home, ['get', 'demo', 'token'])
-  const file = join(home, '.local/share/cmod/secrets.json')
-  const sealed = (await secretsOf(home))['demo']?.['token'] ?? ''
+  const stored = await secrets(home, ['store', 'demo', 'token'], token)
+  const got = await secrets(home, ['get', 'demo', 'token'])
 
   expect(stored).toEqual({ exitCode: 0, stdout: 'Stored the secret token of demo.\n', stderr: '' })
   expect(got).toEqual({ exitCode: 0, stdout: token, stderr: '' })
-  expect((await stat(file)).mode & 0o777).toBe(0o600)
-  expect(await readFile(file, 'utf8')).not.toContain('ghp_s3cret')
-  expect(Buffer.from(sealed, 'base64').subarray(0, 3).toString()).toBe('v10')
+  expect((await stat(secretsPathOf(home))).mode & 0o777).toBe(0o600)
+  expect(await secretsOf(home)).toEqual({ demo: { token } })
+  expect(existsSync(join(home, 'Library'))).toBe(false)
 })
 
-onMac('a 40 KB secret round-trips, because only the 32-byte key crosses security', async () => {
-  const home = await keychainHome()
-  const large = 'k'.repeat(40_000)
+test("one mod gets nothing for another mod's secret, and its own secrets stay apart", async () => {
+  const home = await temporaryHome()
+  await secrets(home, ['store', 'demo', 'token'], token)
 
-  await secret(home, ['store', 'demo', 'large'], large)
-
-  expect((await secret(home, ['get', 'demo', 'large'])).stdout).toBe(large)
-})
-
-onMac('the login keychain holds one cmod Safe Storage item for every mod and secret, and a second store keeps its key', async () => {
-  const home = await keychainHome()
-  await secret(home, ['store', 'demo', 'token'], token)
-  const keyBefore = await capture(['/usr/bin/security', 'find-generic-password', '-s', 'cmod Safe Storage', '-a', 'cmod', '-w', keychainOf(home)])
-
-  await secret(home, ['store', 'demo', 'refresh'], 'refresh-token')
-  await secret(home, ['store', 'other', 'token'], 'other-token')
-  const keyAfter = await capture(['/usr/bin/security', 'find-generic-password', '-s', 'cmod Safe Storage', '-a', 'cmod', '-w', keychainOf(home)])
-  const dumped = await run(['/usr/bin/security', 'dump-keychain', keychainOf(home)])
-
-  expect(dumped.split('\n').filter((line) => line.startsWith('keychain: '))).toHaveLength(1)
-  expect(dumped).toContain('"svce"<blob>="cmod Safe Storage"')
-  expect(Buffer.from(keyAfter.stdout.trim(), 'base64')).toHaveLength(32)
-  expect(keyAfter.stdout).toBe(keyBefore.stdout)
-  expect((await secret(home, ['get', 'demo', 'token'])).stdout).toBe(token)
-})
-
-onMac("one mod gets nothing for another mod's secret, and its own secrets stay apart", async () => {
-  const home = await keychainHome()
-  await secret(home, ['store', 'demo', 'token'], token)
-
-  const other = await secret(home, ['get', 'other', 'token'])
-  await secret(home, ['store', 'other', 'token'], 'other-token')
+  const other = await secrets(home, ['get', 'other', 'token'])
+  await secrets(home, ['store', 'other', 'token'], 'other-token')
 
   expect(other).toEqual({ exitCode: 0, stdout: '', stderr: '' })
-  expect((await secret(home, ['get', 'demo', 'token'])).stdout).toBe(token)
-  expect((await secret(home, ['get', 'other', 'token'])).stdout).toBe('other-token')
+  expect((await secrets(home, ['get', 'demo', 'token'])).stdout).toBe(token)
+  expect((await secrets(home, ['get', 'other', 'token'])).stdout).toBe('other-token')
 })
 
-onMac('cmod secret delete removes one secret, and get then prints nothing', async () => {
-  const home = await keychainHome()
-  await secret(home, ['store', 'demo', 'token'], token)
-  await secret(home, ['store', 'demo', 'refresh'], 'refresh-token')
+test('cmod secrets delete removes one secret, get then prints nothing, and deleting the last secret deletes secrets.json', async () => {
+  const home = await temporaryHome()
+  await secrets(home, ['store', 'demo', 'token'], token)
+  await secrets(home, ['store', 'demo', 'refresh'], 'refresh-token')
 
-  const deleted = await secret(home, ['delete', 'demo', 'token'])
+  const deleted = await secrets(home, ['delete', 'demo', 'token'])
 
   expect(deleted).toEqual({ exitCode: 0, stdout: 'Deleted the secret token of demo.\n', stderr: '' })
-  expect((await secret(home, ['get', 'demo', 'token'])).stdout).toBe('')
-  expect((await secret(home, ['get', 'demo', 'refresh'])).stdout).toBe('refresh-token')
+  expect((await secrets(home, ['get', 'demo', 'token'])).stdout).toBe('')
+  expect((await secrets(home, ['get', 'demo', 'refresh'])).stdout).toBe('refresh-token')
+
+  await secrets(home, ['delete', 'demo', 'refresh'])
+
+  expect(existsSync(secretsPathOf(home))).toBe(false)
 })
 
-onMac("cmod teardown deletes a removed mod's secrets with its data folder, and keeps every other mod's", async () => {
-  const home = await keychainHome()
-  await secret(home, ['store', 'demo', 'token'], token)
-  await secret(home, ['store', 'other', 'token'], 'other-token')
+test("cmod teardown deletes a removed mod's secrets with its data folder, and keeps every other mod's", async () => {
+  const home = await temporaryHome()
+  await secrets(home, ['store', 'demo', 'token'], token)
+  await secrets(home, ['store', 'other', 'token'], 'other-token')
 
   const tornDown = await cmod(home, 'teardown', 'demo')
 
   expect(tornDown.exitCode).toBe(0)
   expect(Object.keys(await secretsOf(home))).toEqual(['other'])
-  expect((await secret(home, ['get', 'other', 'token'])).stdout).toBe('other-token')
+  expect((await secrets(home, ['get', 'other', 'token'])).stdout).toBe('other-token')
 })
 
-onMac('cmod secret keeps nothing in a home with no login keychain, because security would write to the default keychain instead', async () => {
+test('cmod secrets store refuses an empty stdin, and names delete for removing a secret', async () => {
   const home = await temporaryHome()
 
-  const stored = await secret(home, ['store', 'demo', 'token'], token)
+  const stored = await secrets(home, ['store', 'demo', 'token'], '')
 
-  expect([stored.exitCode, stored.stderr]).toEqual([1, 'cmod secret: ~/Library/Keychains/login.keychain-db does not exist, so cmod has no login keychain to keep the key to its secrets in. Run cmod with HOME set to your home folder.\n'])
-  expect(existsSync(join(home, '.local/share/cmod/secrets.json'))).toBe(false)
+  expect([stored.exitCode, stored.stderr]).toEqual([1, 'cmod secrets: cmod secrets store read no value from stdin. cmod secrets delete demo token deletes the secret.\n'])
 })
 
-test('cmod secret store refuses an empty stdin, and names delete for removing a secret', async () => {
+test('cmod secret store, get, and delete, which released cores run, still keep, print, and delete the value', async () => {
   const home = await temporaryHome()
 
-  const stored = await secret(home, ['store', 'demo', 'token'], '')
+  const stored = await secrets(home, ['store', 'demo', 'token'], token, 'secret')
+  const got = await secrets(home, ['get', 'demo', 'token'], '', 'secret')
+  const deleted = await secrets(home, ['delete', 'demo', 'token'], '', 'secret')
 
-  expect([stored.exitCode, stored.stderr]).toEqual([1, 'cmod secret: cmod secret store read no value from stdin. cmod secret delete demo token deletes the secret.\n'])
+  expect(stored).toEqual({ exitCode: 0, stdout: 'Stored the secret token of demo.\n', stderr: '' })
+  expect(got).toEqual({ exitCode: 0, stdout: token, stderr: '' })
+  expect(deleted).toEqual({ exitCode: 0, stdout: 'Deleted the secret token of demo.\n', stderr: '' })
+  expect((await secrets(home, ['get', 'demo', 'token'])).stdout).toBe('')
 })
 
-test('on Linux the secrets live plain in secrets.json in the cmod store, which only its owner can read or write', async () => {
+onMac('get opens a value an older cmod sealed once, writes every sealed value back plain, and reads the keychain no more', async () => {
+  const home = await keychainHome()
+  const key = await sealingKeyIn(home)
+  await writeSecretsFile(home, { demo: { token: sealedByOlderCmod(token, key) }, other: { token: sealedByOlderCmod('other-token', key) } })
+
+  const got = await secrets(home, ['get', 'demo', 'token'])
+  const rewritten = await secretsOf(home)
+  await run(['/usr/bin/security', 'delete-keychain', keychainOf(home)])
+
+  expect(got).toEqual({ exitCode: 0, stdout: token, stderr: '' })
+  expect(rewritten).toEqual({ demo: { token }, other: { token: 'other-token' } })
+  expect((await stat(secretsPathOf(home))).mode & 0o777).toBe(0o600)
+  expect((await secrets(home, ['get', 'other', 'token'])).stdout).toBe('other-token')
+})
+
+onMac('storing a secret writes every value an older cmod sealed back plain', async () => {
+  const home = await keychainHome()
+  const key = await sealingKeyIn(home)
+  await writeSecretsFile(home, { demo: { token: sealedByOlderCmod(token, key) } })
+
+  await secrets(home, ['store', 'other', 'token'], 'other-token')
+
+  expect(await secretsOf(home)).toEqual({ demo: { token }, other: { token: 'other-token' } })
+})
+
+test('a sealed value with no keychain key to open it fails loud with its fix, and delete removes it', async () => {
   const home = await temporaryHome()
-  const before = { platform: process.platform, HOME: process.env['HOME'], XDG_DATA_HOME: process.env['XDG_DATA_HOME'] }
-  Object.defineProperty(process, 'platform', { value: 'linux' })
-  process.env['HOME'] = home
-  process.env['XDG_DATA_HOME'] = ''
-  try {
-    await storeSecret('demo', 'token', token)
-    await storeSecret('other', 'token', 'other-token')
-    const path = join(home, '.local/share/cmod/secrets.json')
+  await writeSecretsFile(home, { demo: { token: sealedByOlderCmod(token, randomBytes(32)) }, other: { token: 'other-token' } })
 
-    expect((await stat(path)).mode & 0o777).toBe(0o600)
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ demo: { token }, other: { token: 'other-token' } })
-    expect(await readSecret('demo', 'token')).toBe(token)
+  const got = await secrets(home, ['get', 'demo', 'token'])
+  const other = await secrets(home, ['get', 'other', 'token'])
+  const deleted = await secrets(home, ['delete', 'demo', 'token'])
 
-    await deleteSecrets('demo', ['token'])
-    await deleteSecrets('other')
-
-    expect(existsSync(path)).toBe(false)
-  } finally {
-    Object.defineProperty(process, 'platform', { value: before.platform })
-    process.env['HOME'] = before.HOME
-    process.env['XDG_DATA_HOME'] = before.XDG_DATA_HOME
-  }
+  expect([got.exitCode, got.stderr]).toEqual([1, 'cmod secrets: The secret token of demo in ~/.local/share/cmod/secrets.json, which an older cmod sealed, needs the cmod Safe Storage item in your login keychain to open, and there is none. Store it again, or delete it with cmod secrets delete demo token.\n'])
+  expect(other).toEqual({ exitCode: 0, stdout: 'other-token', stderr: '' })
+  expect(deleted.exitCode).toBe(0)
+  expect(await secretsOf(home)).toEqual({ other: { token: 'other-token' } })
 })

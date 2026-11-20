@@ -3,11 +3,11 @@ import type { RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
+import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type View, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
-import { installPage } from '../src/runtime/installer.js'
+import { installView } from '../src/runtime/installer.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
@@ -554,22 +554,22 @@ test("Report opens its choices in the toast with the keys on Ask Claude, which a
   expect(asked?.text).toContain('The beforeSessionStart listener failed\nthe test runner is missing')
 })
 
-test('an install page a reload left in the Sidebar says the mod needs nothing, and closes its tab', async () => {
+test('an install view a reload left in the Sidebar says the mod needs nothing, and closes its tab', async () => {
   const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
 
-  const drawn = await tested.fire('cmod.call', { to: 'demo', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never)
+  const drawn = await tested.fire('cmod.call', { to: 'demo', method: 'cmod:draw', input: { page: installView, params: null, columns: 60, isFocused: false, surface: 'terminal' }, caller: 'cmod' } as never)
   await tested.settle()
 
   expect(drawn).toEqual({ value: { draw: expect.any(Number), tree: { $cmodElement: 'Text', props: { dimColor: true, children: 'demo needs nothing from you now.' } } } })
-  expect(tested.calls.filter(({ call }) => call === 'cmod.call').map(({ args }) => (args[0] as { input: unknown }).input)).toContainEqual({ requests: [{ close: installPage }] })
+  expect(tested.calls.filter(({ call }) => call === 'cmod.call').map(({ args }) => (args[0] as { input: unknown }).input)).toContainEqual({ requests: [{ close: installView }] })
 })
 
-test("one mod's install page is its own, so another mod never draws in it", async () => {
+test("one mod's install view is its own, so another mod never draws in it", async () => {
   const tested = testMod(defineMod({ name: 'probe', setup() {} }))
   await tested.start()
 
-  const drawn = await tested.fire('cmod.call', { to: 'keep-going', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never, { value: 'keep-going draws this' })
+  const drawn = await tested.fire('cmod.call', { to: 'keep-going', method: 'cmod:draw', input: { page: installView, params: null, columns: 60, isFocused: false, surface: 'terminal' }, caller: 'cmod' } as never, { value: 'keep-going draws this' })
 
   expect(drawn).toEqual({ value: 'keep-going draws this' })
 })
@@ -1240,7 +1240,7 @@ test('sessions.search finds messages of the project newest first, and sessions.l
   expect(found.map((message) => message.session)).toEqual(['test-session', 'older'])
   expect((await Array.fromAsync(sessions.search('rename', undefined, { before: newest! }))).map((message) => message.session)).toEqual(['older'])
   expect((await Array.fromAsync(sessions.search('rename', { session: 'older' }))).map((message) => message.session)).toEqual(['older'])
-  await expect(Array.fromAsync(sessions.search('pa'))).rejects.toThrow('cmod history search takes at least 3 characters.')
+  await expect(Array.fromAsync(sessions.search('pa'))).rejects.toThrow('cmod sessions search takes at least 3 characters.')
   expect((await sessions.list()).map((session) => session.id)).toEqual(['test-session', 'older'])
   expect((await sessions.list({ running: true })).map((session) => session.id)).toEqual(['test-session'])
 })
@@ -1389,19 +1389,19 @@ test('a Button with an href copies the link where the computer has no browser to
   expect(tested.shown.toasts).toContainEqual({ type: 'success', message: 'Copied the link', description: 'Paste it in your browser.' })
 })
 
-test('a Button with an href on a Sidebar page opens the page through cmod, which draws the page', async () => {
+test('a Button with an href in a view opens the web page through cmod, which draws the view', async () => {
   const ran: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
       name: 'demo',
       async setup(mod) {
-        await mod.sidebar.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
+        await mod.views.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
       },
     }),
   )
   tested.fakes.process.run = ranOn('Darwin', ran)
 
-  await tested.shown.page.press('Open the docs')
+  await tested.shown.view.press('Open the docs')
   await tested.settle()
 
   expect(ran).toEqual([['uname', '-s'], ['open', 'https://example.com/docs']])
@@ -1409,26 +1409,26 @@ test('a Button with an href on a Sidebar page opens the page through cmod, which
 
 const answerBox = (focus: (key: string) => Promise<void>) => Box({ flexDirection: 'column', children: [Text({ children: 'Ship it on Friday?' }), Button({ key: 'answer-button', label: 'Answer', onPress: () => focus('answer') }), Input({ key: 'answer', placeholder: 'Your answer', onSubmit: () => undefined })] })
 
-test("page.focus moves the keyboard to the page's field once, so the page shown again after the person hid it keeps its own keys", async () => {
+test("view.focus moves the keyboard to the view's field once, so the view shown again after the person hid it keeps its own keys", async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
-      hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
+      hotkeys: { toggle: { title: 'Show or hide the view', default: 'ctrl+i' } },
       setup(mod) {
-        const page: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => page.focus(key)) })
-        mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
+        const view: View = mod.views.add({ id: 'question', title: 'Question', render: () => answerBox((key) => view.focus(key)) })
+        mod.hotkeys.toggle.onPress(() => view.toggle({ focus: true }))
       },
     }),
   )
   await tested.hotkey('toggle')
-  const before = await tested.shown.page.focusedKey()
+  const before = await tested.shown.view.focusedKey()
 
-  await tested.shown.page.press('Answer')
-  const focused = await tested.shown.page.focusedKey()
+  await tested.shown.view.press('Answer')
+  const focused = await tested.shown.view.focusedKey()
   await tested.hotkey('toggle')
   await tested.hotkey('toggle')
 
-  expect([before, focused, await tested.shown.page.focusedKey()]).toEqual([undefined, 'answer', undefined])
+  expect([before, focused, await tested.shown.view.focusedKey()]).toEqual([undefined, 'answer', undefined])
 })
 
 test("pane.focus moves the keyboard to the pane's field once, so the pane opened again after the person closed it keeps its own keys", async () => {
@@ -1461,7 +1461,7 @@ test('page.focus on a key the page does not draw rejects with the key, and sends
       name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
-        const added: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => added.focus(key)) })
+        const added: Page = mod.pages.add({ id: 'question', title: 'Question', render: () => answerBox((key) => added.focus(key)) })
         page = added
         mod.hotkeys.toggle.onPress(() => added.toggle({ focus: true }))
       },
@@ -1509,27 +1509,74 @@ test("a mod's call to its own name is answered by its own methods, since Claude 
   expect(tested.calls.filter((call) => call.call === 'cmod.call' && (call.args[0] as { readonly to: string }).to !== 'cmod')).toEqual([])
 })
 
-test('settings.beforeFileChange refuses an edit to the settings files it matches', async () => {
+test('settings.beforeChange refuses an edit to the settings files it matches, and settings.onChange hears only the changes Claude Code loaded', async () => {
   const heard: unknown[] = []
+  const loaded: unknown[] = []
   const tested = testMod(
     defineMod({
       name: 'locked',
       setup() {
-        settings.beforeFileChange({ source: /^(user|project)$/ }, (change) => {
+        settings.beforeChange({ source: /^(user|project)$/ }, (change) => {
           heard.push(change)
           return { refuse: 'Settings are locked while the deploy runs.' }
         })
-        settings.beforeFileChange(() => false as never)
+        settings.beforeChange(() => false as never)
+        settings.onChange((change) => void loaded.push(change))
       },
     }),
   )
 
   const project = await claudeCodeOf(tested).fire('ConfigChange', { source: 'project_settings', file_path: '/work/app/.claude/settings.json' })
+  const local = await claudeCodeOf(tested).fire('ConfigChange', { source: 'local_settings', file_path: '/work/app/.claude/settings.local.json' }, { block: 'A settings hook keeps the old values.' })
   const skills = await claudeCodeOf(tested).fire('ConfigChange', { source: 'skills' })
 
   expect(project).toEqual({ block: 'Settings are locked while the deploy runs.' })
+  expect(local).toEqual({ block: 'A settings hook keeps the old values.' })
   expect(skills).toEqual({})
   expect(heard).toEqual([{ source: 'project', path: '/work/app/.claude/settings.json' }])
+  expect(loaded).toEqual([{ source: 'skills' }])
+})
+
+test('settings.onChange reads the new values from settings.user.read(), because it runs once Claude Code loaded them', async () => {
+  const read: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'themed',
+      setup() {
+        settings.onChange({ source: 'user' }, async () => void read.push(await settings.user.read()))
+      },
+    }),
+  )
+  await tested.start()
+  tested.fakes.settings.read = async (args) => (args?.source === 'user' ? { theme: 'dark' } : {})
+
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'project_settings', file_path: '/work/app/.claude/settings.json' })
+
+  expect(read).toEqual([{ theme: 'dark' }])
+})
+
+test('settings.onChange waits 500 ms after ConfigChange, because Claude Code raises ConfigChange before it loads the file', async () => {
+  const loaded: unknown[] = []
+  const timers: { readonly ms: number; readonly run: () => void }[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'waiting',
+      setup() {
+        settings.onChange((change) => void loaded.push(change))
+      },
+    }),
+  )
+  await tested.start()
+  tested.fakes.clock.after = (ms, run) => (timers.push({ ms, run }), { cancel: () => undefined })
+
+  await claudeCodeOf(tested).fire('classic.ConfigChange', { session_id: 'test-session', transcript_path: '/test/transcripts/test-session.jsonl', cwd: '/work/app', hook_event_name: 'ConfigChange', source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  expect(loaded).toEqual([])
+  expect(timers.map(({ ms }) => ms)).toEqual([500])
+
+  timers[0]?.run()
+  await tested.settle()
+  expect(loaded).toEqual([{ source: 'user', path: '/test/home/.claude/settings.json' }])
 })
 
 test('fs.onChange hears each file that changes, appears, or goes under a folder, from setup or later', async () => {
@@ -1674,6 +1721,22 @@ test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets
   expect(folder).toBe('/test/home/.local/share/cmod/data/demo')
 })
 
+test('mod.cacheFolder is the folder of the plugin under the cache home, apart from mod.dataFolder', async () => {
+  let folders: { data: string; cache: string } | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        folders = { data: mod.dataFolder, cache: mod.cacheFolder }
+      },
+    }),
+  )
+
+  await tested.start()
+
+  expect(folders).toEqual({ data: '/test/home/.local/share/cmod/data/demo', cache: '/test/home/.cache/cmod/demo' })
+})
+
 test('a mod stores, gets, and deletes its secrets, gets undefined once one is deleted, and the test kit records no value', async () => {
   let secrets: Mod['secrets'] | undefined
   const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void (secrets = mod.secrets) }), { secrets: { refresh: 'seeded-refresh' } })
@@ -1685,7 +1748,7 @@ test('a mod stores, gets, and deletes its secrets, gets undefined once one is de
 
   expect([stored, await secrets?.get('token'), await secrets?.get('refresh')]).toEqual(['ghp_s3cret', undefined, 'seeded-refresh'])
   expect(JSON.stringify(tested.calls)).not.toContain('ghp_s3cret')
-  await expect(secrets?.store('token', '')).rejects.toThrow('demo: mod.secrets.store: cmod secret store read no value from stdin. cmod secret delete demo token deletes the secret.')
+  await expect(secrets?.store('token', '')).rejects.toThrow('demo: mod.secrets.store: cmod secrets store read no value from stdin. cmod secrets delete demo token deletes the secret.')
 })
 
 test('mod.secrets runs the cmod program with its own mod name, hands it the value on stdin, and the value is in no argument', async () => {
@@ -1702,9 +1765,9 @@ test('mod.secrets runs the cmod program with its own mod name, hands it the valu
   const cmod = '/test/home/.local/share/cmod/programs/cmod'
   expect(got).toBe('ghp_s3cret')
   expect(ran).toEqual([
-    { argv: [cmod, 'secret', 'store', 'demo', 'token'], stdin: 'ghp_s3cret' },
-    { argv: [cmod, 'secret', 'get', 'demo', 'token'], stdin: undefined },
-    { argv: [cmod, 'secret', 'delete', 'demo', 'token'], stdin: undefined },
+    { argv: [cmod, 'secrets', 'store', 'demo', 'token'], stdin: 'ghp_s3cret' },
+    { argv: [cmod, 'secrets', 'get', 'demo', 'token'], stdin: undefined },
+    { argv: [cmod, 'secrets', 'delete', 'demo', 'token'], stdin: undefined },
   ])
   expect(ran.flatMap((run) => run.argv).join(' ')).not.toContain('ghp_s3cret')
 })
@@ -2128,13 +2191,13 @@ test('tested.api calls the methods setup returns, as another mod would', async (
   expect(await Promise.resolve(tested.api)).toBe(tested.api)
 })
 
-test('a slash command opens a Sidebar page with its params, and the page knows it shows', async () => {
+test('a slash command opens a page with its params, and the page knows it shows', async () => {
   let page: Page<{ readonly run: number }> | undefined
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
-        page = mod.sidebar.add<{ readonly run: number }>({ id: 'run', title: 'Run', render: (_mod, { params }) => Text({ children: `run ${params.run}` }) })
+        page = mod.pages.add<{ readonly run: number }>({ id: 'run', title: 'Run', render: (_mod, { params }) => Text({ children: `run ${params.run}` }) })
         mod.use(slashCommand({ name: 'run', description: 'Show a run', reply: ({ args }) => page?.open({ params: { run: Number(args) }, focus: true }) }))
       },
     }),
@@ -2149,13 +2212,41 @@ test('a slash command opens a Sidebar page with its params, and the page knows i
   expect([page?.isOpen, page?.isShown]).toEqual([false, false])
 })
 
+test("a slash command's open reads its view open at once, and its close reads it closed at once", async () => {
+  const seen: boolean[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        const view = mod.views.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'no runs' }) })
+        mod.use(
+          slashCommand({
+            name: 'runs',
+            description: 'Show the runs, then hide them',
+            reply: async () => {
+              await view.open()
+              seen.push(view.isOpen)
+              await view.close()
+              seen.push(view.isOpen)
+            },
+          }),
+        )
+      },
+    }),
+  )
+
+  await tested.type('/runs')
+
+  expect(seen).toEqual([true, false])
+})
+
 test("a page whose render throws draws its error in place, so no button of its last drawing stays pressable, and the error goes to the Log once", async () => {
   let isBroken = false
   const tested = testMod(
     defineMod({
       name: 'demo',
       setup(mod) {
-        void mod.sidebar
+        void mod.pages
           .add({
             id: 'items',
             title: 'Items',
@@ -2184,7 +2275,7 @@ test('a page a slash command opens reaches the cmod plugin as the person asking,
     defineMod({
       name: 'demo',
       setup(mod) {
-        const page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
+        const page = mod.pages.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
         mod.use(slashCommand({ name: 'runs', description: 'Show the runs', reply: () => page.open() }))
         mod.every(1000, () => page.open())
       },
@@ -2198,7 +2289,7 @@ test('a page a slash command opens reaches the cmod plugin as the person asking,
   expect(sent).toEqual([{ requests: [{ open: 'runs' }], isAsked: true }])
 })
 
-test("settings.open shows the mod's first Settings page, and a press there runs in the mod", async () => {
+test("settings.open shows the mod's first Settings view, and a press there runs in the mod", async () => {
   let settings: Mod['settings'] | undefined
   const tested = testMod(
     defineMod({
@@ -2214,10 +2305,10 @@ test("settings.open shows the mod's first Settings page, and a press there runs 
 
   await settings?.open()
 
-  expect(tested.shown.page.id).toBe('branches')
-  await tested.shown.page.press('Watch dev')
+  expect(tested.shown.view.id).toBe('branches')
+  await tested.shown.view.press('Watch dev')
   expect(tested.state.global.branch).toBe('dev')
-  expect(await tested.shown.page.lines()).toEqual(['[ Watch main ]'])
+  expect(await tested.shown.view.lines()).toEqual(['[ Watch main ]'])
 })
 
 test("a mod's hotkey runs its listeners, and a listener removed no longer runs", async () => {
@@ -2271,7 +2362,7 @@ test("a hotkey whose listener drops page.open's promise asks the cmod plugin as 
       name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
-        const added = mod.sidebar.add({ id: 'demo', title: 'Items', render: () => Text({ children: 'no items' }) })
+        const added = mod.pages.add({ id: 'demo', title: 'Items', render: () => Text({ children: 'no items' }) })
         page = added
         mod.hotkeys.toggle.onPress(() => void added.open({ focus: true }))
       },
@@ -2299,7 +2390,7 @@ test("a slash command whose reply drops settings.open's promise opens Settings i
   expect(await tested.type('/branches')).toEqual({})
 
   expect(askedRequests(tested.calls)).toEqual([{ requests: [{ settings: true }], isAsked: true }])
-  expect(tested.shown.page.id).toBe('branches')
+  expect(tested.shown.view.id).toBe('branches')
 })
 
 test("a hotkey's combo is the one keybindings.json binds to it, which a person may have changed, and undefined while none does", async () => {

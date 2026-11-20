@@ -19,7 +19,7 @@ test('/todo adds the item to the project list', async () => {
 })
 ```
 
-Assert what a person or Claude sees: `tested.shown.page.lines()`, `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.raise...`, `tested.type(...)`, and `tested.callTool(...)` return.
+Assert what a person or Claude sees: `tested.shown.view.lines()`, `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.raise...`, `tested.type(...)`, and `tested.callTool(...)` return.
 
 ## TestOptions
 
@@ -35,6 +35,15 @@ type TestOptions<State, Options> = {
   readonly links?: Readonly<Record<string, string>>
   readonly secrets?: Readonly<Record<string, string>>
   readonly sessions?: readonly FakeSession[]
+  readonly providers?: readonly FakeProvider[]
+}
+
+type FakeProvider = {
+  readonly name: InterfaceName
+  readonly mod: string
+  readonly program?: string
+  readonly device?: { readonly id: string; readonly name: string }
+  readonly methods: InterfaceMethods<name>
 }
 ```
 
@@ -50,15 +59,16 @@ type TestOptions<State, Options> = {
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 | `secrets` | The mod's secrets `mod.secrets` starts with, key to value. The fake keeps what the mod stores in memory, and `tested.calls` never holds a value | no secrets |
 | `sessions` | The earlier conversations `sessions.list` and `sessions.search` read, each `{ id, messages?, goal?, … }` ([Build a conversation](#build-a-conversation)) | none: only the current session, `test-session` |
+| `providers` | The providers of interfaces other mods and programs run, which `providers(name)` and a `program` job's `provider(name)` find ([providers](#providers)) | none: only the tested mod's own `provide` |
 
 A project plugin finds its repository through a `.git` entry at `projectRoot`, so a test of one puts it in `files`, such as `files: { '/test/project/.git': '' }`. Without it the project plugin has no repository, and its rules match calls in every folder, as a user mod's do.
 
-The fake session's id is `test-session`, its model is `test-model`, and its home is `/test/home`. So `mod.dataFolder` is `/test/home/.local/share/cmod/data/<name>`, and `mod.folder` is `/test/plugins/<name>`. The mod is installed and draws on a terminal 80 columns wide.
+The fake session's id is `test-session`, its model is `test-model`, and its home is `/test/home`. So `mod.dataFolder` is `/test/home/.local/share/cmod/data/<name>`, `mod.cacheFolder` is `/test/home/.cache/cmod/<name>`, and `mod.folder` is `/test/plugins/<name>`. The mod is installed and draws on a terminal 80 columns wide.
 
 ## TestedMod
 
 ```ts
-type TestedMod<State> = {
+type TestedMod<State, Given> = {
   start(): Promise<void>
   readonly raise: Raise
   fire(event, input, below?): Promise<EventResult>
@@ -80,12 +90,13 @@ type TestedMod<State> = {
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
   readonly shown: Shown
+  readonly providers: { [Index in keyof Given]: Provided<Given[Index]['name']> }
 }
 ```
 
 ### start
 
-Starts the mod: loads its state, runs `setup`, and adds its listeners, pages, panes, widgets, and jobs. `raise`, `fire`, `lines`, `type`, `hotkey`, `callTool`, `press`, `moveTo`, and `api` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+Starts the mod: loads its state, runs `setup`, and adds its listeners, views, pages, panes, widgets, and jobs. `raise`, `fire`, `lines`, `type`, `hotkey`, `callTool`, `press`, `moveTo`, and `api` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
 
 ### raise
 
@@ -124,10 +135,11 @@ fire(event: 'tool.check' | 'prompt.context' | 'cmod.call' | 'ui.render' | 'ui.sc
 - `fire('cmod.call', { to, method, input })` calls a method `setup` returned, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed. `tested.api.<method>(input)` does the same and resolves the value, or rejects with the reason.
 - `ui.render`, `ui.scroll`, and `ui.close` are what `lines` and a pane's own events raise. `shown.pane.lines()` and `lines` are the way to draw.
 - `fire('ui.close', { id, origin: { kind: 'person' } })` closes the pane as Escape or its ✕ does, and draws it once more before it closes, as Claude Code does. A pane's `ui.render` shows a pane Claude Code held back, as Claude Code does when the terminal widens.
+- `claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path })` edits a settings file. It runs the `settings.beforeChange` listeners, and then, unless one of them or `below` refused, the `settings.onChange` listeners, as Claude Code loads the change.
 - `claudeCodeOf(tested).fire('turn.complete', { …, isAborted: true })`, and a Stop fired with an aborted signal, are the person's Esc. From then on `claude.command.run` refuses with `the session was stopped and nobody has sent input since` until the person's next prompt, command, or press, as Claude Code holds every plugin's input after an Esc.
 
 ```ts
-expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })
+expect(await tested.fire('cmod.call', { to: 'my-mod', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })
 ```
 
 ```ts
@@ -188,7 +200,7 @@ The current session, `test-session`, starts with one message: the cmod plugin's 
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, `{ type: AttachedFile, path, attachmentType, text }`, or `{ type: Notice, text }`.
 
-The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `color`, `project`, or `isRunning`. A session that names no `project` is in the test's project. `{ id: 'test-session', color: 'cyan' }` gives the current session its `/color` from the mod's start, and `tested.type('/color cyan')` and `tested.type('/color default')` run Claude Code's `/color`, which changes `sessions.current.color`. `tested.type('/color')` throws, because Claude Code picks a random color for it.
+The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `color`, `project`, or `isRunning`. A session that names no `project` is in the test's project, and one that names no `device` runs on `test-computer`, such as `{ id: 'remote', device: { id: '9c41d07e2b5a4f86a3e1c8d2f07b6e95', name: 'build-box' } }` for a session on another device. `{ id: 'test-session', color: 'cyan' }` gives the current session its `/color` from the mod's start, and `tested.type('/color cyan')` and `tested.type('/color default')` run Claude Code's `/color`, which changes `sessions.current.color`. `tested.type('/color')` throws, because Claude Code picks a random color for it.
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -212,10 +224,10 @@ A `before` listener on the current session answers what `raise` asks, such as `t
 
 ### lines
 
-- `shown.page.lines()` draws the page the mod shows in the Sidebar now, and `shown.pane.lines()` the pane it shows now, and each returns its rows of text. Each rejects when the mod shows none, such as `No pane of my-mod shows. Open one with pane.open(), from a slash command, a hotkey, or setup.` A page gets `params`, `isFocused`, and `columns`, 80 unless `lines({ columns })` gives another. A pane gets `params`, `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, which is the `columns` that `lines({ columns })` gives, else the pane's own `columns`, else 80, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`. `shown.page.id` and `shown.pane.id` name what shows, and `params` holds its params.
-- A `Markdown` element in the mod's pages, panes, and widgets draws through the mod's own markdown styles, as it does in a session. Other mods' styles are not drawn.
-- A key in a page or widget draws as the cmod plugin gives it to Claude Code: `<mod>/<page>:<key>` in a page, `<mod>/<widget>:<key>` in a widget, and `<mod>/markdown:<scope>:<block>:<key>` in what a markdown style draws, where `<scope>` is the drawn key of the `Markdown` element that holds the block, or its place among the `Markdown` elements without a key, and `<block>` is the block's number in that element's markdown, each from `0`. In the mod's own pane, a style's key draws as `<scope>:<block>:<key>`, and in a reply as `<block>:<key>`. `press`, `input`, and `select` take the key the mod wrote, and a key two blocks share reaches the first.
-- Claude Code refuses a whole tree in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements have one key, anywhere in it, and a refused Sidebar draws blank for the session. So drawing a page, a pane, a widget area, or a style that does it rejects with Claude Code's own text, such as `cmod: returned a tree Pane refuses: Markdown "my-mod/all:item-text:0" is drawn twice; each takes its own key`. Elements of different types, such as a `Box` and a `Markdown`, may share a key. Claude Code also refuses a `Box`, `Text`, or `Button` whose `hover` names no `scope` and has no `Box` with a key around it, the `Box` itself included, so drawing one rejects with `cmod: returned a tree Pane refuses: Button "my-mod/all:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`.
+- `shown.view.lines()` draws the view the mod shows in the Sidebar now, `shown.page.lines()` the page, and `shown.pane.lines()` the pane, and each returns its rows of text. Each rejects when the mod shows none, such as `No pane of my-mod shows. Open one with pane.open(), from a slash command, a hotkey, or setup.` A view or page gets `params`, `isFocused`, `columns`, 80 unless `lines({ columns })` gives another, and `surface: 'terminal'`. A pane gets `params`, `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, which is the `columns` that `lines({ columns })` gives, else the pane's own `columns`, else 80, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`. `shown.view.id`, `shown.page.id`, and `shown.pane.id` name what shows, and `params` holds its params.
+- A `Markdown` element in the mod's views, pages, panes, and widgets draws through the mod's own markdown styles, as it does in a session. Other mods' styles are not drawn.
+- A key in a view, page, or widget draws as the cmod plugin gives it to Claude Code: `<mod>/<view or page>:<key>` in a view or page, `<mod>/<widget>:<key>` in a widget, and `<mod>/markdown:<scope>:<block>:<key>` in what a markdown style draws, where `<scope>` is the drawn key of the `Markdown` element that holds the block, or its place among the `Markdown` elements without a key, and `<block>` is the block's number in that element's markdown, each from `0`. In the mod's own pane, a style's key draws as `<scope>:<block>:<key>`, and in a reply as `<block>:<key>`. `press`, `input`, and `select` take the key the mod wrote, and a key two blocks share reaches the first.
+- Claude Code refuses a whole tree in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements have one key, anywhere in it, and a refused Sidebar draws blank for the session. So drawing a view, a page, a pane, a widget area, or a style that does it rejects with Claude Code's own text, such as `cmod: returned a tree Pane refuses: Markdown "my-mod/all:item-text:0" is drawn twice; each takes its own key`. Elements of different types, such as a `Box` and a `Markdown`, may share a key. Claude Code also refuses a `Box`, `Text`, or `Button` whose `hover` names no `scope` and has no `Box` with a key around it, the `Box` itself included, so drawing one rejects with `cmod: returned a tree Pane refuses: Button "my-mod/all:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`.
 - A `Button` draws as Claude Code draws it: `[ Save ]`, or `1: Save` when it is `plain` with a `hotkey`, or `Save` when it is `plain` alone. Borders and colors are not drawn.
 - `lines(area)` draws the mod's widgets in that area, in the rows the person would see, and returns them. A new widget is in the first row of its first area. A layout given in `files` as `/test/home/.local/share/cmod/widgets.json` places the widgets another way. `{ columns }` sets the row's width, 80 by default. `lines(TurnEnd)` draws under the last turn that ended, and rejects when none has: end one with `tested.endTurn()` first.
 - `lines(kind, props, requestId?)` draws the mod's style of that kind with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the style changed. Draw `Reply` with a reply's `text` to test a markdown style. Draws that pass one `requestId` grow one streamed reply.
@@ -240,14 +252,14 @@ test('the prompt count shows below the prompt', async () => {
 
 ### hotkey
 
-`hotkey(name)` presses the hotkey `defineMod` declared under `name`, as the person pressing its combo does, and awaits its listeners. A page it opens shows as `shown.page`. It rejects a name the mod does not declare.
+`hotkey(name)` presses the hotkey `defineMod` declared under `name`, as the person pressing its combo does, and awaits its listeners. A view it opens shows as `shown.view`, and a page as `shown.page`. It rejects a name the mod does not declare.
 
 ```ts
 test('the hotkey shows the prompt count in the Sidebar', async () => {
   const tested = testMod(myMod)
   await tested.add({ type: Prompt, text: 'hello' })
   await tested.hotkey('toggle')
-  expect(await tested.shown.page.lines()).toEqual(['Prompts this session: 1'])
+  expect(await tested.shown.view.lines()).toEqual(['Prompts this session: 1'])
 })
 ```
 
@@ -257,7 +269,7 @@ test('the hotkey shows the prompt count in the Sidebar', async () => {
 
 ### press, input, and select
 
-`shown.page` and `shown.pane` act on an element of what shows as the person does, and await its handler. Each rejects when it does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`, or the same for a page.
+`shown.view`, `shown.page`, and `shown.pane` act on an element of what shows as the person does, and await its handler. Each rejects when it does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`, or the same for a view or page.
 
 - `press(key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`. A `Button` with `href` opens its page as a press in the terminal does ([ui.md](ui.md#a-button-opens-a-web-page-with-href)): it runs `uname -s` and the opener through `fakes.process.run`, or copies the link through `ui.copy` on a Linux with no display.
 - `press(key, link)` presses the link `link` in the `Markdown` whose `key` is `key`, and runs its `onLinkPress`.
@@ -266,16 +278,16 @@ test('the hotkey shows the prompt count in the Sidebar', async () => {
 - `tested.press(area, key)` presses a `Button` one of the mod's widgets draws in that area, the way the person presses it in a row.
 
 ```ts
-await tested.shown.page.input('search', 'deploy')
-await tested.shown.page.select('agent', 'explorer')
-expect(await tested.shown.page.lines()).toContain('deploy by explorer')
+await tested.shown.view.input('search', 'deploy')
+await tested.shown.view.select('agent', 'explorer')
+expect(await tested.shown.view.lines()).toContain('deploy by explorer')
 ```
 
-`shown.page.focusedKey()` and `shown.pane.focusedKey()` return the `key` of the `Button`, `Input`, or `Select` that holds the keyboard in what shows, or `undefined` while it does not hold the keyboard or no element does. The page or pane takes the keyboard when it opens with `{ focus: true }`, and its first `autoFocus` element takes it then. `focus(key)` moves it to another element until the page or pane closes or opens again.
+`shown.view.focusedKey()`, `shown.page.focusedKey()`, and `shown.pane.focusedKey()` return the `key` of the `Button`, `Input`, or `Select` that holds the keyboard in what shows, or `undefined` while it does not hold the keyboard or no element does. A view, page, or pane takes the keyboard when it opens with `{ focus: true }`, and its first `autoFocus` element takes it then. `focus(key)` moves it to another element until it closes or opens again.
 
 ```ts
-await tested.shown.page.press('Answer')
-expect(await tested.shown.page.focusedKey()).toBe('answer')
+await tested.shown.view.press('Answer')
+expect(await tested.shown.view.focusedKey()).toBe('answer')
 ```
 
 ### moveTo
@@ -321,9 +333,10 @@ Set a fake to answer a call:
 - A `program` job is the exception: it catches the `process.spawn` error and retries after 1, 2, 4, 8 and 16 seconds on real timers, so its `ready()` waits past `bun test`'s 5-second timeout. Set `fakes.process.spawn` before a test starts a `program` job.
 - A `program` job with `singleInstance` spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --no-wait -- <command…>`, so `fakes.process.spawn` gets that `argv`, and the first line the fake writes to standard output is the address of the copy this session runs. A fake that writes `held` and ends tests a session another session runs the copy for: `ready()` resolves the address in `/test/home/.local/share/cmod/instances/<mod>/<program>.json`, which the test gives as `{"address":"unix:/tmp/x.sock"}` in `files`.
 - A `program` job with `isService` spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --service --env <name> -- <command…>`, with one `--env` for each key of its `environment`, every time it starts, and a fake that writes `held` and ends stands for the service: `ready()` resolves the address in the instance file, as above. A file `/test/home/.local/share/cmod/services/<mod>/<program>.json` in `files` stands for a service an earlier version of the mod wrote: when the mod's setup adds no `isService` program of that name, its start spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --remove-service -- <program>`.
-- A `program` job with `provides` puts `--provides <interface>` after `<mod>` for each interface, and one with `processType` puts `--process-type <type>` right after `--service`.
+- A `program` job with `processType` puts `--process-type <type>` right after `--service`.
 - `serve` answers what the cmod plugin asks `cmod serve` for the sessions of the computer, which only a test of the cmod plugin itself reaches: `sessions` lists them, `read(session, part, options)` answers a part such as `messages`, and `unheld(session, action, input)` answers an action on a session no running cmod plugin holds.
 - A `program` job with `isWebApp` puts `--web-app` right after `<mod>` in that `argv`. `ready()` resolves `tailnetUrl` when the instance file gives one, such as `{"address":"127.0.0.1:62021","tailnetUrl":"https://my-computer.my-tailnet.ts.net:62021/"}` in `files`.
+- A `program` job's `provider(name)` waits until the program is `fatal`, and then rejects as `ready()` does, unless the test fakes that program's provider in `providers` ([providers](#providers)). The test kit's cmod answers each of its asks with no provider 2.5 seconds later on `clock.after`, and the job asks again.
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against the session's working folder, so a mod under test reads `${sessions.current.project}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.
 - `ui.scroll` answers `{}` by default, as when the window moved. A fake that answers `{ deny }` refuses the scroll.
@@ -336,7 +349,7 @@ Set a fake to answer a call:
 - `command.list` answers the slash commands the mod added by default, and `command.run` answers `{}`, a command that printed nothing.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `fs.find` or `metadata.update` follows it as a real file system does.
-- `testMod` opens no install page: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
+- `testMod` opens no install view: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
 - The mod below runs `git`, and the `process.run` fake answers in its place.
 
 ```ts
@@ -372,6 +385,7 @@ type Shown = {
   readonly tools: string[]
   readonly schedules: { readonly id: string; readonly cron: string; readonly prompt: string }[]
   readonly sent: { readonly session: string; readonly type: string; readonly text: string; readonly as?: string }[]
+  readonly view: ShownPart
   readonly page: ShownPart
   readonly pane: ShownPart
 }
@@ -383,6 +397,7 @@ type ShownPart = {
   press(key: string, link?: string): Promise<void>
   input(key: string, text: string, type?: 'submit' | 'change'): Promise<void>
   select(key: string, value: string): Promise<void>
+  focusedKey(): Promise<string | undefined>
 }
 
 type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
@@ -390,7 +405,7 @@ type ShownToast = { readonly type: ToastType; readonly message: string; readonly
 
 What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, and the `beforePrompt` notes a subagent reads as it starts from a spawn the test fires, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
-The test kit keeps no Log, as a cmod older than 4.3.0 keeps none, so every error cmod catches for the mod shows in `toasts` ([ui.md](ui.md#toasts)).
+The test kit keeps no Log, so every error cmod catches for the mod shows in `toasts` ([ui.md](ui.md#toasts)).
 
 ```ts
 test('the Mode prompt follows the mode', async () => {
@@ -404,7 +419,53 @@ test('the Mode prompt follows the mode', async () => {
 })
 ```
 
-`testing.js` exports the types `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, and `TestCall`, so a test helper can take them.
+`testing.js` exports the types `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, `TestCall`, and `FakeProvider`, so a test helper can take them.
+
+### providers
+
+`providers` holds a fake for each provider the test lists in `TestOptions.providers`, in the same order, so a mod tests its side of an interface before the other side ships. Each fake answers its `methods` and runs where its fields say:
+
+- With a `program`, it is that program of `mod`, connected to the test kit's `cmod serve`.
+- With a `program` and a `device`, it is that program on that device. The test kit reaches the device as `cmod serve` does, through a `cmod/Devices` provider, the `devices` program of `testMod`, which `providers('cmod/Devices')` lists too.
+- With no `program`, it is the session code of `mod`, another mod in this session. It takes no `device`, and `mod` is never the tested mod.
+
+`providers(name)` lists each fake with its `device`, this computer's unless it names one. A `program` job's `provider(name)` resolves with the fake of its own program, and a fake of the tested mod's program stands for that program, so the job spawns nothing the test fakes.
+
+Every call and listener goes through the routing a session uses: the cmod plugin's, then `cmod serve`'s, then the other device's. So a call past its 30 s deadline, a method the fake lacks, and a fake that left fail as they would in a session.
+
+Each fake is a `Provided` ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)):
+
+- `tell(event, payload)` tells each `onE` listener on the fake.
+- `ask(event, payload)` asks each `beforeE` listener and resolves with their answers.
+- `remove()` makes the fake leave, so `providers(name)` no longer lists it, and a call to it fails with `<mod>'s <program> program does not run, so it answers no <interface>.`
+
+Each waits until the calls and listeners the mod already sent reach the fake, so a listener the mod just added hears the next `tell`.
+
+The mod below keeps each machine change a `demo/Platform` provider tells, and the test fakes that provider as the `platform` program of the `demo` mod on another device:
+
+```ts
+const machines = defineMod({
+  name: 'machines',
+  state: { session: { changed: [] as readonly string[] } },
+  async setup(mod) {
+    for (const platform of await providers('demo/Platform')) {
+      platform.onMachineChange((machine) => void (mod.state.session.changed = [...mod.state.session.changed, `${platform.device.name}: ${machine.name}`]))
+    }
+  },
+})
+
+test('a machine change on devbox is kept with its device', async () => {
+  const tested = testMod(machines, {
+    providers: [{ name: 'demo/Platform', mod: 'demo', program: 'platform', device: { id: 'devbox-id', name: 'devbox' }, methods: { machines: (region) => [`${region}-1`] } }],
+  })
+  await tested.start()
+
+  tested.providers[0].tell('MachineChange', { name: 'eu-1' })
+  await tested.settle()
+
+  expect(tested.state.session.changed).toEqual(['devbox: eu-1'])
+})
+```
 
 ## Run the tests
 

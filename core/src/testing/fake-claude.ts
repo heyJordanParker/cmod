@@ -34,7 +34,7 @@ export type Fakes = {
   serve: Partial<SessionComputer>
 }
 
-const testDevice: Device = { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }
+export const testDevice: Device = { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }
 
 export type ShownSchedule = { readonly id: string; readonly cron: string; readonly prompt: string }
 
@@ -73,7 +73,12 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
-  const serve = fakeServe(() => fakes.serve)
+  const serve = fakeServe(() => fakes.serve, {
+    device: async () => {
+      const { id, name } = await (fakes.device.read ?? (async () => testDevice))()
+      return { id, name }
+    },
+  })
 
   const faked = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Result) | undefined) => {
     return (...args: Args): Result => {
@@ -246,6 +251,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     env: {
       home: async () => '/test/home',
       dataHome: async () => undefined,
+      cacheHome: async () => undefined,
       configHome: async () => undefined,
       browser: async () => undefined,
       sshConnection: async () => undefined,
@@ -259,9 +265,9 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const settle = async () => {
     let seen: number
     do {
-      seen = calls.length
+      seen = calls.length + serve.requests
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    } while (calls.length !== seen)
+    } while (calls.length + serve.requests !== seen)
   }
 
   const placePane = (id: string) => {

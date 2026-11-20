@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 const clients: RpcClient[] = []
 
@@ -29,7 +29,9 @@ case "$1" in
 esac
 `
 
-async function servedHome() {
+const olderRecord = (home: string, status: object = {}) => JSON.stringify({ pid: process.pid, sessionId: 'older', cwd: project(home), kind: 'interactive', entrypoint: 'cli', ...status })
+
+async function servedHome(status: object = {}) {
   const home = await temporaryHome()
   const folder = `.claude/projects/${project(home).replace(/[^A-Za-z0-9]/g, '-')}`
   await writeFiles(home, {
@@ -37,9 +39,10 @@ async function servedHome() {
     'work/app/.keep': '',
     [`${folder}/ended.jsonl`]: transcript('ended', project(home)),
     [`${folder}/older.jsonl`]: transcript('older', project(home)),
-    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 'older', cwd: project(home), kind: 'interactive', entrypoint: 'cli' }),
+    '.claude/sessions/1.json': olderRecord(home, status),
     '.local/share/cmod/data/cmod/goals/ended.txt': 'Fix the login test',
   })
+  let hear: (heard: unknown) => void = () => undefined
   const serving = startCmod(home, 'serve')
   await serving.waitForOutput('unix:')
   const socket = join(home, '.local/share/cmod/serve.sock')
@@ -48,13 +51,66 @@ async function servedHome() {
       const answer = await fetch(`http://localhost${path}`, { method: init.method, ...(init.body === undefined ? {} : { body: init.body, headers: { 'content-type': 'application/json' } }), unix: socket } as RequestInit)
       return { status: answer.status, text: await answer.text() }
     },
-    handle: (method) => Promise.reject(new Error(`no ${method}`)),
+    handle: (method, params) => (method === '$/on' ? hear(params) : Promise.reject(new Error(`no ${method}`))),
     wait: (ms) => new Promise((resolve) => void setTimeout(resolve, ms)),
   })
   clients.push(client)
-  const act = (action: string, session: string, input: unknown = null) => client.request(`cmod/Session.${action}`, [session, input, { project: project(home) }])
-  return { home, folder, act, stop: () => serving.child.kill() }
+  const act = (action: string, session: string, input: unknown = null) => client.request(`cmod/Sessions.${action}`, [session, input, { project: project(home) }])
+  const nextHeard = () => new Promise<unknown>((resolve) => void (hear = resolve))
+  const stop = () => serving.child.kill()
+  return { home, folder, client, act, nextHeard, stop, stopped: () => (stop(), serving.done) }
 }
+
+test.concurrent("cmod serve lists each of this computer's sessions with the name and id of the device cmod device reads", async () => {
+  const { home, client, stop } = await servedHome()
+
+  const listed = await client.request<readonly { readonly id: string; readonly device?: unknown }[]>('cmod/Sessions.sessions', [{ project: project(home), everyProject: true }])
+  const { id, name } = JSON.parse((await cmod(home, 'device', '--json')).stdout) as { readonly id: string; readonly name: string }
+  stop()
+
+  expect(listed.map((session) => [session.id, session.device]).toSorted()).toEqual([
+    ['ended', { id, name }],
+    ['older', { id, name }],
+  ])
+}, 30_000)
+
+test.concurrent('cmod serve lists a session Claude Code records as waiting with the dialog it waits on, and tells a Change of its status when the record changes', async () => {
+  const { home, client, nextHeard, stopped } = await servedHome({ status: 'waiting', waitingFor: 'permission prompt' })
+  const list = async () => (await client.request<readonly { readonly id: string; readonly status?: string; readonly waitingFor?: unknown }[]>('cmod/Sessions.sessions', [{ project: project(home) }])).map(({ id, status, waitingFor }) => ({ id, status, waitingFor }))
+
+  const waiting = await list()
+  await client.request('$/listen', { id: '1', interface: 'cmod/Sessions', event: 'Change', kind: 'on', args: ['older'] })
+  const heard = nextHeard()
+  await writeFiles(home, { '.claude/sessions/1.json': olderRecord(home, { status: 'busy' }) })
+  const change = await heard
+  const busy = await list()
+  const { stderr } = await stopped()
+
+  expect(waiting.toSorted((first, second) => first.id.localeCompare(second.id))).toEqual([
+    { id: 'ended', status: undefined, waitingFor: undefined },
+    { id: 'older', status: 'waiting', waitingFor: { dialog: 'permission prompt' } },
+  ])
+  expect(change).toEqual({ id: '1', payload: { session: 'older', part: 'status' }, cursor: '1' })
+  expect(busy.find(({ id }) => id === 'older')).toEqual({ id: 'older', status: 'busy', waitingFor: undefined })
+  expect(stderr).toBe('')
+}, 30_000)
+
+test.concurrent('cmod serve answers the cmod/SessionStore and cmod/Session names a cmod plugin from 7.0.0 calls, and refuses its listener on another session', async () => {
+  const { home, client, stop } = await servedHome()
+
+  const listed = await client.request<readonly { readonly id: string }[]>('cmod/SessionStore.sessions', [{ project: project(home), everyProject: true }])
+  const goal = await client.request('cmod/SessionStore.read', ['ended', 'goal', { project: project(home) }])
+  const unknown = await client.request('cmod/Session.abort', ['gone', null, { project: project(home) }]).catch((error: unknown) => (error as Error).message)
+  const change = await client.request('$/listen', { id: '1', interface: 'cmod/SessionStore', event: 'Change', kind: 'on', args: ['ended'] })
+  const listener = await client.request('$/listen', { id: '2', interface: 'cmod/Session', event: 'prompt', kind: 'before', args: ['older'] }).catch((error: unknown) => (error as Error).message)
+  stop()
+
+  expect(listed.map((session) => session.id).toSorted()).toEqual(['ended', 'older'])
+  expect(goal).toEqual({ text: 'Fix the login test' })
+  expect(unknown).toBe('No session gone on this computer.')
+  expect(change).toEqual({})
+  expect(listener).toBe('cmod/Session tells only Change, because a mod hears only the session it runs in.')
+}, 30_000)
 
 test.concurrent('cmod serve resumes an ended session in the background on a message, keeps a visit in visited.json, and deletes an ended session whole', async () => {
   const { home, folder, act, stop } = await servedHome()

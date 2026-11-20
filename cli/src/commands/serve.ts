@@ -4,8 +4,9 @@ import { dirname, join } from 'node:path'
 import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveSocketPath, storeFolder, webPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
+import { placeHerdrMod } from '../herdr.js'
 import { openHistory, runningEntries } from '../history.js'
-import { answered, serveSessions } from '../serve.js'
+import { answered, answeredOlderPlugin, serveSessions } from '../serve.js'
 import { readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 import { webApp } from '../web.js'
 
@@ -21,18 +22,40 @@ launchd's Interactive class on macOS, because every session waits on it. It
 listens on serve.sock in the cmod store, which only you can open, and prints
 unix:<socket> once it listens.
 
-On that socket it serves the cmod/SessionStore interface, the reads cmod history
-answers, from the conversation index it keeps open, and the cmod/Session
-interface. Each session's cmod plugin holds one connection to it and names the
-session it holds, so a call on a session, such as a message, reaches the
-session that runs it, and a before or on listener on a session is held on the
-connection of the session or script that listens, until it closes. A message
-to a session that has ended resumes it in the background. It keeps when each
-session was last opened in visited.json in the cmod store. At its start it
+On that socket it serves the cmod/Sessions interface: the reads cmod sessions
+answers, from the conversation index it keeps open, the actions on a session,
+and a Change event for each session that starts or stops running, is visited,
+or changes its tasks, goal, or status. It lists each running session's status
+from Claude Code's record of it and from what the session's cmod plugin hears:
+whether a turn runs, what a dialog waits on, how full its context is, and how
+its last turn ended. Each session's cmod plugin holds one connection
+to it and names the session it holds, so a call on a session, such as a
+message, reaches the session that runs it. A message to a session that has
+ended resumes it in the background. It keeps when each
+session was last opened in visited.json in the cmod store.
+
+It also holds every interface a program on this computer provides through
+connect() from @cmodjs/core/rpc.js, and carries each call and listener from a
+session or script to the connection that provides it. A program's providers
+end with its connection. A program from a 7.0.0 core, which names its
+interfaces as provides in its instance file, it reaches at that file's address.
+It connects to the cmod serve of each device a cmod/Devices provider names, at
+the address the provider gives, or over the messages the provider carries with
+its send and Message, lists that device's providers, and carries
+each call and listener on one of them there. It offers another device only
+this computer's providers, and starts a background task whose device names
+this computer. At its start it
 deletes each file of the cmod plugin's before folder, where a cmod plugin from
 before 7.0.0 kept its session's before listeners, whose session no longer runs,
 and moves the replies cmod web serve before 7.0.0 marked read, web-read.json, to
 visited.json.
+
+At its start it also places cmod's Herdr mod, which draws every session's
+widgets, views, and pages in Herdr through cmod ui, in mods/cmod of Herdr's
+home: $HERDR_APP_HOME, else $XDG_CONFIG_HOME/herdr-app, else
+~/.config/herdr-app, when that folder exists. It writes only a file that
+differs, records each file it wrote in herdr.json in the cmod store, and leaves
+a mods/cmod folder it did not write. cmod teardown cmod deletes what it wrote.
 
 While "Show the Sidebar in your browser" is on in Settings, under cmod,
 Preferences, it serves the browser app on 127.0.0.1 at the port web.json keeps,
@@ -52,6 +75,7 @@ export async function serve(): Promise<number> {
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod serve: ${doing}: ${messageOf(error)}\n`)
   await forgetEndedBefores(store)
   await keepReadMarks(store)
+  await placeHerdrMod().catch((error: unknown) => report('placed no Herdr mod', error))
   const db = openHistory()
   const sessions = serveSessions({ db, report })
   const web = webApp({ db, sessions })
@@ -60,7 +84,7 @@ export async function serve(): Promise<number> {
   const server = Bun.serve({
     unix: socket,
     fetch(request) {
-      return answered(sessions.routes, request) ?? web.sessionRoute(request) ?? Response.json({ error: `cmod serve has no ${request.method} ${new URL(request.url).pathname}.` }, { status: 404 })
+      return answered(sessions.routes, request) ?? answeredOlderPlugin(request) ?? Response.json({ error: `cmod serve has no ${request.method} ${new URL(request.url).pathname}.` }, { status: 404 })
     },
   })
   await chmod(socket, 0o600)

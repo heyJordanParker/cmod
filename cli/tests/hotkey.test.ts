@@ -57,39 +57,53 @@ test('an update from cmod 3 moves the key its record bound to a slash command on
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'alt+m': 'command:demo--review' } }] })
 })
 
-test('cmod hotkey moves a hotkey to another combo, an update keeps it, and a combo taken by something else fails', async () => {
+test('cmod hotkeys set moves a hotkey to another combo, an update keeps it, and a combo taken by something else fails', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, review })
   await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }] }\n' })
   await cmod(home, 'setup', root, '--events')
 
-  const moved = await cmod(home, 'hotkey', 'demo', 'cycle', 'ctrl+e')
-  const taken = await cmod(home, 'hotkey', 'demo', 'review', 'ctrl+k')
+  const moved = await cmod(home, 'hotkeys', 'set', 'demo', 'cycle', 'ctrl+e')
+  const taken = await cmod(home, 'hotkeys', 'set', 'demo', 'review', 'ctrl+k')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
   await cmod(home, 'setup', root, '--events')
 
   expect(moved.stdout).toBe('Bound ctrl+e to Switch mode for demo.\n')
-  expect(taken.stderr).toBe('cmod hotkey: ctrl+k already runs something else in ~/.claude/keybindings.json. Pick another combo.\n')
+  expect(taken.stderr).toBe('cmod hotkeys: ctrl+k already runs something else in ~/.claude/keybindings.json. Pick another combo.\n')
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'alt+m': 'command:demo--review', 'ctrl+e': 'command:demo--cycle' } }] })
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.keys).toEqual({ 'ctrl+e': 'demo--cycle', 'alt+m': 'demo--review' })
 })
 
-test('cmod hotkey given a plugin folder binds the hotkey of a mod that has no install record, as a --plugin-dir cmod plugin', async () => {
+test('cmod hotkeys set given a plugin folder binds the hotkey of a mod that has no install record, as a --plugin-dir cmod plugin', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle })
 
-  const bound = await cmod(home, 'hotkey', root, 'cycle', 'ctrl+e')
+  const bound = await cmod(home, 'hotkeys', 'set', root, 'cycle', 'ctrl+e')
 
   expect(bound).toMatchObject({ stdout: 'Bound ctrl+e to Switch mode for demo.\n', exitCode: 0 })
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+e': 'command:demo--cycle' } }] })
   expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toBeUndefined()
 })
 
+test('cmod hotkey, which a released cmod plugin runs, binds and prints what hotkeys set does, and fails with its own name', async () => {
+  const [set, released] = [await temporaryHome(), await temporaryHome()]
+  await createHotkeysMod(set, { cycle })
+  await createHotkeysMod(released, { cycle })
+
+  const bound = await cmod(set, 'hotkeys', 'set', join(set, 'demo'), 'cycle', 'ctrl+e')
+  const old = await cmod(released, 'hotkey', join(released, 'demo'), 'cycle', 'ctrl+e')
+  const refused = await cmod(released, 'hotkey', join(released, 'demo'), 'cycle', 'nope')
+
+  expect(old).toEqual(bound)
+  expect(await readFile(keybindings(released), 'utf8')).toBe(await readFile(keybindings(set), 'utf8'))
+  expect([refused.exitCode, refused.stderr]).toEqual([1, 'cmod hotkey: nope is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as ctrl+q or ctrl+shift+k.\n'])
+})
+
 test('an update whose new hotkey defaults to a combo the person rebound keeps the person’s combo and leaves the new hotkey unbound', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle })
   await cmod(home, 'setup', root, '--events')
-  await cmod(home, 'hotkey', 'demo', 'cycle', 'alt+m')
+  await cmod(home, 'hotkeys', 'set', 'demo', 'cycle', 'alt+m')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'demo', cmod: { hotkeys: { cycle, review } } }) })
 
   await cmod(home, 'setup', root, '--events')
@@ -182,12 +196,12 @@ test('setup binds only the hotkeys with a default, and approves only them', asyn
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({ demo: [await hashOf(root), 'hotkey:cycle=shift+tab'] })
 })
 
-test('cmod hotkey binds a hotkey without a default, and an update that adds another one keeps it without asking', async () => {
+test('cmod hotkeys set binds a hotkey without a default, and an update that adds another one keeps it without asking', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { next })
   const installed = await cmod(home, 'setup', root, '--events')
 
-  const bound = await cmod(home, 'hotkey', 'demo', 'next', 'ctrl+n')
+  const bound = await cmod(home, 'hotkeys', 'set', 'demo', 'next', 'ctrl+n')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'demo', cmod: { hotkeys: { next, previous: { title: 'Open the previous item' } } } }) })
   const updated = await cmod(home, 'setup', root, '--events')
 

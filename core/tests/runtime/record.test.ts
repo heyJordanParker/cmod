@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test'
-import { AttachedFile, defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type AttachmentType, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
+import { AttachedFile, defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type AttachmentType, type Subscription, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { Message } from '../../src/session/context/turn/message/message.js'
-import { TaskStart } from '../../src/session/goal/task.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -710,38 +709,28 @@ test('a before listener removed after /clear stops answering in the new session'
   expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Continue', origin: { kind: 'composer' } })
 })
 
-test('a task heard starting in another running session is running, and a send reaches it', async () => {
-  const called: unknown[] = []
-  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
-  fake.fakes.cmod.call = async (input) => {
-    called.push(input)
-    return { value: null }
-  }
-  const client = createSessionsClient({ name: 'demo', claude: fake.claude, report: () => {} })
-  const owners: TaskOwner[] = []
-  client.sessions.onTaskStart((task) => void owners.push(task.owner))
-  await fake.settle()
+test("a listener on another session's record throws, because a mod hears only the session it runs in, and its task's end still reaches this session", async () => {
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { sessions: [{ id: 'other', messages: [{ type: Prompt, text: 'Deploy the docs' }] }] })
+  await tested.start()
+  const task = await sessions.current.startTask({ title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', isBackground: true })
+  const [turn] = await (await sessions.get('other')).turns()
+  const ended: string[] = []
+  task.onTaskEnd((each) => void ended.push(each.id))
 
-  client.changed('other', { type: TaskStart, task: { id: 'task-1', title: 'Look', agentType: 'Explore', openedBy: 'toolu_1', openedAt: '2026-10-14T10:00:00.000Z', context: 1 } }, true, new AbortController().signal)
-  await fake.settle()
-  await owners[0]?.send({ type: Note, text: 'Check tree.ts too.' })
+  expect(() => task.owner.onTurnEnd(() => undefined)).toThrow("demo: onTurnEnd works only in a mod's own session.")
+  expect(() => turn!.onReply(() => undefined)).toThrow("demo: onReply works only in a mod's own session.")
+  expect('onPrompt' in (await sessions.get('other'))).toBe(false)
 
-  expect(owners.map((owner) => owner.isRunning)).toEqual([true])
-  expect(called.at(-1)).toMatchObject({ method: 'cmod:act', input: { session: 'other', task: 'task-1', action: 'send' } })
+  await tested.endTurn({ answer: 'Upgraded.' }, { task: task.id })
+  await tested.settle()
+
+  expect(ended).toEqual([task.id])
 })
 
-test("a session of another project reaches a mod's listener on that session, never its listener on every session", async () => {
-  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
-  fake.fakes.cmod.call = async () => ({ value: [] })
-  const client = createSessionsClient({ name: 'demo', claude: fake.claude, report: () => {} })
-  const heard: string[] = []
-  client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
-  await fake.settle()
+test('a cmod run script hears no session, so its listeners throw', () => {
+  const client = createSessionsClient({ name: 'script', claude: fakeClaude({ name: 'script', root: '/work' }).claude, report: () => {} })
 
-  client.changed('b', { type: Message, message: { id: 'b1', type: Prompt, at: '2026-10-14T10:00:00.000Z', session: 'b', context: 1, text: 'Private B', from: { type: 'person' } } }, false, new AbortController().signal)
-  await fake.settle()
-
-  expect(heard).toEqual([])
+  expect(() => client.sessions.current.onTurnEnd(() => undefined)).toThrow("script: onTurnEnd works only in a mod's own session.")
 })
 
 test("a task owner's goal hears its own update", async () => {

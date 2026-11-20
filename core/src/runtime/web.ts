@@ -42,43 +42,9 @@ const markdownOptions = { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown
 
 type Markdown = { readonly link: number | undefined; readonly pressable: readonly string[] | undefined }
 
-export type SidebarTab = { readonly key: string; readonly label: string; readonly isClosable: boolean }
-
-export type ClosedPage = { readonly mod: string; readonly page: string; readonly title: string }
-
-export type SessionWait = { readonly kind: 'permission'; readonly tool: string; readonly input: Readonly<Record<string, unknown>> } | { readonly kind: 'question'; readonly question: string }
-
-export type TurnOutcome = { readonly reason: 'answered' | 'stopped' | 'failed'; readonly at: string; readonly failure?: string }
-
-export type SessionAbout = {
-  readonly tabs: readonly SidebarTab[]
-  readonly pages: readonly ClosedPage[]
-  readonly isWorking?: boolean
-  readonly waiting?: SessionWait
-  readonly lastTurn?: TurnOutcome
-  readonly contextPercent?: number
-}
-
-export type WebView = { readonly id: string; readonly tab: string; readonly columns: number }
-
-export type WebInput = { readonly draw: number; readonly handler: number; readonly key: string; readonly kind: 'press' | 'change' | 'submit' | 'select' | 'link'; readonly value?: string; readonly href?: string }
-
-export type WebAction =
-  | ({ readonly type: 'press'; readonly view: string } & WebInput)
-  | { readonly type: 'open'; readonly mod: string; readonly page: string }
-  | { readonly type: 'close'; readonly tab: string }
-  | { readonly type: 'prompt'; readonly text: string }
-  | { readonly type: 'stop' }
-
 export type ElementData = { readonly $cmodElement: string; readonly props: Readonly<Record<string, unknown>> }
 
 export type HandlerData = { readonly $cmodHandler: number }
-
-export type SessionEvents = { readonly views: readonly WebView[]; readonly actions: readonly WebAction[] }
-
-export type WebDrawing = { readonly view: string; readonly draw: number; readonly tree: unknown }
-
-export type SessionPost = { readonly about?: SessionAbout; readonly drawings?: readonly WebDrawing[] }
 
 export function htmlOf(tree: unknown): string {
   const drawing: Drawing = { rules: [], groups: new Map(), scopes: 0, scope: undefined }
@@ -162,7 +128,7 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
   },
   Image: (props) => {
     const source = props['source'] as Props | undefined
-    const alt = typeof props['alt'] === 'string' ? props['alt'] : ''
+    const alt = accessibleName(props)
     const size = attribute('style', `width:${across(numberOr(props['columns'], 1))};height:${down(numberOr(props['rows'], 1))}`)
     if (typeof source?.['png'] === 'string' && base64.test(source['png'])) return `<img class="image" alt="${escaped(alt)}" src="data:image/png;base64,${source['png']}"${size}>`
     const [width, height] = [source?.['width'], source?.['height']]
@@ -172,9 +138,14 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
   Svg: (props) => {
     const source = typeof props['source'] === 'string' ? props['source'] : ''
     const size = [typeof props['width'] === 'number' ? `width:${props['width']}px` : '', typeof props['height'] === 'number' ? `height:${props['height']}px` : ''].filter((each) => each !== '').join(';')
-    return `<img class="svg" alt="${escaped(typeof props['alt'] === 'string' ? props['alt'] : '')}" src="data:image/svg+xml,${encodeURIComponent(source)}"${attribute('style', size === '' ? undefined : size)}>`
+    return `<img class="svg" alt="${escaped(accessibleName(props))}" src="data:image/svg+xml,${encodeURIComponent(source)}"${attribute('style', size === '' ? undefined : size)}>`
   },
-  Raster: (props) => rasterHtml(typeof props['cells'] === 'string' ? props['cells'] : '', numberOr(props['columns'], 1)),
+  Raster: (props) => rasterHtml(typeof props['cells'] === 'string' ? props['cells'] : '', numberOr(props['columns'], 1), accessibleName(props)),
+}
+
+function accessibleName(props: Props): string {
+  const name = props['label'] ?? props['alt']
+  return typeof name === 'string' ? name : ''
 }
 
 function escaped(text: string): string {
@@ -359,7 +330,7 @@ function codeHtml(source: string, startLine: number | undefined, isDiff: boolean
   return `<pre class="${isCut ? 'code cut' : 'code'}">${rows.join('\n')}</pre>`
 }
 
-function rasterHtml(cells: string, columns: number): string {
+function rasterHtml(cells: string, columns: number, name: string): string {
   if (cells.length % 4 !== 0 || !base64.test(cells)) return '<span class="gap">The browser draws no Raster whose cells are not base64.</span>'
   const bytes = Uint8Array.from(atob(cells), (character) => character.charCodeAt(0))
   const words = new DataView(bytes.buffer)
@@ -377,7 +348,7 @@ function rasterHtml(cells: string, columns: number): string {
     }
   }
   if (row !== '') rows.push(row)
-  return `<pre class="raster">${rows.join('\n')}</pre>`
+  return `<pre class="raster"${name === '' ? '' : ` role="img"${attribute('aria-label', name)}`}>${rows.join('\n')}</pre>`
 }
 
 function linkHtml(href: string, inner: string, markdown: Markdown): string {

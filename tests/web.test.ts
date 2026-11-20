@@ -1,6 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import { defineMod, type HttpResponse, type Subprocess } from '../node_modules/@cmodjs/core/mod.js'
-import type { SessionAbout, SessionEvents } from '../node_modules/@cmodjs/core/runtime/web.js'
+import { defineMod, type HttpResponse, type Subprocess, type View } from '../node_modules/@cmodjs/core/mod.js'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { calledAnswer } from '../node_modules/@cmodjs/core/testing/fake-claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
@@ -9,9 +8,11 @@ import { cmodPlugin } from '../src/mod.js'
 
 const allHotkeys = Object.keys(cmodPlugin.hotkeys ?? {})
 
-type Spawned ={ readonly stdout: AsyncIterable<Uint8Array>; kill(): void }
+type Spawned = { readonly stdout: AsyncIterable<Uint8Array>; kill(): void }
 
 type Fetched = { readonly ok: boolean; readonly status: number; readonly body: AsyncIterable<Uint8Array> | null; text(): Promise<string> }
+
+type Screen = { readonly draw: number; readonly html: string }
 
 declare const Bun: {
   sleep(ms: number): Promise<void>
@@ -77,8 +78,8 @@ async function until<Value>(found: () => Value | undefined, what: () => string):
   throw new Error(what())
 }
 
-function screensOf(body: AsyncIterable<Uint8Array>): (text: string) => Promise<{ readonly draw: number; readonly html: string }> {
-  const seen: { readonly draw: number; readonly html: string }[] = []
+function screensOf(body: AsyncIterable<Uint8Array>): (text: string) => Promise<Screen> {
+  const seen: Screen[] = []
   const chunks: Uint8Array[] = []
   void (async () => {
     for await (const chunk of body) {
@@ -87,7 +88,7 @@ function screensOf(body: AsyncIterable<Uint8Array>): (text: string) => Promise<{
       seen.length = 0
       for (const block of blocks) {
         const data = /^data: (.*)$/m.exec(block)?.[1]
-        if (block.includes('event: screen') && data !== undefined) seen.push(JSON.parse(data) as (typeof seen)[number])
+        if (block.includes('event: screen') && data !== undefined) seen.push(JSON.parse(data) as Screen)
       }
     }
   })().catch((error: unknown) => {
@@ -103,11 +104,17 @@ function screensOf(body: AsyncIterable<Uint8Array>): (text: string) => Promise<{
     )
 }
 
+const promptRow = (cwd: string, uuid: string, text: string, timestamp: string) => `${JSON.stringify({ type: 'user', uuid, sessionId: 'test-session', cwd, timestamp, message: { role: 'user', content: text } })}\n`
+
+let totalsView: View | undefined
+
 const demo = defineMod({
   name: 'demo',
   state: { session: { presses: 0, name: '', surfaces: [] as string[] } },
   setup(mod) {
-    mod.sidebar.add({
+    const detail = mod.pages.add({ id: 'detail', title: 'Detail', render: () => Text({ children: 'The detail of the count' }) })
+    totalsView = mod.views.add({ id: 'totals', title: 'Totals', render: (current) => Text({ children: `The totals: ${current.state.session.presses}` }) })
+    mod.views.add({
       id: 'count',
       title: 'Count',
       render: (current) =>
@@ -122,6 +129,7 @@ const demo = defineMod({
                 current.state.session.surfaces = [...current.state.session.surfaces, press.surface]
               },
             }),
+            Button({ key: 'detail', label: 'Show the detail', onPress: () => void detail.open() }),
             Input({ key: 'name', label: 'Name', value: current.state.session.name, onInput: (name: string) => void (current.state.session.name = name), onSubmit: () => undefined }),
             Text({ children: `Hello ${current.state.session.name}` }),
           ],
@@ -134,7 +142,11 @@ async function browsed() {
   const home = `/tmp/cmod-web-test-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
   homes.push(home)
   await Bun.write(`${home}/.local/share/cmod/preferences.json`, JSON.stringify({ servesWebUi: true, servesTailnet: false }))
-  await Bun.write(`${home}/.claude/sessions/1.json`, JSON.stringify({ pid: process.pid, sessionId: 'test-session', cwd: `${home}/work/app`, kind: 'interactive', entrypoint: 'cli', name: 'counting' }))
+  const cwd = `${home}/work/app`
+  await Bun.write(`${home}/.claude/sessions/1.json`, JSON.stringify({ pid: process.pid, sessionId: 'test-session', cwd, kind: 'interactive', entrypoint: 'cli', name: 'counting' }))
+  const transcript = `${home}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}/test-session.jsonl`
+  const firstPrompt = promptRow(cwd, 'u1', 'Count the presses', '2026-11-20T10:00:00.000Z')
+  await Bun.write(transcript, firstPrompt)
   const server = Bun.spawn(['bun', `${clone}/cli/src/main.ts`, 'serve'], { env: { HOME: home, PATH: Bun.env['PATH'] ?? '' }, stdout: 'pipe', stderr: 'inherit' })
   servers.push(server)
   const socket = (await firstLine(server.stdout)).replace(/^unix:/, '')
@@ -154,22 +166,37 @@ async function browsed() {
     const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(body === undefined ? {} : { body }), ...(init?.socketPath === undefined ? {} : { unix: socket }) })
     return { status: answer.status, ok: answer.ok, headers: {}, text: await answer.text() }
   }
-  tested.fakes.cmod.call = async (input) => (input.to === 'demo' ? calledAnswer('cmod', await counted.fire('cmod.call', { to: 'demo', method: input.method, input: input.input, caller: 'cmod' } as never)) : null)
-  await tested.start()
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'count', title: 'Count', place: 'sidebar' }] }, requests: [{ open: 'count' }] }, caller: 'demo' } as never)
+  const waitingShown: { readonly isWanted: (inApps: readonly string[]) => boolean; readonly heard: () => void }[] = []
+  const shownToDemo = (isWanted: (inApps: readonly string[]) => boolean) => new Promise<void>((heard) => void waitingShown.push({ isWanted, heard }))
+  tested.fakes.cmod.call = async (input) => {
+    if (input.to === 'demo') {
+      const answer = calledAnswer('cmod', await counted.fire('cmod.call', { to: 'demo', method: input.method, input: input.input, caller: 'cmod' } as never))
+      const told = input.method === 'cmod:shown' ? ((input.input as { readonly inApps?: readonly string[] }).inApps ?? []) : undefined
+      for (const waiting of told === undefined ? [] : waitingShown.filter((each) => each.isWanted(told))) {
+        waitingShown.splice(waitingShown.indexOf(waiting), 1)
+        waiting.heard()
+      }
+      return answer
+    }
+    if (input.to === 'cmod') return calledAnswer('cmod', await tested.fire('cmod.call', { to: 'cmod', method: input.method, input: input.input, caller: 'cmod' } as never))
+    return null
+  }
+  await tested.startSession({ source: 'startup' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'totals', title: 'Totals', place: 'sidebar' }, { id: 'count', title: 'Count', place: 'sidebar' }, { id: 'detail', title: 'Detail' }] }, requests: [{ open: 'count' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   const browsing = new AbortController()
   const stream = await fetch(`${address}/api/stream?${new URLSearchParams({ stream: 'test-browser', columns: '160' })}`, { signal: browsing.signal })
   const showing = screensOf(stream.body ?? (async function* () {})())
-  const press = (screen: { readonly draw: number; readonly html: string }, key: string, attribute: string, input: { readonly kind: string; readonly value?: string }) => {
+  const press = (screen: Screen, key: string, attribute: string, input: { readonly kind: string; readonly value?: string }) => {
     const handler = new RegExp(`data-key="${key}"[^>]*?${attribute}="(\\d+)"`).exec(screen.html)?.[1]
-    return fetch(`${address}/api/press`, { method: 'POST', headers: { origin: address, 'content-type': 'application/json' }, body: JSON.stringify({ stream: 'test-browser', draw: screen.draw, handler: Number(handler), key, ...input }) })
+    if (handler === undefined) throw new Error(`the screen draws no ${attribute} on ${key}:\n${screen.html}`)
+    return fetch(`${address}/api/press`, { method: 'POST', headers: { origin: address, 'content-type': 'application/json' }, body: JSON.stringify({ stream: 'test-browser', handler: Number(handler), key, ...input }) })
   }
-  const page = async () => {
-    const listed = await showing('data-key="tab:demo/count"')
-    await press(listed, 'tab:demo/count', 'data-press', { kind: 'press' })
-    return showing('Pressed ')
+  const tab = async (key: string, text: string) => {
+    const listed = await showing(`data-key="tab:${key}"`)
+    await press(listed, `tab:${key}`, 'data-press', { kind: 'press' })
+    return showing(text)
   }
   async function sidebar(): Promise<string> {
     await tested.settle()
@@ -177,123 +204,48 @@ async function browsed() {
     await tested.settle()
     return (await tested.shown.pane.lines()).join('\n')
   }
+  const leave = () => browsing.abort()
   function close(): void {
-    browsing.abort()
+    leave()
     server.kill()
   }
-  return { counted, showing, press, page, sidebar, close }
+  const prompted = (uuid: string, text: string, timestamp: string) => Bun.write(transcript, `${firstPrompt}${promptRow(cwd, uuid, text, timestamp)}`)
+  return { tested, counted, showing, press, tab, sidebar, shownToDemo, prompted, leave, close }
 }
 
-function sessionChannel() {
-  const told: SessionAbout[] = []
-  const queued: SessionEvents[] = []
-  let deliver: ((events: SessionEvents) => void) | undefined
-  const answered = (text: string): HttpResponse => ({ status: 200, ok: true, headers: {}, text })
-  const fetched = async (_url: string, init?: { readonly method?: string; readonly body?: string }): Promise<HttpResponse> => {
-    if (init?.method === 'POST') {
-      const body = JSON.parse(init.body ?? '{}') as { readonly about?: SessionAbout }
-      if (body.about !== undefined) told.push(body.about)
-      return answered('{}')
-    }
-    const next = queued.shift() ?? (await new Promise<SessionEvents>((resolve) => void (deliver = resolve)))
-    return answered(JSON.stringify(next))
-  }
-  const send = (events: SessionEvents) => {
-    if (deliver === undefined) return void queued.push(events)
-    deliver(events)
-    deliver = undefined
-  }
-  const about = (matches: (about: SessionAbout) => boolean) =>
-    until(
-      () => told.findLast(matches),
-      () => `the session never told the browser app such an about. It told:\n${JSON.stringify(told)}`,
-    )
-  return { fetched, send, about }
-}
-
-async function poster() {
-  const channel = sessionChannel()
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files: { [`${store}/preferences.json`]: preferences } })
-  tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running('127.0.0.1:4567') : running('[]'))
-  tested.fakes.http.fetch = channel.fetched
-  await tested.start()
-  await tested.settle()
-  return { tested, ...channel }
-}
-
-test('the session tells the browser app it works, what permission it waits on with the tool and its input, and that the person stopped its turn with Esc', async () => {
-  const { tested, about } = await poster()
+test('the browser app lists the session with the status its cmod plugin tells cmod serve, and a turn the person stopped with Esc as stopped before it answered', async () => {
+  const { tested, showing, close } = await browsed()
   const claudeCode = claudeCodeOf(tested)
   await claudeCode.fire('turn.start', { text: 'Run the suite', turnId: 'turn-1' })
-  const working = await about((told) => told.isWorking === true)
-  let allow: (result: unknown) => void = () => undefined
-  const call = claudeCode.fire('tool.call', { tool: 'Bash', tool_use_id: 'call-1', command: 'bun test' } as never, new Promise((resolve) => void (allow = resolve)) as never)
-  await claudeCode.fire('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' } as never)
-  const waiting = await about((told) => told.waiting !== undefined)
-  allow({ result: 'ok' })
-  await call
-  const allowed = await about((told) => told.waiting === undefined && told.isWorking === true && told !== working)
+  const working = await showing('Working 1')
   await claudeCode.fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-1' } as never)
-  const stopped = await about((told) => told.lastTurn !== undefined)
+  const stopped = await showing('Stopped before it answered')
+  close()
 
-  expect(working).toMatchObject({ tabs: [{ key: 'dashboard', label: 'Dashboard' }, { key: 'settings', label: 'Settings' }], isWorking: true })
-  expect(waiting.waiting).toEqual({ kind: 'permission', tool: 'Bash', input: { command: 'bun test' } })
-  expect(allowed.waiting).toBeUndefined()
-  expect(stopped).toMatchObject({ isWorking: false, lastTurn: { reason: 'stopped' } })
-  expect(stopped.waiting).toBeUndefined()
-})
+  expect(working.html).toContain('counting')
+  expect(working.html).toContain('data-key="stop"')
+  expect(stopped.html).toContain('Needs you 1')
+}, 30_000)
 
-test('History the person opened shows in the browser app as a tab of the session it maps', async () => {
-  const { tested, about } = await poster()
-
-  await tested.type('/history')
-  const told = await about((each) => each.tabs.some((tab) => tab.label === 'History'))
-
-  expect(told.tabs).toEqual([
-    { key: 'dashboard', label: 'Dashboard', isClosable: false },
-    { key: 'cmod/history', label: 'History', isClosable: true },
-    { key: 'settings', label: 'Settings', isClosable: false },
-  ])
-})
-
-test('a prompt the browser app queues reaches Claude Code as the person own prompt, and its Stop aborts the running turn', async () => {
-  const { tested, send } = await poster()
-  await claudeCodeOf(tested).fire('turn.start', { text: 'Run the suite', turnId: 'turn-7' })
-  send({ views: [], actions: [{ type: 'stop' }, { type: 'prompt', text: 'Now run the whole suite' }] })
-  const calls = await until(
-    () => {
-      const made = tested.calls.filter((call) => call.call === 'turn.abort' || call.call === 'prompt.submit')
-      return made.length === 2 ? made : undefined
-    },
-    () => `the session made no abort and submit. It made:\n${JSON.stringify(tested.calls.map((call) => call.call))}`,
-  )
-
-  expect(calls.map(({ call, args }) => [call, args[0]])).toEqual([
-    ['turn.abort', { turnId: 'turn-7' }],
-    ['prompt.submit', { text: 'Now run the whole suite', asUser: true }],
-  ])
-})
-
-test("a mod's Sidebar page shows in a tab of its session in the browser app as HTML, a press there runs the mod's onPress as a desktop press, and the redrawn page reaches the browser and the Sidebar", async () => {
-  const { counted, showing, press, page, sidebar, close } = await browsed()
-  const before = await page()
+test("a mod's view shows as a tab of its session in the browser app, drawn through cmod/UI as HTML, a press there runs the mod's onPress as a browser press, and the view redrawn on Redraw reaches the browser and the Sidebar", async () => {
+  const { counted, showing, press, tab, sidebar, close } = await browsed()
+  const before = await tab('demo/count', 'Pressed ')
   const pressed = await press(before, 'Press', 'data-press', { kind: 'press' })
   const after = await showing('Pressed 1 times')
   const lines = await sidebar()
   close()
 
   expect(before.html).toContain('<span class="t">Pressed 0 times</span>')
-  expect(before.html).toContain('counting')
   expect(pressed.status).toBe(200)
   expect(counted.state.session.presses).toBe(1)
-  expect(counted.state.session.surfaces).toEqual(['desktop'])
+  expect(counted.state.session.surfaces).toEqual(['browser'])
   expect(after.html).toContain('<span class="t">Pressed 1 times</span>')
   expect(lines).toContain('Pressed 1 times')
 }, 30_000)
 
-test("text typed in a page's Input in the browser app reaches the mod's onInput, and the page it redraws reaches the browser and the Sidebar", async () => {
-  const { counted, showing, press, page, sidebar, close } = await browsed()
-  const before = await page()
+test("text typed in a view's Input in the browser app reaches the mod's onInput, and the view it redraws reaches the browser and the Sidebar", async () => {
+  const { counted, showing, press, tab, sidebar, close } = await browsed()
+  const before = await tab('demo/count', 'Pressed ')
   const typed = await press(before, 'demo/count:name', 'data-input', { kind: 'change', value: 'Ada' })
   const after = await showing('Hello Ada')
   const lines = await sidebar()
@@ -304,4 +256,75 @@ test("text typed in a page's Input in the browser app reaches the mod's onInput,
   expect(counted.state.session.name).toBe('Ada')
   expect(after.html).toContain('value="Ada"')
   expect(lines).toContain('Hello Ada')
+}, 30_000)
+
+test('a mod that opens its own page from a press shows that page in the browser app, which follows the Open cmod/UI tells', async () => {
+  const { showing, press, tab, close } = await browsed()
+  const before = await tab('demo/count', 'Pressed ')
+  await press(before, 'demo/count:detail', 'data-press', { kind: 'press' })
+  const opened = await showing('The detail of the count')
+  close()
+
+  expect(before.html).toContain('data-key="page:demo/detail"')
+  expect(opened.html).toContain('data-key="tab:demo/detail"')
+  expect(opened.html).toContain('data-key="close:demo/detail"')
+}, 30_000)
+
+test("Stop in the browser app aborts the session's running turn, and a prompt typed there reaches Claude Code as the person's own prompt, both through cmod/Sessions", async () => {
+  const { tested, showing, press, close } = await browsed()
+  let isSubmitted: () => void = () => undefined
+  const submitted = new Promise<void>((resolve) => (isSubmitted = resolve))
+  tested.fakes.prompt.submit = async ({ text }) => {
+    isSubmitted()
+    return { text }
+  }
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Run the suite', turnId: 'turn-7' })
+  const working = await showing('data-key="stop"')
+  await press(working, 'stop', 'data-press', { kind: 'press' })
+  await press(working, 'prompt:test-session:0', 'data-submit', { kind: 'submit', value: 'Now run the whole suite' })
+  await submitted
+  close()
+
+  expect(tested.calls.filter(({ call }) => call === 'turn.abort' || call === 'prompt.submit').map(({ call, args }) => [call, args[0]])).toEqual([
+    ['turn.abort', { turnId: 'turn-7' }],
+    ['prompt.submit', { text: 'Now run the whole suite', asUser: true }],
+  ])
+}, 30_000)
+
+test("the cmod plugin's Dashboard, History, and Settings are views cmod/UI lists, and Settings draws in the browser app", async () => {
+  const { tab, close } = await browsed()
+  const settings = await tab('cmod/settings', 'Preferences')
+  close()
+
+  expect(settings.html).toContain('data-key="tab:cmod/dashboard"')
+  expect(settings.html).toContain('data-key="tab:cmod/history"')
+  expect(settings.html).toContain('Mods')
+}, 30_000)
+
+test("a mod's view only the browser app shows reads isShown true in the mod, and false once the browser's stream closes", async () => {
+  const { tab, shownToDemo, leave, close } = await browsed()
+  const before = totalsView?.isShown
+  const shown = shownToDemo((ids) => ids.includes('totals'))
+  await tab('demo/totals', 'The totals: 0')
+  await shown
+  const whileShown = totalsView?.isShown
+  const hidden = shownToDemo((ids) => ids.length === 0)
+  leave()
+  await hidden
+  close()
+
+  expect([before, whileShown, totalsView?.isShown]).toEqual([false, true, false])
+}, 30_000)
+
+test("the cmod plugin's History, shown only in the browser app, refreshes on a new message of the session", async () => {
+  const { tested, tab, showing, prompted, close } = await browsed()
+  const before = await tab('cmod/history', 'data-key="cmod/history:history:find"')
+  await prompted('u2', 'Ship the release', '2026-11-20T10:05:00.000Z')
+  await claudeCodeOf(tested).fire('session.append', { uuid: 'u2', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Ship the release' }] } } as never)
+  const refreshed = await showing('Ship the release')
+  close()
+
+  expect(before.html).not.toContain('Ship the release')
+  expect(refreshed.html).toContain('data-key="cmod/history:history:find"')
+  expect(refreshed.html).toContain('Count the presses')
 }, 30_000)

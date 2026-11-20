@@ -1,8 +1,9 @@
-import type { Job } from '../mod.js'
-import { instancePath, interfaceName, processTypes, storeFolder, type ProcessType } from '../records.js'
-import type { InterfaceName } from '../runtime/interfaces.js'
+import type { InterfaceName, InterfaceProvider, Job } from '../mod.js'
+import { instancePath, processTypes, type ProcessType } from '../records.js'
+import { cmodPluginName, isUnanswered } from '../runtime/dependencies.js'
 import { engineOf } from '../runtime/engine.js'
-import { isHeld } from '../runtime/programs.js'
+import { interfaceMethods, type ProviderIdentity } from '../runtime/interfaces.js'
+import { cmodStore, isHeld } from '../runtime/programs.js'
 import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import { basename } from '../vendor.js'
@@ -10,6 +11,7 @@ import { basename } from '../vendor.js'
 export type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
   ready(): Promise<{ url: string; socketPath?: string; tailnetUrl?: string }>
+  provider<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>>
 }
 
 type Address = Awaited<ReturnType<Program['ready']>>
@@ -28,31 +30,28 @@ export function program(options: {
   readonly singleInstance?: boolean
   readonly isService?: boolean
   readonly isWebApp?: boolean
-  readonly provides?: readonly InterfaceName[]
   readonly processType?: ProcessType
 }): Job<Program> {
-  const { command, environment, singleInstance = false, isService = false, isWebApp = false, provides = [], processType } = options
+  const { command, environment, singleInstance = false, isService = false, isWebApp = false, processType } = options
   return ({ mod, announce, reserveName }) => {
-    const { claude, report, spawnCmod, isInstalledCopy, watches } = engineOf(mod)
+    const { claude, report, spawnCmod, isInstalledCopy, watches, interfaces } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     if (isService) for (const type of ['program', 'service']) reserveName(type, basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
     else if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
     const isElected = singleInstance || isService
     if (isWebApp && !isElected) throw new Error(`${mod.name}: the web app ${executable} runs a copy per session, and your tailnet reaches one copy per computer. Add singleInstance: true or isService: true.`)
-    if (provides.length > 0 && !isElected) throw new Error(`${mod.name}: ${executable} provides ${provides.join(' and ')}, and every caller finds a provider through its one copy on the computer. Add singleInstance: true or isService: true.`)
-    const unnamed = provides.find((name) => !interfaceName.test(name))
-    if (unnamed !== undefined) throw new Error(`${mod.name}: ${executable} provides ${unnamed}, which is no interface name. Name an interface <mod>/<Name>, such as anyhost/Platform.`)
     if (processType !== undefined && !(processTypes as readonly string[]).includes(processType)) throw new Error(`${mod.name}: ${executable}'s processType is ${String(processType)}. Give ${processTypes.join(' or ')}.`)
     if (processType !== undefined && !isService) throw new Error(`${mod.name}: ${executable}'s processType names the launchd class of a service. Add isService: true.`)
-    const holderFlags = [...(isWebApp ? ['--web-app'] : []), ...provides.flatMap((name) => ['--provides', name])]
+    const holderFlags = isWebApp ? ['--web-app'] : []
     const serviceClass = processType === undefined ? [] : ['--process-type', processType]
-    const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }
+    const request = { argv: command, env: { CMOD_DATA: mod.dataFolder, CMOD_CACHE: mod.cacheFolder, ...environment } }
     let state: Program['state'] = 'stopped'
     let address: Address | undefined
     let failure: Error | undefined
     let exits = 0
     const waiting: { resolve: (address: Address) => void; reject: (error: Error) => void }[] = []
+    const failing = new Set<(error: Error) => void>()
     let isFollowing = false
     let isWatching = false
     let instance: Promise<string> | undefined
@@ -64,7 +63,7 @@ export function program(options: {
     }
 
     const instanceFile = () =>
-      (instance ??= Promise.all([claude.env.home(), claude.env.dataHome()]).then(([home, dataHome]) => instancePath(storeFolder({ HOME: home, XDG_DATA_HOME: dataHome }), mod.name, basename(executable))))
+      (instance ??= cmodStore(claude).then((store) => instancePath(store, mod.name, basename(executable))))
 
     const following = (run: Promise<unknown>) => void run.catch((error: unknown) => report({ id: `program:${executable}:follow`, message: `Could not follow the ${executable} program`, error }))
 
@@ -79,14 +78,34 @@ export function program(options: {
       }
       report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason, retry })
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
+      for (const fail of failing) fail(failure)
+      failing.clear()
     }
 
-    const recordedAddress = async (file: string): Promise<Address | undefined> => {
+    const ownProvider = async (name: string) => {
+      const found = (await claude.cmod.call({ to: cmodPluginName, method: interfaceMethods.provider, input: { interface: name, mod: mod.name, program: basename(executable) } })) as ProviderIdentity | null
+      if (found === null) return undefined
+      return (await interfaces.providers(name)).find((each) => each['mod'] === found.mod && each['program'] === found.program && (each['device'] as ProviderIdentity['device'])?.id === found.device?.id)
+    }
+
+    const providedHere = async (name: string): Promise<unknown> => {
+      while (state !== 'fatal') {
+        const own = await ownProvider(name).catch((error: unknown) => {
+          if (isUnanswered(error)) return undefined
+          throw error
+        })
+        if (own !== undefined) return own
+      }
+      throw failure
+    }
+
+    const recordedInstance = async (file: string): Promise<{ readonly address?: Address } | undefined> => {
       const recorded = await claude.fs.read(file).catch(ifMissing(undefined))
       if (recorded === undefined) return undefined
       const instance = JSON.parse(recorded) as { readonly address?: unknown; readonly tailnetUrl?: unknown }
-      const next = addressOf(String(instance.address).trim())
-      return next !== undefined && typeof instance.tailnetUrl === 'string' ? { ...next, tailnetUrl: instance.tailnetUrl } : next
+      const next = typeof instance.address === 'string' ? addressOf(instance.address.trim()) : undefined
+      if (next === undefined) return {}
+      return { address: typeof instance.tailnetUrl === 'string' ? { ...next, tailnetUrl: instance.tailnetUrl } : next }
     }
 
     const show = (next: Address) => {
@@ -94,6 +113,15 @@ export function program(options: {
       state = 'running'
       exits = 0
       for (const waiter of waiting.splice(0)) waiter.resolve(next)
+    }
+
+    const noAddress = () => new Error(`${mod.name}: the ${executable} program printed no address, because it only provides interfaces. Reach them through provider(name).`)
+
+    const started = () => {
+      if (state !== 'starting') return
+      state = 'running'
+      exits = 0
+      for (const waiter of waiting.splice(0)) waiter.reject(noAddress())
     }
 
     const checkLease = (file: string) =>
@@ -107,8 +135,9 @@ export function program(options: {
 
     const track = async (file: string) => {
       if (!isFollowing) return
-      const next = await recordedAddress(file)
-      if (next !== undefined) return show(next)
+      const instance = await recordedInstance(file)
+      if (instance?.address !== undefined) return show(instance.address)
+      if (instance !== undefined) return started()
       address = undefined
       state = 'starting'
       claude.clock.after(Math.random() * retryWithinMs, () => following(checkLease(file)))
@@ -147,13 +176,13 @@ export function program(options: {
           pending = lines.pop() ?? ''
           for (const line of lines.slice(0, 1)) {
             if (isElected && line.trim() === 'held') return await follow(await instanceFile())
+            isShown = true
             const next = addressOf(line.trim())
-            if (next === undefined) {
+            if (isElected && line.trim() === 'provided') started()
+            else if (next === undefined) {
               stop(`its first line is "${line.trim()}". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.`)
               return
-            }
-            show(isWebApp ? ((await recordedAddress(await instanceFile())) ?? next) : next)
-            isShown = true
+            } else show(isWebApp ? ((await recordedInstance(await instanceFile()))?.address ?? next) : next)
           }
         }
       } catch (error) {
@@ -180,10 +209,21 @@ export function program(options: {
         return state
       },
       ready() {
-        if (state === 'running' && address !== undefined) return Promise.resolve(address)
+        if (state === 'running') return address === undefined ? Promise.reject(noAddress()) : Promise.resolve(address)
         if (state === 'fatal') return Promise.reject(failure)
         if (state === 'stopped') void start()
         return new Promise((resolve, reject) => waiting.push({ resolve, reject }))
+      },
+      provider<Name extends InterfaceName>(name: Name) {
+        if (!isElected) return Promise.reject(new Error(`${mod.name}: provider(${name}) needs the ${executable} program to run as singleInstance or isService, because only one copy of a program can provide an interface.`))
+        if (state === 'fatal') return Promise.reject(failure)
+        if (state === 'stopped') void start()
+        return new Promise<InterfaceProvider<Name>>((resolve, reject) => {
+          failing.add(reject)
+          void providedHere(name)
+            .then((own) => resolve(own as InterfaceProvider<Name>), reject)
+            .finally(() => failing.delete(reject))
+        })
       },
     }
   }

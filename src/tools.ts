@@ -20,8 +20,16 @@ const oneLine = (text: string) => {
   return line.length > lineChars ? `${line.slice(0, lineChars)}…` : line
 }
 
+const waitLine = ({ dialog, tool, input, question }: NonNullable<SessionOf['waitingFor']>) => `  waiting for ${dialog}${question !== undefined ? `: ${oneLine(question)}` : tool !== undefined ? `: ${tool} ${oneLine(JSON.stringify(input ?? {}))}` : ''}`
+
 const sessionLine = (session: SessionOf) =>
-  [`${session.id}  ${session.isRunning ? 'running' : 'ended'}  ${session.title || '(untitled)'}`, `  project ${session.project}, last active ${session.lastAt}`, ...(session.forkedFrom === undefined ? [] : [`  forked from ${session.forkedFrom}`]), ...(session.visitedAt === undefined ? [] : [`  visited ${session.visitedAt}`])].join('\n')
+  [
+    `${session.id}  ${session.isRunning ? 'running' : 'ended'}  ${session.title || '(untitled)'}`,
+    `  ${session.device === undefined ? '' : `device ${session.device.name}, `}project ${session.project}, last active ${session.lastAt}`,
+    ...(session.forkedFrom === undefined ? [] : [`  forked from ${session.forkedFrom}`]),
+    ...(session.visitedAt === undefined ? [] : [`  visited ${session.visitedAt}`]),
+    ...(session.waitingFor === undefined ? [] : [waitLine(session.waitingFor)]),
+  ].join('\n')
 
 const places = ['focus', 'peek', 'tab', 'right', 'down', 'hide'] as const
 
@@ -86,13 +94,13 @@ export function addClaudeTools(mod: Mod<CmodPluginState>): void {
           agentType: { type: 'string', description: 'The agent definition the session runs, such as Explore. Leave it out for a plain session.' },
           model: { type: 'string', description: 'The model the session runs on, such as sonnet. Leave it out for the default model.' },
           cwd: { type: 'string', description: 'The folder the session works in. Leave it out for this session’s folder.' },
-          machine: { type: 'string', description: 'The machine the session runs on, which a mod that starts sessions on other machines reads. Leave it out for this computer.' },
+          device: { type: 'string', description: 'The device the session runs on, by its name or its cmod device id, which a mod that starts sessions on other devices reads. Leave it out for this computer.' },
         },
         required: ['prompt', 'title'],
         additionalProperties: false,
       },
-      execute: async ({ prompt, title, agentType, model, cwd, machine }) => {
-        const started = await sessions.current.startTask({ prompt, title, isBackground: true, ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), ...(cwd === undefined ? {} : { cwd }), ...(machine === undefined ? {} : { machine }) })
+      execute: async ({ prompt, title, agentType, model, cwd, device }) => {
+        const started = await sessions.current.startTask({ prompt, title, isBackground: true, ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), ...(cwd === undefined ? {} : { cwd }), ...(device === undefined ? {} : { device }) })
         return `Started session ${started.id}. It answers there, not in this conversation. Read it with read_session.`
       },
     }),
@@ -100,7 +108,7 @@ export function addClaudeTools(mod: Mod<CmodPluginState>): void {
   mod.use(
     tool({
       name: 'list_sessions',
-      description: "List Claude Code sessions, newest first: this project's, or every project's, on every machine cmod reaches.",
+      description: "List Claude Code sessions, newest first: this project's, or every project's, on every device cmod reaches.",
       inputSchema: {
         type: 'object',
         properties: {

@@ -113,6 +113,7 @@ export type Claude = {
   readonly env: {
     home(): Promise<string | undefined>
     dataHome(): Promise<string | undefined>
+    cacheHome(): Promise<string | undefined>
     configHome(): Promise<string | undefined>
     browser(): Promise<string | undefined>
     sshConnection(): Promise<string | undefined>

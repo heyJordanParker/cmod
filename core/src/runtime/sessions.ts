@@ -46,6 +46,8 @@ export type SessionColor = { readonly session: string; readonly color?: string }
 
 const resetColors: readonly string[] = ['default', 'reset', 'none', 'gray', 'grey']
 
+const sessionFields: Readonly<Record<keyof SessionData, true>> = { id: true, title: true, color: true, project: true, cwd: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true }
+
 export function pickedColor(args: string): string | undefined {
   const picked = args.trim().toLowerCase()
   return resetColors.includes(picked) ? undefined : picked
@@ -61,9 +63,9 @@ export type Scope = { readonly session?: string; readonly context?: number; read
 
 export type SessionsClient = {
   readonly sessions: Sessions
-  changed(session: string, change: SessionChange, isInProject: boolean, cancel: AbortSignal): void
-  answerBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, cancel: AbortSignal): Promise<unknown>
-  failedBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error): { readonly refuse: string } | undefined
+  changed(session: string, change: SessionChange, cancel: AbortSignal): void
+  answerBefore(session: string, event: BeforeEvent, change: SessionChange, cancel: AbortSignal): Promise<unknown>
+  failedBefore(session: string, event: BeforeEvent, change: SessionChange, error: Error): { readonly refuse: string } | undefined
   raise(method: string, payload: Readonly<Record<string, unknown>>, cancel: AbortSignal): Promise<unknown>
   listen(method: string, args: readonly unknown[]): Subscription
   turn(data: TurnData): Turn
@@ -151,9 +153,11 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   let current: SessionData = { id: '', title: '', project: '', cwd: '', model: '', startedAt: '', lastAt: '', isRunning: true }
   let told: SessionColor = { session: '' }
 
+  const ownOnly = (method: string) => new Error(`${name}: ${method} works only in a mod's own session.`)
+
   const colored = ({ color: _color, ...data }: SessionData): SessionData => (told.session === data.id && told.color !== undefined ? { ...data, color: told.color } : data)
 
-  const keyOf = (scope: Scope) => scope.session ?? everySession
+  const keyOf = (scope: Scope) => scope.session ?? current.id
 
   const subscribe = (key: string) => {
     if (queued.has(key)) return
@@ -164,8 +168,8 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
         [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), scope, ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const } : {}), ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) }))
       const tracksTasks = [...(listening.get(key) ?? []), ...(deciding.get(key) ?? [])].some(({ scope }) => scope.task !== undefined || scope.isGoal === true)
       const subscriptions = [...heard(listening), ...(tracksTasks ? [{ event: TaskStart }] : [])]
-      await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error: unknown) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
-      await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error: unknown) => report(`before:${key}`, `Changes nothing in ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
+      await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error: unknown) => report(`sessions:${key}`, `Hears nothing from session ${key}`, error))
+      await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error: unknown) => report(`before:${key}`, `Changes nothing in session ${key}`, error))
     })
   }
 
@@ -240,12 +244,12 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       return refusalOf(options, takes, error)
     })
 
-  const decidersOf = (session: string, event: BeforeEvent, isInProject: boolean) => [...(deciding.get(session) ?? []), ...(isInProject ? (deciding.get(everySession) ?? []) : [])].filter((entry) => entry.event === event)
+  const decidersOf = (session: string, event: BeforeEvent) => [...(deciding.get(session) ?? [])].filter((entry) => entry.event === event)
 
   const decides = async (entry: Listening, session: string, change: SessionChange) => (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)) && (await inScope(entry, session, change))
 
-  const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, cancel: AbortSignal): Promise<Partial<Answers> | undefined> => {
-    const askers = decidersOf(session, event, isInProject)
+  const combined = async (session: string, event: BeforeEvent, change: SessionChange, cancel: AbortSignal): Promise<Partial<Answers> | undefined> => {
+    const askers = decidersOf(session, event)
       .map((entry) => async (latest: SessionChange) => {
         if (!(await decides(entry, session, latest))) return undefined
         const payload = await payloadFor(session, latest)
@@ -258,7 +262,9 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   const eventMethods = (scopeOf: () => Scope, hasBefore: boolean, ended?: string): OnMethods & Partial<BeforeMethods> => {
     const method = (into: Map<string, Set<Listening>>, named: string, event: SessionEvent) => (...args: unknown[]) => {
       if (ended !== undefined) throw new Error(`${name}: ${ended} has ended, so its ${named} never fires. Listen on its Session.`)
-      return add(into, scopeOf(), event, named, args, subscribe)
+      const scope = scopeOf()
+      if (routeOn === undefined || keyOf(scope) !== current.id) throw ownOnly(named)
+      return add(into, scope, event, named, args, subscribe)
     }
     return Object.fromEntries([
       ...Object.entries(sessionEvents).map(([named, event]) => [`on${named}`, method(listening, `on${named}`, event)]),
@@ -379,52 +385,17 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 
   const surfacesHere = async (): Promise<Surface[]> => [...(await claude.session.surfaces())]
 
-  const sessionOf = (read: () => SessionData, owned?: Owned, isOwner = owned !== undefined) => {
+  const sessionOf = (read: () => SessionData, owned?: Owned, isOwner = owned !== undefined, hears = true) => {
     const id = () => read().id
     const isHere = () => owned === undefined && id() === current.id
     const scope = (): Scope => (owned === undefined ? { session: id(), isAgent: true } : { session: owned.session, task: owned.task, isAgent: true })
     const where = () => (owned === undefined ? { session: id() } : { session: owned.session, task: owned.task })
     const turnsOf = async (options: { readonly last?: number } = {}): Promise<Turn[]> => (await call<TurnData[]>(conversationMethods.turns, { ...where(), ...options })).map((turn) => turnOf(where(), turn))
     const contextsOf = async (): Promise<Context[]> => (await call<ContextData[]>(conversationMethods.contexts, where())).map((context) => contextOf(where(), context))
-    const session = {
-      get id() {
-        return read().id
-      },
-      get title() {
-        return read().title
-      },
-      get color() {
-        return read().color
-      },
-      get project() {
-        return read().project
-      },
-      get agentType() {
-        return read().agentType
-      },
-      get model() {
-        return read().model
-      },
-      get cwd() {
-        return read().cwd
-      },
-      get isRunning() {
-        return read().isRunning
-      },
-      get startedAt() {
-        return read().startedAt
-      },
-      get lastAt() {
-        return read().lastAt
-      },
-      get forkedFrom() {
-        return read().forkedFrom
-      },
-      get visitedAt() {
-        return read().visitedAt
-      },
+    const data = Object.defineProperties({}, Object.fromEntries(Object.keys(sessionFields).map((key) => [key, { get: () => read()[key as keyof SessionData], enumerable: true, configurable: true }]))) as Readonly<SessionData>
+    const session = Object.assign(data, {
       search: (text: string, matcher?: Matcher<Message>) => recordPart(scope()).search(text, matcher),
-      ...eventMethods(scope, true),
+      ...(hears ? eventMethods(scope, true) : {}),
       goal: goalOf(where),
       context: async () => {
         const all = await contextsOf()
@@ -452,11 +423,11 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       async visit(at?: string) {
         await act(id(), 'visit', at ?? new Date().toISOString(), owned)
       },
-    }
+    })
     if (isOwner) return session as unknown as Sessions['current']
     const started = async (starting: Promise<TaskData>): Promise<Task> => taskOf(id(), await starting.catch((error: unknown) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))))
     return Object.assign(session, {
-      startTask: (task: TaskStartArgs): Promise<Task> => started(task.isBackground === true || task.machine !== undefined ? act<TaskData>(id(), 'startBackgroundTask', task) : isHere() ? spawnTask(claude, task) : act<TaskData>(id(), 'startTask', task)),
+      startTask: (task: TaskStartArgs): Promise<Task> => started(task.isBackground === true || task.device !== undefined ? act<TaskData>(id(), 'startBackgroundTask', task) : isHere() ? spawnTask(claude, task) : act<TaskData>(id(), 'startTask', task)),
       fork: (task: ForkArgs): Promise<Task> => started(isHere() && task.isBackground !== true && task.at === undefined ? spawnTask(claude, task, current.id) : act<TaskData>(id(), 'fork', task)),
       delete: async () => {
         await act(id(), 'delete', null)
@@ -529,7 +500,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   })
 
   const listenTo = (method: string, named: string) => {
-    if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${method} works only in a mod's own session.`)
+    if (hookOn === undefined || routeOn === undefined) throw ownOnly(method)
     const isBefore = method.startsWith('before')
     if (named === 'PermissionCheck' || named === 'PermissionRequest') {
       const routes = permissionRoutes?.()
@@ -612,19 +583,17 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     },
     caption: (toolCall: Message & { readonly type: typeof ToolCall }, text: string | undefined) => claude.ui.notice(toolCall.callId, text),
   })
-  const every = eventMethods(() => ({}), false)
-
-  const failedBefore = (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error) => {
-    const asked = decidersOf(session, event, isInProject).filter((entry) => isInScope(entry.scope, session, change, isUnderIn(parents.get(session))) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)))
+  const failedBefore = (session: string, event: BeforeEvent, change: SessionChange, error: Error) => {
+    const asked = decidersOf(session, event).filter((entry) => isInScope(entry.scope, session, change, isUnderIn(parents.get(session))) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)))
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined)
   }
 
   const listed = (data: SessionData) => {
     if (data.id !== current.id) {
       known.set(data.id, data)
-      return sessionOf(() => known.get(data.id) ?? data)
+      return sessionOf(() => known.get(data.id) ?? data, undefined, false, false)
     }
-    if (current.title === '') current = { ...current, title: data.title }
+    current = { ...current, title: current.title || data.title, device: data.device }
     return currentSession
   }
 
@@ -636,24 +605,21 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       list: async (scope: SessionScope = {}) => (await call<SessionData[]>(conversationMethods.sessions, scope)).map(listed),
       get: async (id: string) => (id === current.id ? currentSession : listed(await call<SessionData>(conversationMethods.session, { session: id }))),
       search: (text, matcher, options = {}) => searched({ text, ...searchOptionsOf(options) }, matcher),
-      ...every,
     },
-    changed(session, change, isInProject, cancel) {
+    changed(session, change, cancel) {
       remember(session, change)
       let payload: Promise<unknown> | undefined
-      for (const key of isInProject ? [session, everySession] : [session]) {
-        for (const entry of listening.get(key) ?? []) {
-          const { event, method, matcher, listener, options } = entry
-          const deliver = () => {
-            payload ??= payloadFor(session, change)
-            void payload
-              .then((heard) => invoke(method, options, cancel, (time) => listener(heard as never, time)))
-              .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
-          }
-          const isHeard = isHeardBy(event, matcher, change) && inScope(entry, session, change)
-          if (isHeard === true) deliver()
-          else if (isHeard !== false) void isHeard.then((isIn) => isIn && deliver())
+      for (const entry of listening.get(session) ?? []) {
+        const { event, method, matcher, listener, options } = entry
+        const deliver = () => {
+          payload ??= payloadFor(session, change)
+          void payload
+            .then((heard) => invoke(method, options, cancel, (time) => listener(heard as never, time)))
+            .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
         }
+        const isHeard = isHeardBy(event, matcher, change) && inScope(entry, session, change)
+        if (isHeard === true) deliver()
+        else if (isHeard !== false) void isHeard.then((isIn) => isIn && deliver())
       }
     },
     answerBefore: combined,
@@ -664,7 +630,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     follow(next) {
       const moved = next.id !== current.id && current.id !== ''
       const previous = current.id
-      current = colored({ ...next, title: next.title || (next.id === current.id ? current.title : ''), isRunning: true, lastAt: new Date().toISOString() })
+      current = colored({ device: current.device, ...next, title: next.title || (next.id === current.id ? current.title : ''), isRunning: true, lastAt: new Date().toISOString() })
       if (!moved) return
       for (const into of [listening, deciding]) {
         const kept = into.get(previous)

@@ -5,24 +5,27 @@ import { changeSettings, settingsFileOf, type SettingsSource } from '../settings
 
 export const summary = "Change Claude Code settings for a mod, as its settings.user.update, settings.project.update, or settings.local.update does."
 
-export const help = `Usage: cmod settings <mod> <user|project|local> <json> [--project <folder>]
+export const help = `Usage: cmod settings update <mod> <user|project|local> <json> [--project <folder>]
 
 ${summary}
 
-Merges the JSON object into the user, project, or local Claude Code settings as
-a JSON Merge Patch: an object merges into the object already there, a null
-removes that key, and an array or any other value replaces it. The project and
-local settings are the ones of --project, the current folder when it is left
-out, and mcpServers in the project settings is written to .mcp.json. cmod keeps
-every other key and the file's formatting, and removing the mod takes out each
-value it set that is still the same, then each object that leaves empty.`
+update merges the JSON object into the user, project, or local Claude Code
+settings as a JSON Merge Patch: an object merges into the object already there,
+a null removes that key, and an array or any other value replaces it. The
+project and local settings are the ones of --project, the current folder when
+it is left out, and mcpServers in the project settings is written to .mcp.json.
+cmod keeps every other key and the file's formatting, and removing the mod
+takes out each value it set that is still the same, then each object that
+leaves empty.`
 
 const sources: readonly string[] = ['user', 'project', 'local']
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'string' } } })
-  if (positionals.length !== 3) throw new Error(`cmod settings takes a mod, user, project, or local, and a JSON object.\n\n${help}`)
-  const [name, source, json] = positionals as [string, string, string]
+  const [action, ...rest] = positionals
+  const given = action === 'update' ? rest : positionals
+  if (given.length !== 3) throw new Error(`cmod settings takes update, a mod, user, project, or local, and a JSON object.\n\n${help}`)
+  const [name, source, json] = given as [string, string, string]
   if (!sources.includes(source)) throw new Error(`"${source}" is not a settings source. Use user, project, or local.`)
   const changed = parsedObject(json)
   const record = await readRecord(readText, storeFolder(process.env), name)
