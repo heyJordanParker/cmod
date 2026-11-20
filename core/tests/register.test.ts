@@ -578,7 +578,7 @@ declare const Bun: {
     target: 'browser'
     external: string[]
     define?: Record<string, string>
-    minify?: { whitespace: boolean; identifiers: boolean }
+    minify?: boolean
     plugins?: { name: string; setup(build: { onResolve(options: { filter: RegExp }, resolve: () => { path: string }): void }): void }[]
   }): Promise<{ outputs: { text(): Promise<string> }[] }>
   spawnSync(argv: string[], options?: { cwd: string }): { exitCode: number; stdout: { toString(): string }; stderr: { toString(): string } }
@@ -633,7 +633,7 @@ test('only registerPermissionCheck with "approve": true, or a 4.x "approve" perm
   expect(shape(await bundled('approving-4x', 'registerPermissionCheck(on)', { permissions: { approve: true } }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
 })
 
-test("a mod that uses nothing bundles under a fifth of Claude Code's 1 MB hooks module limit, so the rest of the limit stays the mod's own", async () => {
+test("a mod that uses nothing bundles under two fifths of Claude Code's 1 MB hooks module limit, so the rest of the limit stays the mod's own", async () => {
   const vendor = await vendorTheBuildShips('vendor')
   const src = `${import.meta.dir}/../src`
   const entry = `${import.meta.dir}/../node_modules/.bundle-minimal.ts`
@@ -647,7 +647,31 @@ test("a mod that uses nothing bundles under a fifth of Claude Code's 1 MB hooks 
   const hooksModuleLimit = 1_048_576
 
   expect(code).toContain('"session.start"')
-  expect(code.length).toBeLessThan(hooksModuleLimit / 5)
+  expect(code.length).toBeLessThan((hooksModuleLimit * 2) / 5)
+})
+
+test("a mod's bundle registers each hook on a line of its own and declares no second register, addHook, or passOn, as Anthropic's plugin directory reads it", async () => {
+  const vendor = await vendorTheBuildShips('vendor')
+  const src = `${import.meta.dir}/../src`
+  const entry = `${import.meta.dir}/../node_modules/.bundle-directory.ts`
+  await Bun.write(entry, `import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(addHook, options) {\n  registerMod(addHook, defineMod({ name: 'readable', setup: () => undefined }), options)\n}\n`)
+  const built = await Bun.build({
+    entrypoints: [entry],
+    ...bundleOptions({}),
+    plugins: [{ name: 'the built vendor', setup: (build) => build.onResolve({ filter: /\/vendor\.js$/ }, () => ({ path: vendor })) }],
+  })
+  const lines = ((await built.outputs[0]?.text()) ?? '').split('\n')
+  const declaring = (name: string) => {
+    const word = new RegExp(`(^|[^\\w$])${name.replace('$', '\\$')}($|[^\\w$])`)
+    const parameters = (line: string) => [...line.matchAll(/\bfunction\s*[\w$]*\s*\(([^)]*)\)|\(([^()]*)\)\s*=>/g)].map((found) => found[1] ?? found[2] ?? '')
+    return lines.filter((line) => new RegExp(`\\b(?:var|let|const|function|class)\\s+${name}\\b`).test(line) || parameters(line).some((list) => word.test(list)))
+  }
+
+  expect(lines.filter((line) => line.includes('addHook("')).every((line) => line.trim().startsWith('addHook("') && line.split('addHook(').length === 2)).toBe(true)
+  expect(lines.filter((line) => line.includes('addHook("')).length).toBeGreaterThan(40)
+  expect(declaring('register')).toEqual(['function register(addHook, options) {'])
+  expect(declaring('addHook').every((line) => /^(export )?function \w+\(addHook\b/.test(line.trim()))).toBe(true)
+  expect(declaring('passOn').every((line) => /^(async )?function \w+\(_?\$, eventInput, passOn\)/.test(line.trim()))).toBe(true)
 })
 
 test("a mod that styles reply blocks bundles the markdown reader the build ships minified, so a mod near Claude Code's 1 MB hooks module limit still fits", async () => {

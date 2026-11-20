@@ -14,7 +14,7 @@ import { conversationMethods } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import type { SessionData } from '../../src/session/conversation.js'
-import { calledAnswer, fakeClaude, testDevice, type FakeClaude } from '../../src/testing/fake-claude.js'
+import { calledAnswer, fakeAgent, fakeClaude, testDevice, type FakeClaude } from '../../src/testing/fake-claude.js'
 import { BelowPrompt, Dashboard, TurnEnd, Working } from '../../src/ui/areas.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
@@ -821,7 +821,7 @@ test("a running task of the cmod plugin's session holds its status, its teammate
   const router = createRouter()
   fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
-  fake.fakes.agent.list = async () => [{ id: 'task-1', description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'demo' }]
+  fake.fakes.agent.list = async () => [fakeAgent({ id: 'task-1', description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'demo' })]
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
   await router.dispatch('agent.spawn', { description: 'Find the pane', subagentType: 'Explore', tool_use_id: 'toolu_1' } as never, async () => ({ agentId: 'task-1', model: 'claude-haiku' }))

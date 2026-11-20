@@ -5,6 +5,7 @@ import { defineMod, process, type Job } from '../../src/mod.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
+import { fakeAgent } from '../../src/testing/fake-claude.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
 const allowedInBypassMode: EventResult<'tool.check'> = { decision: 'allow' }
@@ -83,7 +84,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
       },
     }),
   )
-  tested.fakes.agent.list = async () => [{ id: 'a4aa369514be1f5cc', type: 'explorer', description: 'Map the router', status: 'running' }]
+  tested.fakes.agent.list = async () => [fakeAgent({ id: 'a4aa369514be1f5cc', type: 'explorer', description: 'Map the router', status: 'running' })]
 
   const subagentCall = claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'rm -rf build', tool_use_id: 'toolu_sub', agentId: 'a4aa369514be1f5cc' }, { deny: 'refused' })
   await reachedBelow

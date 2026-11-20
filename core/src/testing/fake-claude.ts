@@ -1,4 +1,4 @@
-import type { EventResult, Timer } from 'claude-code'
+import type { AgentInfo, EventResult, Timer } from 'claude-code'
 import { isObject } from '../records.js'
 import type { Claude } from '../runtime/claude.js'
 import { cmodPluginName } from '../runtime/dependencies.js'
@@ -35,6 +35,10 @@ export type Fakes = {
 }
 
 export const testDevice: Device = { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }
+
+export function fakeAgent(agent: Pick<AgentInfo, 'id' | 'type' | 'description' | 'status'> & Partial<AgentInfo>): AgentInfo {
+  return { kind: 'local_agent', taskStatus: 'running', label: agent.description, startTime: 0, cwd: '/work', tokenCount: 0, tokenSamples: [], hasRow: true, ...agent }
+}
 
 export type ShownSchedule = { readonly id: string; readonly cron: string; readonly prompt: string }
 

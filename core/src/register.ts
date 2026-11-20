@@ -131,9 +131,9 @@ function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Fr
   return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as never), passOn)
 }
 
-const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>) => ({ ...eventInput, caller: passOn.origin.plugin }) as Frozen<Args<'cmod.call'>>
+const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, next: Next<'cmod.call'>) => ({ ...eventInput, caller: next.origin.plugin }) as Frozen<Args<'cmod.call'>>
 
-const withoutCaller = (passOn: Next<'cmod.call'>) => (passed: Frozen<Args<'cmod.call'>>) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>)
+const withoutCaller = (next: Next<'cmod.call'>) => (passed: Frozen<Args<'cmod.call'>>) => next(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>)
 
 function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>): Promise<EventResult<'cmod.call'>> {
   return lifecycle.route('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn.signal)

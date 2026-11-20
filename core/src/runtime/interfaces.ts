@@ -1056,12 +1056,12 @@ export function serveProviders({
   const reported = (error: unknown) => {
     if (!isConnectionGone(error)) report(error)
   }
-  const register = (name: string) => serve.request(providerActs.provide, { interface: name, ...provider }).catch(reported)
-  const listen = (caller: string | undefined, { id, interface: named, kind, event, matcher, timeoutMs, onFailure, mod, program, device: on }: ProvidedListen) => {
+  const announce = (name: string) => serve.request(providerActs.provide, { interface: name, ...provider }).catch(reported)
+  const listen = (caller: string | undefined, { id, interface: named, kind, event, matcher, timeoutMs, onFailure, mod, program, device: providerDevice }: ProvidedListen) => {
     if (caller === undefined) throw new Error('cmod hears no caller for this listener.')
     const key = `${caller}\n${id}`
     held.get(key)?.remove()
-    const listening = { interface: named, kind, event, ...(matcher === undefined ? {} : { matcher }), ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(onFailure === undefined ? {} : { onFailure }), provider: { mod, ...(program === undefined ? {} : { program }), ...(on === undefined ? {} : { device: on }) } }
+    const listening = { interface: named, kind, event, ...(matcher === undefined ? {} : { matcher }), ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(onFailure === undefined ? {} : { onFailure }), provider: { mod, ...(program === undefined ? {} : { program }), ...(providerDevice === undefined ? {} : { device: providerDevice }) } }
     held.set(key, listeners.listen(serve, listening, (payload: unknown, signal) => tell(caller, { id, payload }, signal)))
     return null
   }
@@ -1116,7 +1116,7 @@ export function serveProviders({
       checkInterfaceName(name)
       if (provider === undefined) throw new Error(`${name}: this connection to cmod serve provides nothing.`)
       implementations[name] = methods
-      void register(name)
+      void announce(name)
       return {
         remove() {
           if (implementations[name] !== methods) return
@@ -1134,7 +1134,7 @@ export function serveProviders({
       return isProvided ? Promise.resolve(handle(method, params, signal)) : undefined
     },
     async replay() {
-      await Promise.all(Object.keys(implementations).map(register))
+      await Promise.all(Object.keys(implementations).map(announce))
     },
   }
 }

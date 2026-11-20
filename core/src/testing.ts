@@ -47,7 +47,7 @@ import { TurnEnd, type Turn } from './session/context/turn/turn.js'
 import { beforeEvents, processEvents, sessionEvents, type AnswerOf, type BeforeEvent, type BeforeName, type CommandRun, type CommandRunAnswer, type Placement, type ProcessAnswer, type ProcessAsked, type ProcessName, type ProcessPayload } from './session/session.js'
 import { ContextEnd } from './session/context/context.js'
 import { TaskStart } from './session/goal/task.js'
-import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
+import { calledAnswer, fakeAgent, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { checkKeys, elements, findElement, focusableKey, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, type StartedTask } from './testing/fake-sessions.js'
@@ -432,7 +432,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const listAgents = fake.claude.agent.list
   fake.claude.agent.list = async () => {
     if (fake.fakes.agent.list !== undefined || firedAgents.size === 0) return listAgents()
-    return [...firedAgents].map(([id, type]) => ({ id, type, description: '', status: 'running' as const }))
+    return [...firedAgents].map(([id, type]) => fakeAgent({ id, type, description: '', status: 'running' }))
   }
   const files = fakeFiles(options.files ?? {}, options.links)
   Object.assign(fake.fakes.fs, files)

@@ -493,7 +493,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '8.0.0'
+export const coreVersion = '8.0.1'
 
 export const oldestCmodVersion = '8.0.0'
 
@@ -531,7 +531,7 @@ export function bundleOptions(steps: Steps) {
     target: 'browser' as const,
     external: ['claude-code'],
     define: steps.approve === true ? {} : { 'globalThis.cmodWithoutApprove': 'true' },
-    minify: { whitespace: true, identifiers: true },
+    minify: false,
   }
 }
 

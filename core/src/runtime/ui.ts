@@ -216,7 +216,7 @@ export type UiArea<State extends object> = {
   readonly widgets: Mod<State>['widgets']
   readonly styles: Mod<State>['styles']
   asked<Value>(run: () => Value | Promise<Value>): Promise<Value>
-  answerInput<Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>): Promise<Answer>
+  answerInput<Answer>(run: () => Promise<Answer>, passInput: () => Promise<unknown>): Promise<Answer>
   answer(method: string, input: unknown, caller: string): Promise<{ readonly value: unknown }> | undefined
   markdownIn(table: ElementTable, at: StyledAt): ((props: MarkdownProps) => RenderElement) | undefined
   restyled(stylers: readonly string[]): void
@@ -766,10 +766,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
     widgets: { add: addWidget },
     styles: { add: addStyle },
     asked,
-    async answerInput(run, passOn) {
+    async answerInput(run, passInput) {
       const before = unheldRequests
       const answer = await asked(run)
-      if (unheldRequests > before) await passOn()
+      if (unheldRequests > before) await passInput()
       return answer
     },
     answer(method, input, caller) {

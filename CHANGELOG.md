@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-11-21
+
+### Fixed
+- `cmod publish` writes your mod's `hooks/register.js` unminified, so Anthropic's plugin directory can read it: each hook registers on a line of its own, and no name the directory keeps for `$`, `addHook`, or a hook's third parameter is declared twice. A bundle is larger for it: a mod that uses nothing takes about a third of Claude Code's 1 MB limit for a hooks module, where it took a fifth.
+- The test kit's agents carry every field Claude Code 2.1.329 gives an agent, so a mod's tests type-check against it.
+
 ## [8.0.0] - 2026-11-20
 
 ### Added
