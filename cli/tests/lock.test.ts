@@ -27,7 +27,7 @@ test.concurrent('concurrent setups of eight mods keep every approval', async () 
 
   expect(results.map((result) => result.exitCode)).toEqual(names.map(() => 0))
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual(Object.fromEntries(names.map((name, index) => [name, [hashes[index]]])))
-}, 15_000)
+})
 
 test.concurrent('six concurrent setups of one mod run the install step once and all exit 0', async () => {
   const home = await temporaryHome()
@@ -40,7 +40,7 @@ test.concurrent('six concurrent setups of one mod run the install step once and 
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe('ran\n')
   expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
   expect(await readdir(join(store, 'records'))).toEqual(['demo.json'])
-}, 15_000)
+})
 
 test.concurrent('a setup deletes the staged uninstall folders a killed setup left', async () => {
   const home = await temporaryHome()
@@ -108,7 +108,7 @@ test.concurrent('a setup that waits for a lock names the lock after a few second
 
   expect(result.stderr).toBe(`${lockNotice}, which process ${holder.pid} holds.\n`)
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
-}, 10_000)
+})
 
 test.concurrent('the spinner resumes after the lock-wait notice', async () => {
   const home = await temporaryHome()
@@ -124,7 +124,7 @@ test.concurrent('the spinner resumes after the lock-wait notice', async () => {
 
   const shown = stripVTControlCharacters(stdout)
   expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
-}, 10_000)
+})
 
 test.concurrent('a lock whose holder recorded no start time is held while its process lives', async () => {
   const home = await temporaryHome()
@@ -140,7 +140,7 @@ test.concurrent('a lock whose holder recorded no start time is held while its pr
 
   expect(result.stderr).toBe(`${lockNotice}, which process ${holder.pid} holds.\n`)
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
-}, 10_000)
+})
 
 test.concurrent("a holder file with cmod's own process ID is not held", async () => {
   const home = await temporaryHome()
@@ -157,7 +157,7 @@ test.concurrent("a holder file with cmod's own process ID is not held", async ()
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(existsSync(lock)).toBe(false)
-}, 10_000)
+})
 
 test.concurrent('a second take of a lock in the same process waits until the first releases it', async () => {
   const lock = join(await temporaryHome(), '.local/share/cmod/builds/demo.lock')
@@ -220,7 +220,7 @@ test.concurrent('Ctrl+C while cmod remove waits for the lock prints a cancel lin
   expect(result.exitCode).toBe(130)
   expect(result.stdout).toContain('✘ Cancelled uninstalling demo on SIGINT, before its uninstall step started. Run cmod teardown demo to finish.')
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
-}, 15_000)
+})
 
 test.concurrent('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   const home = await temporaryHome()
@@ -244,7 +244,7 @@ test.concurrent('Ctrl+C while cmod waits for a lock ends it at once', async () =
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
-}, 10_000)
+})
 
 test.concurrent('a mod whose scripts change while its setup waits runs the changed scripts once the first setup ends', async () => {
   const home = await temporaryHome()
@@ -263,4 +263,4 @@ test.concurrent('a mod whose scripts change while its setup waits runs the chang
   expect(rerun).toMatchObject({ stdout: expect.stringContaining('done demo 0.1.0\n'), exitCode: 0 })
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\nran\n')
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.scriptsSha256).toBe(changed)
-}, 15_000)
+})
