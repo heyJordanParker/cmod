@@ -403,10 +403,20 @@ export function routeSessions({
     ...Object.fromEntries(sessionActions.map((action) => [action, (session: string, input?: unknown, context?: unknown) => call(session, action, input ?? null, isObject(context) ? context : {})])),
   }
 
-  const showing = (session: string) => {
+  const showing = async (session: string) => {
     const holder = holderOf(session)
-    if (holder === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs on this computer, so it shows no UI.`)
-    return holder.connection
+    if (holder !== undefined) return holder.connection
+    const isRunning = (await computer.sessions({ running: true }, holding, new Set())).some((listed) => listed.id === session)
+    throw new RpcError(rpcCodes.notHeld, isRunning ? `Session ${session} runs here, but no cmod plugin of 7.0.0 or later in it reaches cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.` : `No session ${session} runs on this computer, so it shows no UI.`)
+  }
+
+  const askedUi = async (session: string, method: string, args: readonly unknown[]) => {
+    try {
+      return await (await showing(session)).request(sessionActs.ui, { method, args: [session, ...args] })
+    } catch (error) {
+      if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound)) throw error
+      throw new RpcError(rpcCodes.methodNotFound, `Session ${session} runs a cmod plugin older than this cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.`)
+    }
   }
 
   type ShownPart = { readonly mod: string; readonly id: string }
@@ -430,8 +440,8 @@ export function routeSessions({
     })
   }
 
-  const show = (session: string, client: unknown, parts: unknown, options: unknown) => {
-    showing(session)
+  const show = async (session: string, client: unknown, parts: unknown, options: unknown) => {
+    await showing(session)
     if (typeof client !== 'string' || client === '') throw new RpcError(rpcCodes.invalidParams, `${uiInterface}.show takes the client that shows the parts, a name its app picks.`)
     if (!Array.isArray(parts) || !parts.every((each) => isObject(each) && typeof each['mod'] === 'string' && typeof each['id'] === 'string')) throw new RpcError(rpcCodes.invalidParams, `${uiInterface}.show takes the parts it shows as { mod, id }[].`)
     const isHost = isObject(options) && options['isHost'] === true
@@ -444,7 +454,7 @@ export function routeSessions({
     return null
   }
 
-  const ui: Implementation = { ...Object.fromEntries(uiMethods.map((method) => [method, (session: string, ...args: unknown[]) => showing(session).request(sessionActs.ui, { method, args: [session, ...args] })])), show }
+  const ui: Implementation = { ...Object.fromEntries(uiMethods.map((method) => [method, (session: string, ...args: unknown[]) => askedUi(session, method, args)])), show }
 
   const heldTerminal = (session: string) => {
     const terminal = holderOf(session)?.herdrTerminal

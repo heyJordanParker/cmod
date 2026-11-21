@@ -4,6 +4,17 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.4.0] - 2026-11-22
+
+### Changed
+- `cmod publish` no longer runs the mod's tests, `tsc`, or the linter. It runs only the checks that read what the release ships, such as the layout, the steps, the options, the `cmod` dependency, and the imports, then builds the release and validates it with `claude plugin validate --strict`. Run `cmod check` on each commit, on your computer or in CI, and publish that commit: before, a release ran every test again on a commit CI had just passed, which doubled how long each release took.
+- In Herdr, every cmod view copy hosts the focused session: the `mod.open:cmod` window and a dock anywhere in a layout. So a view a slash command, a hotkey, or a press opens shows in Herdr, and a dock in a layout shows its own block, whatever its layout calls its nodes. A layout no longer names the dock with `"block"`, which cmod now ignores.
+
+### Fixed
+- Herdr draws every session's views again. A view with a box that grows, the cmod plugin's own Dashboard among them, failed with `expected a number, got nil`.
+- Herdr no longer fails with `this Entity has been released and can no longer be mounted` when the shown view or the focused session changes.
+- Herdr shows why a session shows nothing, in place of `This session shows no views.` over a raw error: a session that runs a cmod plugin from before this `cmod serve`, or that no cmod plugin of 7.0.0 or later holds, says to run `/reload-plugins` in it. Herdr no longer shows one session's view tabs over another session's.
+
 ## [8.3.3] - 2026-11-21
 
 ### Fixed

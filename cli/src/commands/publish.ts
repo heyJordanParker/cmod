@@ -22,9 +22,10 @@ export const help = `Usage: cmod publish [path] [--dry-run]
 ${summary}
 
 Releases the mod at path (default: the current folder) at the version in its
-plugin.json. First runs every check cmod check runs but its package install
-and release build, which publish does as it releases, and releases nothing when
-one fails. Where cmod check would write a fix, such as the options defineMod
+plugin.json. First runs the checks of cmod check that read what the release
+ships, and releases nothing when one fails. It runs no tsc, lint, or tests,
+which the commit's own cmod check or CI run owns, as cargo publish runs no
+tests. Where cmod check would write a fix, such as the options defineMod
 declares, publish fails that check and leaves the file as it is. Builds the
 release from the files git does not ignore, leaving
 out cli/, .github/, and .claude/. A "files" list in package.json limits the release to

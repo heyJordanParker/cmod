@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { defineMod, provide, providers, sessions, type Provided } from '../../src/mod.js'
 import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, providerHoldMs, routeSessions, serveProviders, showLeaseMs, uiInterface, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
-import { addressCall, connectRpc, rpcRoutes, type HttpFetch, type RpcHttpAnswer, type RpcRoutes } from '../../src/runtime/rpc.js'
+import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes, type HttpFetch, type RpcHttpAnswer, type RpcRoutes } from '../../src/runtime/rpc.js'
 import { didNotAnswer } from '../../src/runtime/dependencies.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
@@ -691,6 +691,33 @@ test("cmod serve tells a session's cmod plugin it is hosted while one app's show
   ])
   await app.close()
   await plugin.close()
+  serve.close()
+})
+
+test("an app that asks for the views of a session whose cmod plugin predates cmod/UI hears that the session runs an older cmod plugin and to reload it", async () => {
+  const { serve, fetch } = servedComputer()
+  const plugin = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `The cmod plugin of session s1 answers no ${method}.`)), wait: atOnce })
+  await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+
+  const asked = app.request(methodName(uiInterface, 'views'), ['s1'])
+
+  await expect(asked).rejects.toThrow('Session s1 runs a cmod plugin older than this cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.')
+  await app.close()
+  await plugin.close()
+  serve.close()
+})
+
+test("an app that asks for the views of a session that runs on this computer with no cmod plugin holding it hears to reload it, and one for a session that runs nowhere here hears that it runs nowhere here", async () => {
+  const running: SessionComputer = { ...noSessions, sessions: (scope) => (scope['running'] === true ? [{ id: 's1', title: 'app', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '', lastAt: '', isRunning: true }] : []) }
+  const { serve, fetch } = servedComputer({}, {}, { computer: running })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+
+  const [unheld, elsewhere] = await Promise.allSettled([app.request(methodName(uiInterface, 'views'), ['s1']), app.request(methodName(uiInterface, 'views'), ['s2'])])
+
+  expect(unheld.status === 'rejected' && (unheld.reason as Error).message).toBe('Session s1 runs here, but no cmod plugin of 7.0.0 or later in it reaches cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.')
+  expect(elsewhere.status === 'rejected' && (elsewhere.reason as Error).message).toBe('No session s2 runs on this computer, so it shows no UI.')
+  await app.close()
   serve.close()
 })
 

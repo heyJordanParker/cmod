@@ -103,7 +103,7 @@ const element =
   (...args: unknown[]) =>
     new Element(kind, args)
 
-const retained = (options: { readonly value?: string }) => {
+const retained = (options: { readonly value?: string }, released: unknown[] = []) => {
   const state = {
     current: options.value ?? '',
     handlers: {} as Record<string, (event: object, cx: unknown) => void>,
@@ -115,7 +115,7 @@ const retained = (options: { readonly value?: string }) => {
     set_value(next: string) {
       state.current = next
     },
-    release: () => true,
+    release: () => void released.push(state),
   }
   return state
 }
@@ -131,11 +131,13 @@ type Herdr = {
   readonly read: string[]
   readonly written: Map<string, Uint8Array>
   readonly deleted: string[]
+  readonly released: unknown[]
   follow(answer: object): void
   settled(): Promise<void>
+  endFrame(): void
 }
 
-async function herdrWith(given: object, answer: (args: readonly string[]) => unknown, leftovers: readonly string[] = []): Promise<Herdr> {
+async function herdrWith(given: object, answer: (args: readonly string[]) => unknown, leftovers: readonly string[] = [], tree: object | null = null): Promise<Herdr> {
   const main = await readFile(join(source, 'main.js'), 'utf8')
   const ran: string[][] = []
   const notified: unknown[] = []
@@ -146,6 +148,8 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
   const queued: object[] = []
   const commands: (readonly [string, Record<string, unknown>])[] = []
   const timers: (readonly [number, (cx: unknown) => void])[] = []
+  const released: unknown[] = []
+  const afterFrame: (() => void)[] = []
   let focusedTerminal = 't1'
   let shownPanes: { readonly pane: string; readonly mod: string; readonly tab: string }[] = []
   const run = (name: string, args: Record<string, unknown>) => {
@@ -159,7 +163,11 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
     const asked = args.slice(3)
     ran.push(asked)
     if (asked[1] === 'follow') return { code: 0, stdout: JSON.stringify(await new Promise<object>((resolve) => void (queued.length > 0 ? resolve(queued.shift() as object) : follows.push(resolve)))), stderr: '' }
-    return { code: 0, stdout: JSON.stringify(answer(asked) ?? null), stderr: '' }
+    try {
+      return { code: 0, stdout: JSON.stringify(answer(asked) ?? null), stderr: '' }
+    } catch (error) {
+      return { code: 1, stdout: '', stderr: `cmod ui: ${(error as Error).message}\n` }
+    }
   }
   const values: Record<string, unknown> = {
     View: class {},
@@ -171,11 +179,11 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
     Tabs: { new: element('Tabs') },
     Tab: { new: element('Tab') },
     TextView: { markdown: element('TextView.markdown') },
-    InputState: { new: retained },
+    InputState: { new: (options: { readonly value?: string }) => retained(options, released) },
     Input: { new: element('Input') },
-    TextareaState: { new: retained },
+    TextareaState: { new: (options: { readonly value?: string }) => retained(options, released) },
     Textarea: { new: element('Textarea') },
-    EditorState: { new: retained },
+    EditorState: { new: (options: { readonly value?: string }) => retained(options, released) },
     Editor: { new: element('Editor') },
     exec,
     checking: () => false,
@@ -192,6 +200,7 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
     theme: () => new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
     run,
     panes: () => shownPanes,
+    layout: () => tree,
     props: () => given,
     appHome: () => '/herdr',
     settings: () => ({ zoom: 1, font_family: 'JetBrains Mono' }),
@@ -217,10 +226,10 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
   const cx = {
     notify: (target?: unknown) => void notified.push(target ?? 'root'),
     spawn: (body: (cx: unknown) => Promise<unknown>) => void tasks.push(body(cx)),
-    timer: { after: () => undefined, every: (ms: number, handler: (cx: unknown) => void) => void timers.push([ms, handler]) },
+    timer: { after: (_ms: number, handler: () => void) => void afterFrame.push(handler), every: (ms: number, handler: (cx: unknown) => void) => void timers.push([ms, handler]) },
     sleep: () => new Promise<void>(() => undefined),
     new: (Class: new () => { init(props: object): void }, props: object) => {
-      const view = Object.assign(new Class(), { release: () => true })
+      const view: { init(props: object): void } = Object.assign(new Class(), { release: () => void released.push(view) })
       view.init(props)
       return view
     },
@@ -240,6 +249,10 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
     read,
     written,
     deleted,
+    released,
+    endFrame: () => {
+      for (const handler of afterFrame.splice(0)) handler()
+    },
     follow: (next) => void (follows.length > 0 ? (follows.shift() as (answer: object) => void)(next) : queued.push(next)),
     settled: async () => {
       for (let round = 0; round < 50; round += 1) await new Promise<void>((resolve) => void setImmediate(resolve))
@@ -318,6 +331,52 @@ test("cmod's Herdr mod draws the focused session's view as gpui-kit elements, ea
   ])
   expect(herdr.written.has(`/herdr/mods/cmod/.drawn/${hashOf(Buffer.from(png, 'base64'))}.png`)).toBe(true)
   expect(found(root, (each) => each.kind === 'div' && each.calls['text_color']?.[0] === '#ff0000', herdr.cx).map((each) => each.nodes)).toEqual([['AB']])
+})
+
+const emptyDashboard = {
+  $cmodElement: 'Box',
+  props: {
+    flexDirection: 'column',
+    flexGrow: 1,
+    children: [
+      {
+        $cmodElement: 'Box',
+        props: {
+          flexDirection: 'column',
+          flexGrow: 1,
+          minWidth: 13,
+          borderStyle: 'round',
+          borderColor: 'subtle',
+          paddingX: 1,
+          children: {
+            $cmodElement: 'Box',
+            props: {
+              flexDirection: 'column',
+              gap: 1,
+              children: [
+                { $cmodElement: 'Text', props: { dimColor: true, wrap: 'wrap', children: 'Place the widgets your mods add here, in Settings.' } },
+                { $cmodElement: 'Button', props: { plain: true, key: 'cmod/dashboard:arrange-widgets', label: 'Arrange widgets', onPress: { $cmodHandler: 5 }, children: { $cmodElement: 'Text', props: { backgroundColor: 'claude', color: 'inverseText', bold: true, children: ' Arrange widgets ' } } } },
+              ],
+            },
+          },
+        },
+      },
+      { $cmodElement: 'Box', props: { position: 'absolute', top: 0, left: 2, children: { $cmodElement: 'Text', props: { bold: true, wrap: 'truncate-end', children: ' Widgets ' } } } },
+    ],
+  },
+}
+
+const callsOf = (root: Shown, cx: unknown) => found(root, () => true, cx).flatMap((each) => Object.entries(each.calls).map(([method, args]) => ({ element: each.kind, method, args })))
+
+test("cmod's Herdr mod draws the cmod plugin's own Dashboard with a value for every argument it hands Herdr", async () => {
+  const herdr = await herdrWith({}, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? [{ mod: 'cmod', id: 'dashboard', title: 'Dashboard' }] : []) : emptyDashboard))
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+
+  const calls = callsOf(herdr.view.render(herdr.cx), herdr.cx)
+
+  expect(calls.filter(({ args }) => args.some((arg) => arg === undefined || arg === null || Number.isNaN(arg)))).toEqual([])
+  expect(calls.filter(({ method }) => method === 'flex_grow').map(({ args }) => args)).toEqual([[1], [1]])
 })
 
 test("a press in cmod's Herdr mod runs cmod ui press with the handler of the element pressed, and the surface herdr", async () => {
@@ -469,8 +528,8 @@ const shownBy = (herdr: Herdr) => herdr.ran.filter((args) => args[1] === 'show')
 
 const clientOf = (herdr: Herdr) => (herdr.view as unknown as { readonly client: string }).client
 
-test("the dock of cmod's Herdr mod tells cmod/UI show the view it shows, again when its tab or focused session changes, renews it inside the lease, and clears it when it closes", async () => {
-  const herdr = await herdrWith({}, viewsAndLog)
+test("a window of cmod's Herdr mod tells cmod/UI show the view it shows, again when its tab or focused session changes, renews it inside the lease, and clears it when it closes", async () => {
+  const herdr = await herdrWith({ show: 'views', overlay: 'o1' }, viewsAndLog)
   const client = clientOf(herdr)
   herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
   await herdr.settled()
@@ -490,19 +549,30 @@ test("the dock of cmod's Herdr mod tells cmod/UI show the view it shows, again w
   expect(client).toMatch(/^herdr-/)
   expect(herdr.timers.map(([ms]) => ms < 16_000)).toEqual([true])
   expect(shownBy(herdr)).toEqual([
-    ['ui', 'show', 'worker', client, 'cmod/dashboard'],
-    ['ui', 'show', 'worker', client, 'demo/runs'],
-    ['ui', 'show', 'worker', client, 'demo/runs'],
+    ['ui', 'show', 'worker', client, '--host'],
+    ['ui', 'show', 'worker', client, 'cmod/dashboard', '--host'],
+    ['ui', 'show', 'worker', client, 'demo/runs', '--host'],
+    ['ui', 'show', 'worker', client, 'demo/runs', '--host'],
     ['ui', 'show', 'worker', client],
-    ['ui', 'show', 'other', client, 'cmod/dashboard'],
+    ['ui', 'show', 'other', client, '--host'],
+    ['ui', 'show', 'other', client, 'cmod/dashboard', '--host'],
     ['ui', 'show', 'other', client],
   ])
 })
 
-test("a dock its layout names as a block hosts the session with cmod/UI show --host, even with no view to show, and opens its panel for an Open the person asked for, and only for it", async () => {
-  const herdr = await herdrWith({ show: 'views', block: 'cmod' }, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? sessionViews : []) : viewsAndLog(asked)))
+const panelLayout = {
+  id: 'root',
+  type: 'row',
+  children: [
+    { id: 'work', type: 'block', content: { tab: 'active' } },
+    { id: 'side', type: 'column', hidden: true, children: [{ id: 'body', type: 'stack', active: 'files', children: [{ id: 'files', type: 'block', content: { mod: 'files' } }, { id: 'views', type: 'block', content: { mod: 'cmod', props: { show: 'views' } } }] }] },
+  ],
+}
+
+test("a dock of cmod's Herdr mod in any layout hosts the session with cmod/UI show --host, even with no view to show, and shows its own block for an Open the person asked for, and only for it, while a window hosts and changes no layout", async () => {
+  const herdr = await herdrWith({ show: 'views' }, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? sessionViews : []) : viewsAndLog(asked)), [], panelLayout)
   const client = clientOf(herdr)
-  const bare = await herdrWith({}, () => [])
+  const bare = await herdrWith({ show: 'views', overlay: 'o1' }, () => [], [], panelLayout)
   herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
   bare.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
   await Promise.all([herdr.settled(), bare.settled()])
@@ -519,14 +589,65 @@ test("a dock its layout names as a block hosts the session with cmod/UI show --h
   ])
   expect(unasked).toEqual([])
   expect(herdr.commands).toEqual([
-    ['layout.select', { stack: 'panel-body', child: 'cmod' }],
-    ['layout.show', { id: 'panel' }],
+    ['layout.show', { id: 'side' }],
+    ['layout.select', { stack: 'body', child: 'views' }],
   ])
   expect(tabsOf(herdr).map(([tab, isSelected]) => [tab, isSelected])).toEqual([
     ['cmod-tab-cmod/dashboard', true],
     ['cmod-tab-demo/runs', false],
   ])
-  expect(shownBy(bare)).toEqual([])
+  expect(shownBy(bare)).toEqual([['ui', 'show', 'worker', clientOf(bare), '--host']])
+  expect(bare.commands).toEqual([])
+})
+
+test("cmod's Herdr mod releases a view it stops showing only after a frame that no longer draws it, so Herdr never mounts a released entity", async () => {
+  const herdr = await herdrWith({}, viewsAndLog)
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+  const units = (herdr.view as unknown as { readonly units: ReadonlyMap<string, { readonly entity: Shown }> }).units
+  const dashboard = units.get('cmod/dashboard')?.entity
+
+  clicked(herdr.view.render(herdr.cx), (each) => each.kind === 'Tab' && each.args[0] === 'cmod-tab-demo/runs', herdr.cx)
+  await herdr.settled()
+  const releasedBeforeFrame = [...herdr.released]
+  const drawn = found(herdr.view.render(herdr.cx), () => true, herdr.cx)
+  const releasedBeforeFrameEnds = [...herdr.released]
+  herdr.endFrame()
+
+  expect(dashboard).toBeDefined()
+  expect(releasedBeforeFrame).not.toContain(dashboard)
+  expect(releasedBeforeFrameEnds).not.toContain(dashboard)
+  expect(drawn).not.toContain(dashboard)
+  expect(herdr.released).toContain(dashboard)
+})
+
+test("cmod's Herdr mod shows why a session shows nothing in place of its views, and never says a session shows no views", async () => {
+  const refusal = 'Session worker runs a cmod plugin older than this cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.'
+  const herdr = await herdrWith({}, () => {
+    throw new Error(refusal)
+  })
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: false })
+  await herdr.settled()
+
+  expect(labelled(herdr.view.render(herdr.cx), herdr.cx)).toEqual([
+    ['Tabs', 'Views'],
+    ['div', `cmod ui: ${refusal}`],
+  ])
+})
+
+test("cmod's Herdr mod drops a list that answers after its focused session changed, so it never shows one session's tabs over another", async () => {
+  const herdr = await herdrWith({}, viewsAndLog)
+  const view = herdr.view as unknown as { list(part: string): Promise<void>; session: string | null; readonly lists: { readonly views: readonly object[] } }
+  view.session = 'worker'
+
+  const listed = view.list('views')
+  view.session = 'other'
+  await listed
+
+  expect(herdr.ran).toContainEqual(['ui', 'list', 'views', 'worker'])
+  expect(view.lists.views).toEqual([])
 })
 
 test("a page tab of cmod's Herdr mod tells cmod/UI show its page, and a widgets block tells nothing and renews nothing", async () => {

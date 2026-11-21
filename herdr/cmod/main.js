@@ -1,6 +1,6 @@
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, Button, Tabs, Tab, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
-import { exec, checking, terminals, focused, readTextFile, theme, run, props, appHome, settings, notify, panes } from "herdr";
+import { exec, checking, terminals, focused, readTextFile, theme, run, props, appHome, settings, notify, panes, layout } from "herdr";
 import { writeFile, readFile, mkdir, exists, readdir, unlink } from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
@@ -15,8 +15,6 @@ const FOLLOW_MS = 20_000;
 const RETRY_MS = 30_000;
 const RESIZE_MS = 250;
 const SHOW_MS = 5_000;
-const PANEL = "panel";
-const PANEL_STACK = "panel-body";
 const CELL_PX = 8;
 const ROW_PX = 18;
 const SPACE_PX = 6;
@@ -42,6 +40,24 @@ const messageOf = (error) => String(error?.message ?? error);
 const keyOf = ({ mod, id }) => `${mod}/${id}`;
 
 const cmodTabs = () => new Set(panes().filter((pane) => pane.mod === "cmod").map((pane) => pane.tab));
+
+const pathTo = (node, isWanted) => {
+  if (node === null || typeof node !== "object") return null;
+  if (isWanted(node)) return [node];
+  for (const child of node.children ?? []) {
+    const path = pathTo(child, isWanted);
+    if (path !== null) return [node, ...path];
+  }
+  return null;
+};
+
+const reveal = (path) => {
+  path.forEach((node, index) => {
+    const child = path[index + 1];
+    if (node.type === "stack" && child !== undefined && node.active !== child.id) run("layout.select", { stack: node.id, child: child.id });
+    if (node.hidden === true) run("layout.show", { id: node.id });
+  });
+};
 const handlerOf = (value) => (typeof value?.$cmodHandler === "number" ? value.$cmodHandler : undefined);
 
 const cmod = async (args, timeout = CALL_MS) => {
@@ -187,7 +203,9 @@ export default class Cmod extends View {
     this.area = given.area ?? DASHBOARD;
     this.page = given.show === "page" ? { mod: given.mod, id: given.id, title: given.title ?? given.id } : null;
     this.session = given.show === "page" ? given.session ?? null : null;
-    this.block = this.show === "views" && typeof given.block === "string" ? given.block : null;
+    this.isHost = this.show === "views";
+    this.isWindow = given.overlay !== undefined;
+    this.retired = [];
     this.located = null;
     this.lists = { widgets: [], views: [], pages: [] };
     this.tab = null;
@@ -196,6 +214,7 @@ export default class Cmod extends View {
     this.units = new Map();
     this.columns = 40;
     this.error = null;
+    this.followError = null;
     this.resizing = 0;
     this.client = `herdr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     this.told = { session: null, parts: [], hosts: [] };
@@ -251,8 +270,8 @@ export default class Cmod extends View {
           const { cursor, events, missed } = await followed(after);
           after = cursor;
           retryMs = 1000;
-          if (this.error !== null) {
-            this.error = null;
+          if (this.followError !== null) {
+            this.followError = null;
             cx.notify();
           }
           if (missed) await this.refresh(cx);
@@ -260,7 +279,7 @@ export default class Cmod extends View {
           this.locate(cx);
         } catch (error) {
           after = undefined;
-          this.error = messageOf(error);
+          this.followError = messageOf(error);
           cx.notify();
           await cx.sleep(retryMs);
           retryMs = Math.min(retryMs * 2, RETRY_MS);
@@ -294,11 +313,15 @@ export default class Cmod extends View {
     if (page !== undefined) return this.openPage(page);
     if (!this.lists.views.some((view) => keyOf(view) === key)) return;
     this.tab = key;
-    if (event.isAsked === true && this.block !== null) {
-      run("layout.select", { stack: PANEL_STACK, child: this.block });
-      run("layout.show", { id: PANEL });
-    }
+    if (event.isAsked === true && this.isHost && !this.isWindow) this.revealSelf();
     await this.settle(cx);
+  }
+
+  revealSelf() {
+    const own = JSON.stringify(props() ?? {});
+    const isCmodViews = (node) => node.type === "block" && node.content?.mod === "cmod" && (node.content.props?.show ?? "views") === "views";
+    const path = pathTo(layout(), (node) => isCmodViews(node) && JSON.stringify(node.content.props ?? {}) === own) ?? pathTo(layout(), isCmodViews);
+    if (path !== null) reveal(path);
   }
 
   async settle(cx, isEveryUnit = false) {
@@ -315,13 +338,16 @@ export default class Cmod extends View {
   }
 
   async list(part) {
-    if (this.session === null || !this.wantedLists().includes(part)) return;
-    this.lists = { ...this.lists, [part]: await cmod(["ui", "list", part, this.session]) };
+    const session = this.session;
+    if (session === null || !this.wantedLists().includes(part)) return;
+    const listed = await cmod(["ui", "list", part, session]);
+    if (this.session === session) this.lists = { ...this.lists, [part]: listed };
   }
 
   async refresh(cx) {
     try {
       for (const part of this.wantedLists()) await this.list(part);
+      this.error = null;
       await this.settle(cx, true);
     } catch (error) {
       this.error = messageOf(error);
@@ -345,8 +371,7 @@ export default class Cmod extends View {
     const wanted = new Map(this.shownParts().map((part) => [keyOf(part), part]));
     for (const [key, unit] of this.units) {
       if (wanted.has(key)) continue;
-      unit.entity.release();
-      for (const field of unit.fields.values()) field.state.release();
+      this.retired.push(unit.entity, ...[...unit.fields.values()].map((field) => field.state));
       this.units.delete(key);
       this.deleting(cx, this.deleteUnshown(unit.drawn));
     }
@@ -362,7 +387,7 @@ export default class Cmod extends View {
     if (this.show === "widgets") return;
     const told = this.told;
     const parts = this.shownParts().map(keyOf);
-    const hosts = this.block === null ? [] : ["--host"];
+    const hosts = this.isHost ? ["--host"] : [];
     const toldHere = told.session === this.session ? [...told.parts, ...told.hosts] : [];
     this.told = { session: this.session, parts, hosts };
     const shown = [...parts, ...hosts];
@@ -435,7 +460,7 @@ export default class Cmod extends View {
     await this.deleteUnshown(replaced);
     for (const [key, field] of unit.fields) {
       if (kept.has(key)) continue;
-      field.state.release();
+      this.retired.push(field.state);
       unit.fields.delete(key);
     }
   }
@@ -541,11 +566,13 @@ export default class Cmod extends View {
     const target = this.target();
     if (!checking() && target !== null && `${target.address}:${target.pid}` !== this.located) this.locate(cx);
     this.notePageTabs();
+    this.releaseRetired(cx);
     const t = theme();
     const units = [...this.units.values()];
+    const problem = this.error ?? this.followError;
     const body =
       this.session === null ? this.note(this.show === "page" ? "This page names no session." : "Focus a Claude Code session to see its views.", t)
-      : units.length === 0 ? this.note(this.show === "views" && this.lists.views.length === 0 ? "This session shows no views." : "No mod draws here.", t)
+      : units.length === 0 ? this.note(problem ?? (this.show === "views" ? "Loading this session's views." : "No mod draws here."), t)
       : v_flex().id("cmod-units").flex_1().min_h(0).gap(SPACE_PX * 2).overflow_y_scrollbar().children(units.map((unit) => unit.entity));
     const root = (this.show === "widgets" ? h_flex().gap(SPACE_PX * 2).items_center() : v_flex().gap(SPACE_PX).p(SPACE_PX * 2))
       .id("cmod-root").size_full().min_h(0).text_size(13).text_color(t.foreground)
@@ -553,8 +580,17 @@ export default class Cmod extends View {
       .when(this.show === "views", (el) => el.child(this.tabBar(t)))
       .child(body)
       .when(this.show === "views" && this.lists.pages.length > 0, (el) => el.child(this.pageList(t)))
-      .when(this.error !== null, (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.error ?? "")));
+      .when(problem !== null && units.length > 0, (el) => el.child(div().text_size(11).text_color(t.blocked).child(problem ?? "")));
     return root;
+  }
+
+  releaseRetired(cx) {
+    if (this.retired.length === 0) return;
+    const released = this.retired;
+    this.retired = [];
+    cx.timer.after(0, () => {
+      for (const each of released) each.release();
+    });
   }
 
   note(text, t) {
@@ -621,7 +657,7 @@ export default class Cmod extends View {
     el = { "flex-start": (e) => e.items_start(), center: (e) => e.items_center(), "flex-end": (e) => e.items_end(), stretch: (e) => e.items_stretch() }[given.alignItems]?.(el) ?? el;
     el = { "flex-start": (e) => e.self_start(), center: (e) => e.self_center(), "flex-end": (e) => e.self_end() }[given.alignSelf]?.(el) ?? el;
     el = { "flex-start": (e) => e.justify_start(), center: (e) => e.justify_center(), "flex-end": (e) => e.justify_end(), "space-between": (e) => e.justify_between(), "space-around": (e) => e.justify_around(), "space-evenly": (e) => e.justify_evenly() }[given.justifyContent]?.(el) ?? el;
-    if (typeof given.flexGrow === "number" && given.flexGrow > 0) el = el.flex_grow();
+    if (typeof given.flexGrow === "number" && given.flexGrow > 0) el = el.flex_grow(given.flexGrow);
     if (given.flexShrink === 0) el = el.flex_shrink_0();
     const gapX = spaceOf(given.columnGap ?? given.gap);
     const gapY = spaceOf(given.rowGap ?? given.gap);

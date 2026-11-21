@@ -50,8 +50,7 @@ const packagesCheck: Check = { heading: 'Installing packages', run: checkPackage
 
 const releaseCheck: Check = { heading: 'Building and validating the release', run: checkRelease }
 
-const checks: Check[] = [
-  packagesCheck,
+export const publishChecks: readonly Check[] = [
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
   { heading: 'Checking the machines', run: checkMachines },
@@ -61,6 +60,11 @@ const checks: Check[] = [
   { heading: 'Pinning the cmod plugin', run: checkCmodFloor },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
+]
+
+const checks: Check[] = [
+  packagesCheck,
+  ...publishChecks,
   releaseCheck,
   { heading: "Compiling against Claude Code's API", run: checkCompiles },
   { heading: 'Linting', run: checkLint },
@@ -77,8 +81,6 @@ export async function run(argv: string[]): Promise<number> {
   process.stdout.write(`\n${plugin.name}: ${counts.pass} passed, ${counts.fail} failed, ${counts.skip} skipped\n`)
   return counts.fail > 0 ? 1 : 0
 }
-
-export const publishChecks: readonly Check[] = checks.filter((check) => check !== packagesCheck && check !== releaseCheck)
 
 export async function runChecks(plugin: Plugin, progress: Progress, chosen: readonly Check[], write: WriteText): Promise<Record<Result['status'], number>> {
   const counts = { pass: 0, fail: 0, skip: 0 }
