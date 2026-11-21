@@ -96,7 +96,9 @@ type UiPart = { readonly mod: string; readonly id: string }
 
 type UiHandler = UiPart & { readonly component: RenderComponent; readonly run: Handler }
 
-export type UiEvent = { readonly Change: { readonly part: 'widgets' | 'views' | 'pages' }; readonly Redraw: UiPart; readonly Open: UiPart; readonly Close: UiPart }
+export type UiEvent = { readonly Change: { readonly part: 'widgets' | 'views' | 'pages' }; readonly Redraw: UiPart; readonly Open: UiPart & { readonly isAsked?: true }; readonly Close: UiPart }
+
+const settingsView = 'settings'
 
 export type UiTell = <Event extends keyof UiEvent>(event: Event, payload: UiEvent[Event]) => void
 
@@ -109,6 +111,8 @@ export type Parts = {
   element(mod: string, id: string, params: unknown, columns: number, isFocused: boolean, surface: Surface): RenderElement | undefined
   press(mod: string, press: PartPress): Promise<void>
   update(mod: string, update: PartsUpdate): boolean
+  isHosted(): boolean
+  revealed(mod: string, id: string): boolean
   tell(mod: string, shown: ShownParts): void
   apply(listener: PartApply): void
   onOpen(listener: PartOpen): void
@@ -163,6 +167,7 @@ export function serveParts({
   const providersOf = (name: string) => [...(provided.get(name) ?? [])]
   const shownBy = new Map<string, ShownParts>()
   let inApps = new Map<string, readonly string[]>()
+  let isHosted = false
   const tellShown = (mod: string) => {
     const shown: ShownParts = { ...(shownBy.get(mod) ?? { open: [], shown: null, isFocused: false }), inApps: inApps.get(mod) ?? [] }
     void claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error: unknown) => claude.ui.warn(`pages:shown:${mod}`, `cmod: ${mod} did not hear which of its views and pages show: ${messageOf(error)}`))
@@ -257,11 +262,20 @@ export function serveParts({
     return known?.views.some((each) => each.id === id && each.place === 'sidebar') === true || known?.pages.some((each) => each.id === id) === true
   }
 
-  const tellRequested = (mod: string, requests: readonly PartRequest[]) => {
+  const tellRequested = (mod: string, requests: readonly PartRequest[], isAsked: boolean) => {
+    const asked = isAsked ? { isAsked: true as const } : {}
     for (const request of requests) {
-      if ('open' in request && isShownByApps(mod, request.open)) tellUi('Open', { mod, id: request.open })
+      const isInSettings = 'settings' in request || ('open' in request && declared.get(mod)?.views.some((each) => each.id === request.open && each.place === 'settings') === true)
+      if ('open' in request && isShownByApps(mod, request.open)) tellUi('Open', { mod, id: request.open, ...asked })
+      if (isInSettings && isShownByApps(cmodPluginName, settingsView)) tellUi('Open', { mod: cmodPluginName, id: settingsView, ...asked })
       if ('close' in request && isShownByApps(mod, request.close)) tellUi('Close', { mod, id: request.close })
     }
+  }
+
+  const revealed = (mod: string, id: string) => {
+    if (!isHosted || !isShownByApps(mod, id)) return false
+    tellUi('Open', { mod, id, isAsked: true })
+    return true
   }
 
   const update = (mod: string, { parts: listing, redraw, requests, isAsked, isStart }: PartsUpdate) => {
@@ -272,7 +286,7 @@ export function serveParts({
     if (listing !== undefined || isRedrawn) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(isRedrawn ? { redraw: true } : {}) })
     if (redraw === true) for (const id of idsOf(mod)) tellUi('Redraw', { mod, id })
     if (requests === undefined || requests.length === 0) return false
-    tellRequested(mod, requests)
+    tellRequested(mod, requests, isAsked === true)
     if (isAsked !== true) return (void run(mod, requests), false)
     waiting.push({ mod, requests })
     if (inputDepth > 0) return true
@@ -396,7 +410,8 @@ export function serveParts({
       await openIn(part.mod, part.id, false)
       return null
     },
-    shown(_session: string, listed: readonly UiPart[]) {
+    shown(_session: string, listed: readonly UiPart[], hosted?: boolean) {
+      isHosted = hosted === true
       const next = new Map<string, string[]>()
       for (const { mod, id } of listed) next.set(mod, [...(next.get(mod) ?? []), id])
       const changed = [...new Set([...inApps.keys(), ...next.keys()])].filter((mod) => JSON.stringify(inApps.get(mod) ?? []) !== JSON.stringify(next.get(mod) ?? []))
@@ -413,6 +428,8 @@ export function serveParts({
     element,
     press,
     update,
+    isHosted: () => isHosted,
+    revealed,
     tell(mod, shown) {
       shownBy.set(mod, shown)
       tellShown(mod)

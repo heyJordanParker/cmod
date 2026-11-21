@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { defineMod, provide, providers, sessions, type Provided } from '../../src/mod.js'
-import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, providerHoldMs, routeSessions, serveProviders, showLeaseMs, uiInterface, type ProviderIdentity, type ServedProviders, type SessionComputer } from '../../src/runtime/interfaces.js'
+import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, providerHoldMs, routeSessions, serveProviders, showLeaseMs, uiInterface, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
 import { addressCall, connectRpc, rpcRoutes, type HttpFetch, type RpcHttpAnswer, type RpcRoutes } from '../../src/runtime/rpc.js'
 import { didNotAnswer } from '../../src/runtime/dependencies.js'
 import { testMod } from '../../src/testing.js'
@@ -60,7 +60,7 @@ function manualClock() {
   }
 }
 
-function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, instances: Readonly<Record<string, string>> = {}, { device = { id: 'mac-id', name: 'mac' }, computer = noSessions }: { readonly device?: { readonly id: string; readonly name: string }; readonly computer?: SessionComputer } = {}) {
+function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, instances: Readonly<Record<string, string>> = {}, { device = { id: 'mac-id', name: 'mac' }, computer = noSessions, terminals }: { readonly device?: { readonly id: string; readonly name: string }; readonly computer?: SessionComputer; readonly terminals?: SessionTerminals } = {}) {
   const files = {
     list: async (path: string) => {
       const prefix = `${path}/`
@@ -73,7 +73,7 @@ function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, inst
   const report = (error: unknown) => void reported.push(String(error))
   const fetch: HttpFetch = (url, init) => fetchOf((socketPath) => (socketPath === '/store/serve.sock' ? serve.routes : programs[socketPath ?? '']))(url, init)
   const clock = manualClock()
-  const serve = routeSessions({ computer, device: async () => device, now: clock.now, after: clock.after, report, programs: { store: '/store', files, fetch, wait: atOnce } })
+  const serve = routeSessions({ computer, device: async () => device, now: clock.now, after: clock.after, report, programs: { store: '/store', files, fetch, wait: atOnce }, ...(terminals === undefined ? {} : { terminals }) })
   const connect = (name: string, provider?: ProviderIdentity) => {
     const listeners = interfaceListeners({ report })
     let served: ServedProviders | undefined
@@ -315,6 +315,37 @@ test('a program that provides through its connection to cmod serve answers a cal
   serve.close()
 })
 
+test("cmod serve provides cmod/Terminal ahead of every program for each session held in a herdr-core terminal, and answers not held for any other, so the next provider is asked", async () => {
+  const done: string[] = []
+  const terminals: SessionTerminals = {
+    screen: async ({ id }) => `the screen of ${id}`,
+    press: async ({ id, socket }, keys) => void done.push(`${socket} ${id} pressed ${JSON.stringify(keys)}`),
+    show: async ({ id }, place) => void done.push(`${id} shown at ${place}`),
+  }
+  const { serve, connect, reported } = servedComputer({}, {}, { terminals })
+  const plugin = connect('cmod')
+  await plugin.client.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app', herdrTerminal: { id: 't7', socket: '/hc.sock' } })
+  const anyhost = connect('anyhost', { mod: 'anyhost', program: 'anyhost' })
+  anyhost.served.provide('cmod/Terminal', { screen: () => 'anyhost', press: () => null, show: () => null })
+  await anyhost.client.request('$/providers', { interface: 'cmod/Terminal' })
+  const caller = connect('boat')
+
+  const found = (await caller.mod.providers('cmod/Terminal')) as unknown as readonly { readonly mod: string; screen(session: string): Promise<string>; press(session: string, keys: string): Promise<unknown>; show(session: string, place: string): Promise<unknown> }[]
+  const [ownTerminal] = found
+  const screen = await ownTerminal?.screen('s1')
+  await ownTerminal?.press('s1', '1\r')
+  await ownTerminal?.show('s1', 'peek')
+  const elsewhere = await ownTerminal?.screen('s2').catch((error: unknown) => String(error))
+
+  expect(found.map((each) => each.mod)).toEqual(['cmod', 'anyhost'])
+  expect(screen).toBe('the screen of t7')
+  expect(done).toEqual(['/hc.sock t7 pressed "1\\r"', 't7 shown at peek'])
+  expect(elsewhere).toContain('No session s2 runs in a herdr-core terminal on this computer.')
+  expect(reported).toEqual([])
+  await Promise.all([plugin.client.close(), anyhost.client.close(), caller.client.close()])
+  serve.close()
+})
+
 test("cmod serve that stops while it forwards a session's listener to a program reports nothing, though the program's connection closes under the listener's removal", async () => {
   const { serve, connect, reported } = servedComputer()
   const caller = connect('boat')
@@ -528,10 +559,47 @@ test("cmod serve tells a session's cmod plugin the parts its apps show, tells no
   clock.pass(1000)
   await lapsed
 
-  expect(kept).toEqual([['s1', [{ mod: 'demo', id: 'runs' }]]])
+  expect(kept).toEqual([['s1', [{ mod: 'demo', id: 'runs' }], false]])
   expect(told).toEqual([
-    ['s1', [{ mod: 'demo', id: 'runs' }]],
-    ['s1', []],
+    ['s1', [{ mod: 'demo', id: 'runs' }], false],
+    ['s1', [], false],
+  ])
+  await app.close()
+  await plugin.close()
+  serve.close()
+})
+
+test("cmod serve tells a session's cmod plugin it is hosted while one app's show says isHost, even with no parts, until that app's host lapses", async () => {
+  const { serve, fetch, clock } = servedComputer()
+  const told: unknown[] = []
+  const heard: (() => void)[] = []
+  const nextTold = () => new Promise<void>((resolve) => void heard.push(resolve))
+  const plugin = connectRpc({
+    call: addressCall(fetch, 'unix:/store/serve.sock'),
+    handle: async (method, params) => {
+      if (method !== '$/ui') return null
+      told.push((params as { readonly args: readonly unknown[] }).args)
+      heard.shift()?.()
+      return null
+    },
+    wait: atOnce,
+  })
+  await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const ui = { show: (...args: unknown[]) => app.request(methodName(uiInterface, 'show'), args) }
+
+  const hosted = nextTold()
+  await ui.show('s1', 'herdr:1', [], { isHost: true })
+  await hosted
+  await ui.show('s1', 'browser:1', [{ mod: 'demo', id: 'runs' }])
+  const lapsed = nextTold()
+  clock.pass(showLeaseMs)
+  await lapsed
+
+  expect(told).toEqual([
+    ['s1', [], true],
+    ['s1', [{ mod: 'demo', id: 'runs' }], true],
+    ['s1', [], false],
   ])
   await app.close()
   await plugin.close()

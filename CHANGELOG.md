@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-11-21
+
+### Added
+- In Herdr, a view a mod opens shows in Herdr's panel beside the terminal. A layout that places cmod's Herdr mod in its panel with `"block": "<its id>"` hosts the focused session: a slash command, a hotkey, or a press that opens a view or page shows the panel and selects the view, and Claude Code's own Sidebar stays closed. `cmod/UI` `show` takes `{ isHost: true }`, `cmod ui show` takes `--host`, and `Open` carries `isAsked: true` for an open the person asked for.
+- Agents read, type into, and show the terminal of every session that runs in Herdr with no other mod installed: `cmod serve` provides `cmod/Terminal` for each session in a herdr-core terminal, so `read_screen`, `press_keys`, and `show_session` work there.
+- `cmod sessions read <part> <session> --transcripts <folder>` reads a conversation from a copied Claude Code folder through an index of its own, so a mod that keeps another computer's transcripts answers `cmod/Sessions` `read` for it without adding it to this computer's index.
+
 ## [8.0.1] - 2026-11-21
 
 ### Fixed

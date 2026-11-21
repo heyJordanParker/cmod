@@ -16,7 +16,7 @@ import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import { MissingMachineId } from './device.js'
-import { interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type ProvidedHeard, type ProviderIdentity, type StoreChange } from './interfaces.js'
+import { interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type ProvidedHeard, type ProviderIdentity, type StoreChange, type HeldSession } from './interfaces.js'
 import { runCmod } from './programs.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from './rpc.js'
 import type { RoutedHook, Router } from './router.js'
@@ -230,7 +230,8 @@ export function serveConversations({
 
   const holdHere = async (client: RpcClient) => {
     if (session === '') return
-    await client.request(sessionActs.hold, { session, project: project(), cwd: await claude.session.cwd() })
+    const [cwd, terminal, socket] = await Promise.all([claude.session.cwd(), claude.env.herdrTerminal(), claude.env.herdrSocket()])
+    await client.request(sessionActs.hold, { session, project: project(), cwd, ...(terminal && socket ? { herdrTerminal: { id: terminal, socket } } : {}) } satisfies HeldSession)
   }
 
   let serveChanges: Registered | undefined

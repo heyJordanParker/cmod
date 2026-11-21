@@ -101,8 +101,8 @@ test.concurrent("cmod ui show tells the session the parts a client shows, tells 
   ])
   expect(malformed).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod ui: cmod ui show takes each part as <mod>/<id>, such as demo/runs, not runs.\n' })
   expect(asked).toEqual([
-    ['shown', 'worker', [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }]],
-    ['shown', 'worker', []],
+    ['shown', 'worker', [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], false],
+    ['shown', 'worker', [], false],
   ])
 }, 30_000)
 

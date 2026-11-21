@@ -798,6 +798,31 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   expect(answer).toEqual({})
 })
 
+test('while an app hosts the session, an open the person asked for tells Open with isAsked, a Settings request tells Open of the Settings view, and the cmod plugin reveals its own views in the app', () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const told: (readonly [string, unknown])[] = []
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: (event, payload) => void told.push([event, payload]) })
+  const shown = served.ui['shown'] as (session: string, listed: readonly unknown[], isHosted: boolean) => unknown
+  served.update('cmod', { parts: { widgets: [], pages: [{ id: 'history', title: 'History', place: 'sidebar' }, { id: 'settings', title: 'Settings', place: 'sidebar' }] } })
+  served.update('demo', { parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'sidebar' }, { id: 'rules', title: 'Rules', place: 'settings' }] } })
+  const isRevealedUnhosted = served.revealed('cmod', 'history')
+  told.length = 0
+
+  shown('test-session', [], true)
+  served.update('demo', { requests: [{ open: 'runs' }], isAsked: true })
+  served.update('demo', { requests: [{ open: 'runs' }] })
+  served.update('demo', { requests: [{ open: 'rules' }], isAsked: true })
+  const isRevealed = served.revealed('cmod', 'history')
+
+  expect([isRevealedUnhosted, isRevealed, served.isHosted()]).toEqual([false, true, true])
+  expect(told.filter(([event]) => event === 'Open')).toEqual([
+    ['Open', { mod: 'demo', id: 'runs', isAsked: true }],
+    ['Open', { mod: 'demo', id: 'runs' }],
+    ['Open', { mod: 'cmod', id: 'settings', isAsked: true }],
+    ['Open', { mod: 'cmod', id: 'history', isAsked: true }],
+  ])
+})
+
 test("a press waits for the mod it pressed, never for a slower mod an earlier press is still waiting on, because Claude Code's clock runs through that wait", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   let answerSlow: (value: unknown) => void = () => undefined

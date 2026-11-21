@@ -16,7 +16,7 @@ export const help = `Usage: cmod ui list <widgets|views|pages> <session>
        cmod ui press <session> <handler> [<json>]
        cmod ui open <session> <mod> <id>
        cmod ui close <session> <mod> <id>
-       cmod ui show <session> <client> [<mod>/<id>...]
+       cmod ui show <session> <client> [<mod>/<id>...] [--host]
        cmod ui follow [<session>...] [--after <cursor>]
 
 ${summary}
@@ -47,7 +47,11 @@ show tells which views and pages one place an app draws in shows, so each one
 counts as shown in its mod. <client> names that place, a name the app picks.
 Each show replaces that client's last list, and one with no parts clears it.
 cmod serve forgets a list 16 seconds after its client's last show, so an app
-runs it again before then.
+runs it again before then. --host says the place hosts the session's views, as
+a panel beside its terminal does: while one does, the session opens Claude
+Code's own Sidebar for no view or page, and tells the place each Open the
+person asked for, so the place shows itself. A show with --host and no parts
+keeps the host.
 
 follow prints the next batch of Change, Redraw, Open, and Close events of the
 sessions named, or of every session, as { cursor, events, missed }, and exits:
@@ -55,7 +59,8 @@ at once when events came after the --after cursor, else on the next event,
 else after 8 seconds, the time cmod serve answers each poll within. Each event
 is { event: "Change", session, part }, { event: "Redraw", session, mod, id }, or
 { event: "Open" or "Close", session, mod, id } for a view or page its mod
-opened or closed itself.
+opened or closed itself, and an Open the person asked for, with a command, a
+hotkey, or a press, carries isAsked: true.
 Pass the cursor it printed to --after on the next run, so a loop that runs it
 again misses no event. missed is true when the events before the cursor are
 unknown: on a run without --after, once cmod serve started again, or once more
@@ -66,20 +71,20 @@ const parts = ['widgets', 'views', 'pages'] as const
 const followMs = 8000
 
 export async function run(argv: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { columns: { type: 'string' }, surface: { type: 'string' }, area: { type: 'string' }, after: { type: 'string' } } })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { columns: { type: 'string' }, surface: { type: 'string' }, area: { type: 'string' }, after: { type: 'string' }, host: { type: 'boolean', default: false } } })
   const [command, ...named] = positionals
   const answer = await asked(command, named, values)
   process.stdout.write(`${JSON.stringify(answer ?? null)}\n`)
   return 0
 }
 
-function asked(command: string | undefined, named: readonly string[], values: { readonly columns?: string | undefined; readonly surface?: string | undefined; readonly area?: string | undefined; readonly after?: string | undefined }): Promise<unknown> {
+function asked(command: string | undefined, named: readonly string[], values: { readonly columns?: string | undefined; readonly surface?: string | undefined; readonly area?: string | undefined; readonly after?: string | undefined; readonly host?: boolean | undefined }): Promise<unknown> {
   const [session, mod, id] = named
   if (command === 'list' && named.length === 2 && (parts as readonly unknown[]).includes(named[0])) return calledOnServe(named[0] as string, [named[1]])
   if (command === 'draw' && named.length === 3) return calledOnServe('draw', [session, { mod, id }, { columns: columnsOf(values.columns), surface: surfaceOf(values.surface), ...areaOf(values.area) }])
   if (command === 'press' && (named.length === 2 || named.length === 3)) return calledOnServe('press', [session, handlerOf(named[1] as string), pressOf(named[2])])
   if ((command === 'open' || command === 'close') && named.length === 3) return calledOnServe(command, [session, { mod, id }])
-  if (command === 'show' && named.length >= 2) return calledOnServe('show', [session, named[1], named.slice(2).map(partOf)])
+  if (command === 'show' && named.length >= 2) return calledOnServe('show', [session, named[1], named.slice(2).map(partOf), ...(values.host === true ? [{ isHost: true }] : [])])
   if (command === 'follow') return follow(named, values.after)
   throw new Error(`cmod ui takes list <widgets|views|pages> <session>, draw <session> <mod> <id>, press <session> <handler> [<json>], open or close <session> <mod> <id>, show <session> <client> [<mod>/<id>...], or follow [<session>...].\n\n${help}`)
 }

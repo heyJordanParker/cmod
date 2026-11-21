@@ -11,6 +11,7 @@ import type { SessionData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
 import { startBackground, startTask, withBackgroundStatus } from './claude.js'
 import { ifMissing, readJson, writeAtomically } from './files.js'
+import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
 import { foldersIn, hasTranscript, listSessions, readContexts, readGoal, readMessages, readState, readTasks, readTurns, readUsage, runningEntries, runningFolder, searchMessages, type RunningEntry } from './history.js'
 
@@ -78,6 +79,7 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
     after: (ms, run) => setTimeout(run, ms).unref(),
     report: (error) => report('missed a message between sessions, programs, and devices', error),
     aliases: olderPluginNames,
+    terminals: herdrTerminals,
     programs: {
       store: storeFolder(process.env),
       files: {

@@ -63,7 +63,12 @@ const sortedMatches = 20_000
 
 const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"type":"agent-color"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
 
-export function openHistory(): Database {
+export function openHistory({ isInMemory = false }: { readonly isInMemory?: boolean } = {}): Database {
+  if (isInMemory) {
+    const db = new Database(':memory:')
+    db.exec(schema)
+    return db
+  }
   const path = storePath(indexFile)
   if (!existsSync(path)) {
     mkdirSync(storePath(), { recursive: true })

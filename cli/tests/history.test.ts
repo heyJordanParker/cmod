@@ -148,6 +148,23 @@ test.concurrent('messages reads a conversation as typed messages placed in their
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--turn', 'p1'))).toEqual(['p1'])
 })
 
+test.concurrent("read --transcripts reads a copied Claude Code folder's conversation through an index of its own, so cmod's index never lists it", async () => {
+  const home = await temporaryHome()
+  const copied = join(home, 'copied')
+  const project = join(home, 'work/app')
+  await writeFiles(copied, {
+    [`projects/${project.replace(/[^A-Za-z0-9]/g, '-')}/s1.jsonl`]: lines(conversation(project)),
+    [`projects/${project.replace(/[^A-Za-z0-9]/g, '-')}/s1/subagents/agent-a7.jsonl`]: lines([{ type: 'user', uuid: 'x1', timestamp: at(2), message: { role: 'user', content: 'find the pane file' } }]),
+  })
+
+  expect(await json(home, 'read', 'messages', 's1', '--project', project, '--transcripts', copied)).toEqual(mainMessages(project))
+  expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--transcripts', copied, '--task', 'a7'))).toEqual(['x1'])
+  expect(await json(home, 'read', 'turns', 's1', '--transcripts', copied, '--last', '1')).toEqual([{ prompt: mainMessages(project)[4], context: 1, openedAt: at(6) }])
+  expect(await json(home, 'list', '--every-project')).toEqual([])
+  expect(await cmod(home, 'sessions', 'list', '--transcripts', copied)).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod sessions: cmod sessions takes --transcripts only with read <part> <session>.\n' })
+  expect(await cmod(home, 'sessions', 'read', 'messages', 's1', '--transcripts', join(home, 'work'))).toEqual({ exitCode: 1, stdout: '', stderr: `cmod sessions: ${join(home, 'work')} holds no projects folder, so it is not a Claude Code folder.\n` })
+})
+
 test.concurrent("each mod's note in a hook row is indexed as a Note from that mod", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')

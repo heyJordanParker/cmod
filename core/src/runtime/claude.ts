@@ -119,6 +119,8 @@ export type Claude = {
     sshConnection(): Promise<string | undefined>
     display(): Promise<string | undefined>
     waylandDisplay(): Promise<string | undefined>
+    herdrTerminal(): Promise<string | undefined>
+    herdrSocket(): Promise<string | undefined>
   }
   readonly device: { read(): Promise<Device> }
   readonly cmod: { call(input: Args<'cmod.call'>): Promise<unknown> }

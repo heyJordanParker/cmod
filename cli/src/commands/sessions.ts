@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { AttachedFile } from '@cmodjs/core/src/session/context/turn/message/attached-file.js'
@@ -26,6 +28,7 @@ export const help = `Usage: cmod sessions list [--every-project] [--since 2d] [-
        cmod sessions read goal [<session>] [--task <id>] [--json]
        cmod sessions read usage [<session>] [--task <id>] [--json]
        cmod sessions read state [<session>] [--json]
+       cmod sessions read <part> <session> --transcripts <folder> [--json]
        cmod sessions follow [<session>...] [--running] [--json]
        cmod sessions index
 
@@ -63,6 +66,11 @@ prompt. read usage prints the model and the context's tokens as of the last
 reply. --task reads turns, contexts, goal, and usage of the agent a task runs.
 read state prints what a running conversation resumes from.
 
+read --transcripts reads the conversation from the transcripts in
+<folder>/projects, a Claude Code folder such as one copied from another
+computer, through an index of its own that lives only while the command runs,
+so cmod's own index of this computer's conversations never lists it.
+
 follow prints each message, turn, context, task, and goal change of the
 sessions named as Claude Code saves it, until stopped. With --running it
 follows every running session of the project too, and each one that starts
@@ -93,6 +101,7 @@ export async function run(argv: string[]): Promise<number> {
       after: { type: 'string' },
       limit: { type: 'string' },
       json: { type: 'boolean', default: false },
+      transcripts: { type: 'string' },
     },
   })
   const [given = ''] = positionals
@@ -106,7 +115,12 @@ export async function run(argv: string[]): Promise<number> {
     return session
   }
   const print = (value: unknown, lines: () => string) => process.stdout.write(values.json ? `${JSON.stringify(value)}\n` : lines())
-  const db = openHistory()
+  if (values.transcripts !== undefined) {
+    if (command !== 'read' || named.length !== 1) throw new Error('cmod sessions takes --transcripts only with read <part> <session>.')
+    if (!existsSync(join(values.transcripts, 'projects'))) throw new Error(`${values.transcripts} holds no projects folder, so it is not a Claude Code folder.`)
+    process.env['CLAUDE_CONFIG_DIR'] = resolve(values.transcripts)
+  }
+  const db = openHistory({ isInMemory: values.transcripts !== undefined })
   try {
     if (command === 'list' && rest.length === 0) {
       const sessions = listSessions(db, scope)

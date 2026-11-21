@@ -15,6 +15,8 @@ const FOLLOW_MS = 20_000;
 const RETRY_MS = 30_000;
 const RESIZE_MS = 250;
 const SHOW_MS = 5_000;
+const PANEL = "panel";
+const PANEL_STACK = "panel-body";
 const CELL_PX = 8;
 const ROW_PX = 18;
 const SPACE_PX = 6;
@@ -185,6 +187,7 @@ export default class Cmod extends View {
     this.area = given.area ?? DASHBOARD;
     this.page = given.show === "page" ? { mod: given.mod, id: given.id, title: given.title ?? given.id } : null;
     this.session = given.show === "page" ? given.session ?? null : null;
+    this.block = this.show === "views" && typeof given.block === "string" ? given.block : null;
     this.located = null;
     this.lists = { widgets: [], views: [], pages: [] };
     this.tab = null;
@@ -195,7 +198,7 @@ export default class Cmod extends View {
     this.error = null;
     this.resizing = 0;
     this.client = `herdr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    this.told = { session: null, parts: [] };
+    this.told = { session: null, parts: [], hosts: [] };
     this.sending = Promise.resolve(null);
     if (checking()) return;
     if (swept === null) {
@@ -291,6 +294,10 @@ export default class Cmod extends View {
     if (page !== undefined) return this.openPage(page);
     if (!this.lists.views.some((view) => keyOf(view) === key)) return;
     this.tab = key;
+    if (event.isAsked === true && this.block !== null) {
+      run("layout.select", { stack: PANEL_STACK, child: this.block });
+      run("layout.show", { id: PANEL });
+    }
     await this.settle(cx);
   }
 
@@ -355,15 +362,17 @@ export default class Cmod extends View {
     if (this.show === "widgets") return;
     const told = this.told;
     const parts = this.shownParts().map(keyOf);
-    const toldHere = told.session === this.session ? told.parts : [];
-    this.told = { session: this.session, parts };
+    const hosts = this.block === null ? [] : ["--host"];
+    const toldHere = told.session === this.session ? [...told.parts, ...told.hosts] : [];
+    this.told = { session: this.session, parts, hosts };
+    const shown = [...parts, ...hosts];
     const sends = [
-      ...(told.session !== null && told.session !== this.session && told.parts.length > 0 ? [[told.session, []]] : []),
-      ...(this.session !== null && (parts.join(" ") !== toldHere.join(" ") || (isRenewal && parts.length > 0)) ? [[this.session, parts]] : []),
+      ...(told.session !== null && told.session !== this.session && told.parts.length + told.hosts.length > 0 ? [[told.session, []]] : []),
+      ...(this.session !== null && (shown.join(" ") !== toldHere.join(" ") || (isRenewal && shown.length > 0)) ? [[this.session, shown]] : []),
     ];
     if (sends.length === 0) return;
     const sent = this.sending.then(async () => {
-      for (const [session, shown] of sends) await cmod(["ui", "show", session, this.client, ...shown]);
+      for (const [session, sent] of sends) await cmod(["ui", "show", session, this.client, ...sent]);
       return null;
     }).then((failure) => failure, (error) => messageOf(error));
     this.sending = sent;
@@ -376,10 +385,10 @@ export default class Cmod extends View {
   }
 
   async close() {
-    const { session, parts } = this.told;
-    this.told = { session: null, parts: [] };
+    const { session, parts, hosts } = this.told;
+    this.told = { session: null, parts: [], hosts: [] };
     await Promise.all([
-      ...(session !== null && parts.length > 0 ? [cmod(["ui", "show", session, this.client])] : []),
+      ...(session !== null && parts.length + hosts.length > 0 ? [cmod(["ui", "show", session, this.client])] : []),
       deleteDrawn([...this.units.values()].flatMap((unit) => [...unit.drawn])),
     ]);
   }

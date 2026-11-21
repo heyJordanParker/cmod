@@ -212,6 +212,7 @@ cmod sessions read tasks [<session>] [--task <id> | --nested] [--json]
 cmod sessions read goal [<session>] [--task <id>] [--json]
 cmod sessions read usage [<session>] [--task <id>] [--json]
 cmod sessions read state [<session>] [--json]
+cmod sessions read <part> <session> --transcripts <folder> [--json]
 cmod sessions follow [<session>...] [--running] [--json]
 cmod sessions index
 ```
@@ -228,6 +229,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `read usage` prints the model and the context's tokens as of the last reply.
 - `--task` reads the `turns`, `contexts`, `goal`, and `usage` of the session a task's owner runs, the way they read the conversation's.
 - `read state` prints what a running conversation resumes from. It reads the index without writing to it, so it never waits for another cmod that is writing the index.
+- `read --transcripts <folder>` reads the conversation from the transcripts in `<folder>/projects`, a Claude Code folder such as one copied from a computer that is off, through an index of its own that lives only while the command runs. So the index of this computer's conversations never lists it, and a mod that serves another device's sessions answers `cmod/Sessions` `read` in cmod's own shapes. It takes every flag each part takes.
 - `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later.
 - `--json` prints JSON instead of one line each.
 - `index` reads every saved conversation into the index at `~/.local/share/cmod/history-12.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, with the device each ran on, contexts, and tasks. While cmod has set up a mod other than cmod, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
@@ -242,7 +244,7 @@ cmod ui draw <session> <mod> <id> [--columns <n>] [--surface <surface>] [--area 
 cmod ui press <session> <handler> [<json>]
 cmod ui open <session> <mod> <id>
 cmod ui close <session> <mod> <id>
-cmod ui show <session> <client> [<mod>/<id>...]
+cmod ui show <session> <client> [<mod>/<id>...] [--host]
 cmod ui follow [<session>...] [--after <cursor>]
 ```
 
@@ -252,8 +254,8 @@ Reaches each running session's widgets, views, and pages as an app that draws th
 - `draw` prints the widget, view, or page as element data, with each handler as `{ "$cmodHandler": <number> }`, or `null` while the mod has not drawn it yet. `--columns` is the width it draws in, 80 unless given, and `--surface` the app that draws it: `terminal`, the default, `desktop`, `mobile`, `vscode`, `browser`, or `herdr`. `--area` is the area a widget shows in, one of the areas it lists: `abovePrompt`, `belowPrompt`, `working`, `turnEnd`, or `dashboard`. Without it, a widget draws for the Dashboard when it lists the Dashboard, else for its first area. For `turnEnd`, it draws the session's last finished turn, and prints `null` before the first one finishes.
 - `press` runs the handler with that number from one of the part's last two drawings, with the press `<json>` gives: `{ surface, key, kind, value, link }`, whose `surface` is `terminal` unless it names one.
 - `open` and `close` show or take away the view or page in the session's Sidebar.
-- `show` tells which views and pages one place an app draws in shows, as `cmod/UI` `show` does ([ui.md](ui.md#every-app-reaches-them-through-cmod-ui)), so each one counts as `isShown` in its mod. `<client>` names that place, and each part is `<mod>/<id>`. It replaces that client's last list, a run with no parts clears it, and `cmod serve` forgets a list 16 seconds after its client's last `show`, so an app runs it again before then.
-- `follow` prints the next batch of `Change`, `Redraw`, `Open`, and `Close` events of the sessions named, or of every session, as `{ cursor, events, missed }`, and exits: at once when events came after the `--after` cursor, else on the next event, else after 8 seconds, the time `cmod serve` answers each poll within. Each event is `{ event: "Change", session, part }`, `{ event: "Redraw", session, mod, id }`, or `{ event: "Open" or "Close", session, mod, id }` for a view or page its mod opened or closed itself. Pass the `cursor` it printed to `--after` on the next run, so a loop that runs it again misses no event. `missed` is true when the events before the cursor are unknown: on a run without `--after`, once `cmod serve` started again, or once more events passed than `cmod serve` keeps, 500 of each. Then read every list and drawing again.
+- `show` tells which views and pages one place an app draws in shows, as `cmod/UI` `show` does ([ui.md](ui.md#every-app-reaches-them-through-cmod-ui)), so each one counts as `isShown` in its mod. `<client>` names that place, and each part is `<mod>/<id>`. It replaces that client's last list, a run with no parts clears it, and `cmod serve` forgets a list 16 seconds after its client's last `show`, so an app runs it again before then. `--host` says the place hosts the session's views, as `isHost` does, and a run with `--host` and no parts keeps the host.
+- `follow` prints the next batch of `Change`, `Redraw`, `Open`, and `Close` events of the sessions named, or of every session, as `{ cursor, events, missed }`, and exits: at once when events came after the `--after` cursor, else on the next event, else after 8 seconds, the time `cmod serve` answers each poll within. Each event is `{ event: "Change", session, part }`, `{ event: "Redraw", session, mod, id }`, or `{ event: "Open" or "Close", session, mod, id }` for a view or page its mod opened or closed itself, and an `Open` the person asked for carries `isAsked: true`. Pass the `cursor` it printed to `--after` on the next run, so a loop that runs it again misses no event. `missed` is true when the events before the cursor are unknown: on a run without `--after`, once `cmod serve` started again, or once more events passed than `cmod serve` keeps, 500 of each. Then read every list and drawing again.
 
 ### cmod run
 

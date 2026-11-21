@@ -31,6 +31,7 @@ export type Fakes = {
   cmod: { call?: Claude['cmod']['call'] }
   tool: { call?: Claude['tool']['call'] }
   device: { read?: Claude['device']['read'] }
+  env: { herdrTerminal?: string; herdrSocket?: string }
   serve: Partial<SessionComputer>
 }
 
@@ -71,7 +72,7 @@ export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): 
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {}, device: {}, serve: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {}, device: {}, env: {}, serve: {} }
   const emptyDisk = fakeFiles({})
   const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
@@ -261,6 +262,8 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       sshConnection: async () => undefined,
       display: async () => undefined,
       waylandDisplay: async () => undefined,
+      herdrTerminal: async () => fakes.env.herdrTerminal,
+      herdrSocket: async () => fakes.env.herdrSocket,
     },
     device: { read: rejected('device.read', () => fakes.device.read ?? (async () => testDevice)) },
     cmod: { call: async (args) => cmodCall(clonedAsClaudeCodeDoes(args)) },

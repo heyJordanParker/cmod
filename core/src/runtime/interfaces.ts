@@ -41,7 +41,21 @@ export const sessionActs = {
   uiEvent: '$/uiEvent',
 } as const
 
-export type HeldSession = { readonly session: string; readonly project: string; readonly cwd: string }
+export const terminalInterface = 'cmod/Terminal'
+
+export type HerdrTerminal = { readonly id: string; readonly socket: string }
+
+export type TerminalPlace = 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'
+
+export const terminalPlaces: readonly TerminalPlace[] = ['focus', 'peek', 'tab', 'right', 'down', 'hide']
+
+export type SessionTerminals = {
+  screen(terminal: HerdrTerminal): Promise<string>
+  press(terminal: HerdrTerminal, keys: string): Promise<void>
+  show(terminal: HerdrTerminal, place: TerminalPlace): Promise<void>
+}
+
+export type HeldSession = { readonly session: string; readonly project: string; readonly cwd: string; readonly herdrTerminal?: HerdrTerminal }
 
 export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPercent' | 'lastTurn'>
 
@@ -321,6 +335,7 @@ export function routeSessions({
   report,
   aliases = [],
   programs,
+  terminals,
 }: {
   readonly computer: SessionComputer
   readonly device: () => Promise<Pick<Device, 'id' | 'name'>>
@@ -329,6 +344,7 @@ export function routeSessions({
   readonly report: (error: unknown) => void
   readonly aliases?: readonly string[]
   readonly programs?: ProgramReach
+  readonly terminals?: SessionTerminals
 }): SessionRouting {
   type Holder = HeldSession & { readonly connection: Pick<Peer, 'request' | 'notify'>; readonly told: HeldStatus }
   const holders = new Map<Pick<Peer, 'request' | 'notify'>, Holder>()
@@ -386,32 +402,35 @@ export function routeSessions({
   }
 
   type ShownPart = { readonly mod: string; readonly id: string }
-  type ShownSet = { readonly parts: readonly ShownPart[]; readonly until: number }
+  type ShownSet = { readonly parts: readonly ShownPart[]; readonly isHost: boolean; readonly until: number }
   const shownSets = new Map<string, Map<string, ShownSet>>()
   const toldShown = new Map<string, string>()
+  const toldNothing = JSON.stringify({ union: [], isHosted: false })
 
   const tellShown = (session: string) => {
     const sets = shownSets.get(session) ?? new Map<string, ShownSet>()
     for (const [client, set] of sets) if (set.until <= now()) sets.delete(client)
     if (sets.size === 0) shownSets.delete(session)
     const union = [...new Map([...sets.values()].flatMap(({ parts }) => parts).map(({ mod, id }) => [`${mod}/${id}`, { mod, id }])).values()].sort((first, second) => `${first.mod}/${first.id}`.localeCompare(`${second.mod}/${second.id}`))
+    const isHosted = [...sets.values()].some((set) => set.isHost)
     const holder = holderOf(session)
-    const told = JSON.stringify(union)
-    if (holder === undefined || (toldShown.get(session) ?? '[]') === told) return
+    const told = JSON.stringify({ union, isHosted })
+    if (holder === undefined || (toldShown.get(session) ?? toldNothing) === told) return
     toldShown.set(session, told)
-    void holder.connection.request(sessionActs.ui, { method: 'shown', args: [session, union] }).catch((error: unknown) => {
+    void holder.connection.request(sessionActs.ui, { method: 'shown', args: [session, union, isHosted] }).catch((error: unknown) => {
       if (!isConnectionGone(error)) report(error)
     })
   }
 
-  const show = (session: string, client: unknown, parts: unknown) => {
+  const show = (session: string, client: unknown, parts: unknown, options: unknown) => {
     showing(session)
     if (typeof client !== 'string' || client === '') throw new RpcError(rpcCodes.invalidParams, `${uiInterface}.show takes the client that shows the parts, a name its app picks.`)
     if (!Array.isArray(parts) || !parts.every((each) => isObject(each) && typeof each['mod'] === 'string' && typeof each['id'] === 'string')) throw new RpcError(rpcCodes.invalidParams, `${uiInterface}.show takes the parts it shows as { mod, id }[].`)
+    const isHost = isObject(options) && options['isHost'] === true
     const sets = shownSets.get(session) ?? new Map<string, ShownSet>()
     shownSets.set(session, sets)
-    if (parts.length === 0) sets.delete(client)
-    else sets.set(client, { parts: (parts as readonly ShownPart[]).map(({ mod, id }) => ({ mod, id })), until: now() + showLeaseMs })
+    if (parts.length === 0 && !isHost) sets.delete(client)
+    else sets.set(client, { parts: (parts as readonly ShownPart[]).map(({ mod, id }) => ({ mod, id })), isHost, until: now() + showLeaseMs })
     after(showLeaseMs, () => tellShown(session))
     tellShown(session)
     return null
@@ -419,8 +438,31 @@ export function routeSessions({
 
   const ui: Implementation = { ...Object.fromEntries(uiMethods.map((method) => [method, (session: string, ...args: unknown[]) => showing(session).request(sessionActs.ui, { method, args: [session, ...args] })])), show }
 
+  const heldTerminal = (session: string) => {
+    const terminal = holderOf(session)?.herdrTerminal
+    if (terminal === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
+    return terminal
+  }
+
+  const terminal: Implementation | undefined =
+    terminals === undefined
+      ? undefined
+      : {
+          screen: (session: string) => terminals.screen(heldTerminal(session)),
+          press: async (session: string, keys: unknown) => {
+            if (typeof keys !== 'string') throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.press takes the keys as one string, such as "1\\r".`)
+            await terminals.press(heldTerminal(session), keys)
+            return null
+          },
+          show: async (session: string, place: unknown) => {
+            if (!terminalPlaces.includes(place as TerminalPlace)) throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.show takes a place: ${terminalPlaces.join(', ')}.`)
+            await terminals.show(heldTerminal(session), place as TerminalPlace)
+            return null
+          },
+        }
+
   const interfaces = interfaceServer({
-    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui },
+    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
     onListen: (_connection, listening) => {
       if (listening.interface === uiInterface) {
         if (!uiEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${uiInterface} tells only Change, Redraw, Open, and Close.`)
@@ -436,10 +478,10 @@ export function routeSessions({
         return { result: null }
       }
       if (method === sessionActs.hold) {
-        const { session, project, cwd } = params as HeldSession
+        const { session, project, cwd, herdrTerminal } = params as HeldSession
         const known = holders.get(connection)
         for (const [each, holder] of holders) if (holder.session === session && each !== connection) holders.delete(each)
-        holders.set(connection, { session, project, cwd, connection, told: known?.session === session ? known.told : {} })
+        holders.set(connection, { session, project, cwd, ...(isObject(herdrTerminal) && typeof herdrTerminal.id === 'string' && typeof herdrTerminal.socket === 'string' ? { herdrTerminal: { id: herdrTerminal.id, socket: herdrTerminal.socket } } : {}), connection, told: known?.session === session ? known.told : {} })
         changed({ session, part: 'running' })
         toldShown.delete(session)
         tellShown(session)
@@ -461,7 +503,7 @@ export function routeSessions({
     },
   })
 
-  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
+  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface || (terminal !== undefined && name === terminalInterface), listsSelf: (name) => terminal !== undefined && name === terminalInterface, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
 
   const routes = rpcRoutes({
     handle: (connection) => {
@@ -540,6 +582,7 @@ export function providerPeer(serve: Pick<Peer, 'request'>, identity: ProviderIde
 
 export function routeProviders({
   isOwn,
+  listsSelf,
   own,
   device,
   report,
@@ -547,6 +590,7 @@ export function routeProviders({
   programs,
 }: {
   readonly isOwn: (name: string) => boolean
+  readonly listsSelf: (name: string) => boolean
   readonly own: (connection: RpcConnection) => RpcHandler
   readonly device: () => Promise<Pick<Device, 'id' | 'name'>>
   readonly report: (error: unknown) => void
@@ -603,7 +647,8 @@ export function routeProviders({
   const listed = async (name: string, asked: string | undefined): Promise<ProviderIdentity[]> => {
     const here = await device()
     const stamped = (identities: readonly ProviderIdentity[]) => identities.map((identity) => ({ ...identity, device: here }))
-    if (asked !== undefined) return asked === here.id ? stamped([...(await ownOf(name)), ...(isOwn(name) ? [{ mod: cmodPluginName, program: cmodPluginName }] : [])]) : []
+    const self = { mod: cmodPluginName, program: cmodPluginName }
+    if (asked !== undefined) return asked === here.id ? stamped([...(await ownOf(name)), ...(isOwn(name) ? [self] : [])]) : []
     await following
     const carried = await Promise.all(
       [...devices.entries()]
@@ -615,7 +660,7 @@ export function routeProviders({
           }),
         ),
     )
-    return [...stamped(await ownOf(name)), ...carried.flat()]
+    return [...stamped([...(listsSelf(name) ? [self] : []), ...(await ownOf(name))]), ...carried.flat()]
   }
 
   const reachOlder = (end: ProviderEnd, address: string, reach: ProgramReach) => {

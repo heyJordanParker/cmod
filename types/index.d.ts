@@ -49,9 +49,9 @@ declare module 'claude-code' {
         press(session: string, handler: number, input: { surface: 'terminal' | 'desktop' | 'mobile' | 'vscode' | 'browser' | 'herdr'; key?: string; value?: string; kind?: 'change' | 'submit'; link?: { href: string } }): void
         open(session: string, part: { mod: string; id: string }): void
         close(session: string, part: { mod: string; id: string }): void
-        show(session: string, client: string, parts: { mod: string; id: string }[]): void
+        show(session: string, client: string, parts: { mod: string; id: string }[], options?: { isHost?: boolean }): void
       }
-      events: { Change: { readonly session: string; readonly part: 'widgets' | 'views' | 'pages' }; Redraw: { readonly session: string; readonly mod: string; readonly id: string }; Open: { readonly session: string; readonly mod: string; readonly id: string }; Close: { readonly session: string; readonly mod: string; readonly id: string } }
+      events: { Change: { readonly session: string; readonly part: 'widgets' | 'views' | 'pages' }; Redraw: { readonly session: string; readonly mod: string; readonly id: string }; Open: { readonly session: string; readonly mod: string; readonly id: string; readonly isAsked?: true }; Close: { readonly session: string; readonly mod: string; readonly id: string } }
     }
   }
 }

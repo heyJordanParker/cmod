@@ -499,6 +499,36 @@ test("the dock of cmod's Herdr mod tells cmod/UI show the view it shows, again w
   ])
 })
 
+test("a dock its layout names as a block hosts the session with cmod/UI show --host, even with no view to show, and opens its panel for an Open the person asked for, and only for it", async () => {
+  const herdr = await herdrWith({ show: 'views', block: 'cmod' }, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? sessionViews : []) : viewsAndLog(asked)))
+  const client = clientOf(herdr)
+  const bare = await herdrWith({}, () => [])
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  bare.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await Promise.all([herdr.settled(), bare.settled()])
+
+  herdr.follow({ cursor: '1:0:0:1:0', events: [{ event: 'Open', session: 'worker', mod: 'demo', id: 'runs' }], missed: false })
+  await herdr.settled()
+  const unasked = [...herdr.commands]
+  herdr.follow({ cursor: '1:0:0:2:0', events: [{ event: 'Open', session: 'worker', mod: 'cmod', id: 'dashboard', isAsked: true }], missed: false })
+  await herdr.settled()
+
+  expect(shownBy(herdr).slice(0, 2)).toEqual([
+    ['ui', 'show', 'worker', client, '--host'],
+    ['ui', 'show', 'worker', client, 'cmod/dashboard', '--host'],
+  ])
+  expect(unasked).toEqual([])
+  expect(herdr.commands).toEqual([
+    ['layout.select', { stack: 'panel-body', child: 'cmod' }],
+    ['layout.show', { id: 'panel' }],
+  ])
+  expect(tabsOf(herdr).map(([tab, isSelected]) => [tab, isSelected])).toEqual([
+    ['cmod-tab-cmod/dashboard', true],
+    ['cmod-tab-demo/runs', false],
+  ])
+  expect(shownBy(bare)).toEqual([])
+})
+
 test("a page tab of cmod's Herdr mod tells cmod/UI show its page, and a widgets block tells nothing and renews nothing", async () => {
   const page = await herdrWith({ show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' }, viewsAndLog)
   const widgets = await herdrWith({ show: 'widgets', area: 'belowPrompt' }, () => [{ mod: 'demo', id: 'branch', areas: ['belowPrompt'] }])
