@@ -16,6 +16,7 @@ export type Turn = RecordPart & {
   readonly reason?: 'answer' | 'error'
   readonly failure?: { readonly type: string; readonly text: string }
   readonly device?: Device
+  readonly isAfterRefusal?: true
   messages(): Promise<Message[]>
   abort(): Promise<void>
 }

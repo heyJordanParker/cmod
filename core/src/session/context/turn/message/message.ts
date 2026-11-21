@@ -23,11 +23,12 @@ export type MessageOf<Type extends MessageType> = {
   readonly context: number
   readonly turn?: string
   readonly task?: string
+  readonly agentType?: string
 }
 
 export type Message = Prompt | Note | Reply | ToolCall | ToolResult | Skill | InstructionFile | AttachedFile | Notice
 
-export type Placed = 'session' | 'context' | 'turn' | 'task'
+export type Placed = 'session' | 'context' | 'turn' | 'task' | 'agentType'
 
 export type Unplaced<M extends Message = Message> = M extends Message ? Omit<M, Placed> : never
 

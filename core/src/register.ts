@@ -91,6 +91,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
       version: async () => (await $.session.version()).version,
+    info: () => $.session.info(),
       messages: ((args?: Parameters<Claude['session']['messages']>[0]) => (args === undefined ? $.session.messages() : $.session.messages(args))) as Claude['session']['messages'],
       append: (args) => $.session.append(args),
       send: (args) => $.session.send(args),

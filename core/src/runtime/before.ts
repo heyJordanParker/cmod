@@ -13,7 +13,7 @@ import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
-import { ownerOfSpawn, type ContextData, type ConversationState, type RunningTask, type SessionChange, type TurnData } from '../session/conversation.js'
+import { ownerOfSpawn, placedMessage, type ContextData, type ConversationState, type RunningTask, type SessionChange, type TurnData } from '../session/conversation.js'
 import { Task, TaskStart } from '../session/goal/task.js'
 import { sessionEvents, type BeforeEvent, type SessionEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
@@ -22,7 +22,7 @@ import type { Router } from './router.js'
 import { toolInputOf } from './tool-calls.js'
 import { resolve } from '../vendor.js'
 
-export type Place = Pick<ConversationState, 'session' | 'context' | 'contextOpenedAt' | 'turn' | 'tasks' | 'taskTurns' | 'openCalls'>
+export type Place = Pick<ConversationState, 'session' | 'agentType' | 'context' | 'contextOpenedAt' | 'turn' | 'tasks' | 'taskTurns' | 'openCalls'>
 
 export type Decide = (event: BeforeEvent, change: SessionChange) => Promise<Partial<Answers> | undefined>
 
@@ -71,12 +71,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
   const { place, wants, fold, failedBefore } = hooks
   const now = () => new Date().toISOString()
   const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide) => (await decide(event, change)) ?? {}
-  const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true): SessionChange => {
-    const turn = isInTurn ? (task === undefined ? where.turn : where.taskTurns[task]) : undefined
-    const context = task === undefined ? where.context : (where.tasks[task]?.context ?? where.context)
-    const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
-    return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
-  }
+  const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true, agentType?: string): SessionChange => ({ type: Message, message: placedMessage(where, unplaced, task, isInTurn, agentType ?? (task === undefined ? where.agentType : where.tasks[task]?.agentType)) })
   const submitted = (e: Frozen<Args<'prompt.submit'>>) => (where: Place) => message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false)
   const received = (e: Frozen<Args<'session.receive'>>) => (where: Place) => message(where, { id: '', at: now(), type: Prompt, text: e.text, from: { type: 'session' } }, e.agentId, false)
   const refusedOnFailure = (event: BeforeEvent, change: (where: Place) => SessionChange | undefined, error: Error, next: { readonly called: boolean }) => (next.called ? undefined : failedBefore(event, change, error)?.refuse)
@@ -92,7 +87,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const task = e.agentId === undefined ? undefined : where.tasks[e.agentId]
     return e.agentId !== undefined && task === undefined ? undefined : { type: ContextEnd, context: closingContext(where, task, now()) }
   }
-  const turnEnded = (turn: TurnData | undefined): SessionChange | undefined => (turn === undefined ? undefined : { type: TurnEnd, turn: { ...turn, closedAt: now() } })
+  const turnEnded = (turn: TurnData | undefined, isAfterRefusal = false): SessionChange | undefined => (turn === undefined ? undefined : { type: TurnEnd, turn: { ...turn, closedAt: now(), ...(isAfterRefusal ? { isAfterRefusal } : {}) } })
   const titles = new Map<string, string>()
   const spawned = new Map<string, { readonly prompt: string; readonly agentType: string }>()
   const startedBy = new Map<string, string>()
@@ -262,7 +257,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const open = where.taskTurns[e.agent_id]?.prompt
       const text = open?.text ?? prompt
       if (text === undefined) return next(e)
-      const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false), fold(next.signal))
+      const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false, where.tasks[e.agent_id]?.agentType ?? e.agent_type), fold(next.signal))
       return withNote(await next(e), answer.note)
     }),
     router.add('classic.SubagentStop', async (e, next) => {
@@ -271,22 +266,22 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
         return answer
       }
       if (next.signal.aborted || !(await wants(TurnEnd))) return stopped(await next(e))
-      const change = turnEnded((await place()).taskTurns[e.agent_id])
+      const change = turnEnded((await place()).taskTurns[e.agent_id], e.stop_hook_active)
       if (change === undefined) return stopped(await next(e))
       const answer = await askedAtStop(change, next.signal)
       return stopped(answeredStop(await next(e), answer, next.signal))
     }, async (e, error, next) => {
-      const refusal = refusedOnFailure(TurnEnd, (where) => turnEnded(where.taskTurns[e.agent_id]), error, next)
+      const refusal = refusedOnFailure(TurnEnd, (where) => turnEnded(where.taskTurns[e.agent_id], e.stop_hook_active), error, next)
       return refusal === undefined ? undefined : { ...(await next(e)), block: refusal }
     }),
     router.add('classic.Stop', async (e, next) => {
       if (next.signal.aborted || !(await wants(TurnEnd))) return next(e)
-      const change = turnEnded((await place()).turn)
+      const change = turnEnded((await place()).turn, e.stop_hook_active)
       if (change === undefined) return next(e)
       const answer = await askedAtStop(change, next.signal)
       return answeredStop(await next(e), answer, next.signal)
     }, async (e, error, next) => {
-      const refusal = refusedOnFailure(TurnEnd, (where) => turnEnded(where.turn), error, next)
+      const refusal = refusedOnFailure(TurnEnd, (where) => turnEnded(where.turn, e.stop_hook_active), error, next)
       return refusal === undefined ? undefined : { ...(await next(e)), block: refusal }
     }),
     router.add('session.compact', async (e, next) => {

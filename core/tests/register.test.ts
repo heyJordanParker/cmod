@@ -79,7 +79,7 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
       set: async (key: string, value: unknown) => store.set(key, value),
     },
     env: { get: async (name: string) => env[name] },
-    session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app', model: async () => 'test-model', usage: async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [] }) },
+    session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app', model: async () => 'test-model', usage: async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [] }), info: async () => ({ transcriptPath: '/home/test/.claude/projects/-work-app/session-1.jsonl' }) },
     clock: { now: async () => 0, every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
   } as unknown as EngineInterface
   return { $, shown }

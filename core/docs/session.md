@@ -73,6 +73,7 @@ type Session = {
   readonly agentType?: string
   readonly model: string
   readonly cwd: string
+  readonly transcriptPath?: string
   readonly isRunning: boolean
   readonly startedAt: string
   readonly lastAt: string
@@ -109,6 +110,7 @@ type Session = {
 - `model` is the model the session runs on. `startedAt` and `lastAt` are ISO times.
 - `forkedFrom` names the session a `/branch` or a fork copied it from, and for a task's owner the session whose `fork` started it.
 - `visitedAt` is when the person last opened the session's reply, in the browser app or in a mod that calls `visit`, as an ISO time. A reply after it is unread. A session nobody visited has none.
+- `transcriptPath` is the file Claude Code writes the session's conversation to. A task's owner names its own file, `subagents/agent-<task>.jsonl` in the folder beside the session's file, and a background task names the file of the session that runs it.
 - `isRunning` is true while the session is open in a Claude Code window, and for a task's owner while its task runs.
 - `device` is the computer the session runs on, its `id` and `name` as `device.read()` answers them ([mod.md](mod.md#device-the-computer-the-session-runs-on)). A listed session's is the one its sessions provider names ([Sessions providers](#sessions-providers)). A session of a computer without a machine id has none, and so does a task's `owner`. `sessions.get(task.id)` reads a background task's session with the device its store names.
 - `status` is what a running session does now, as Claude Code records it: `busy` while a turn runs, `waiting` while a dialog waits on the person, `shell` while a command a stopped turn left runs in its terminal, and `idle` between turns. A session whose Claude Code records none has the one its cmod plugin hears: `busy` from a turn's start to its end, `waiting` while a permission prompt or a question is open, else `idle`. An ended session, a task's `owner`, and `sessions.current` have none.
@@ -246,7 +248,7 @@ Claude reads each mod's `note` inside the mod's own tag, such as `<my-mod_mod>â€
 | `onNotification` | Claude Code notifies the person | `Notification`: `text`, `title?`, `type` | |
 | `beforeElicitation`, `onElicitation` | an MCP server asks the person | `Elicitation`: `id?`, `server`, `text`, `mode?`, `url?`, `schema?` | `{ refuse }` |
 | `beforeElicitationResponse`, `onElicitationResponse` | the person answers an MCP server | `ElicitationResponse`: `id?`, `server`, `mode?`, `action`, `content?` | `{ refuse }` |
-| `beforePermissionCheck`, `onPermissionCheck` | Claude Code decides whether a tool call runs, asks, or is refused, before any dialog, and when a mod asks `tools.check` | `PermissionCheck`: `name`, `input`, `callId?`, `decision`, `reason?`, `rule?`, `ceiling?` | `{ allow: true }`, `{ ask }`, or `{ refuse }`. `allow` approves a call in every mode, auto mode included. `allow` and `ask` need `"approve": true` in `package.json` `"cmod"` ([mod.md](mod.md#register-the-mod-with-claude-code)). A mod never overrides a refusal from the person's settings |
+| `beforePermissionCheck`, `onPermissionCheck` | Claude Code decides whether a tool call runs, asks, or is refused, before any dialog, and when a mod asks `tools.check` | `PermissionCheck`: `name`, `input`, `callId?`, `decision`, `reason?`, `rule?`, `ceiling?` | `{ allow: true }`, `{ ask }`, or `{ refuse }`, each with an optional `note`, or `{ note }` alone. `allow` approves a call in every mode, auto mode included. A `note` reaches Claude with the result of the call it checked, as a `beforeToolCall` note does. `allow` and `ask` need `"approve": true` in `package.json` `"cmod"` ([mod.md](mod.md#register-the-mod-with-claude-code)). A mod never overrides a refusal from the person's settings |
 | `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `PermissionRequest`: `name`, `input`, `suggestions`, `mcpServer?` | `{ allow: true, input?, updates? }` or `{ refuse, interrupt? }` |
 | `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `PermissionDenial`: `name`, `input`, `callId`, `reason`, `mcpServer?` | `{ retry: true }` |
 | `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `ToolBatch`: `calls`, each `{ callId, name, input, output? }` | `{ note }` |
@@ -351,6 +353,7 @@ type MessageOf<Type> = {
   readonly context: number
   readonly turn?: string
   readonly task?: string
+  readonly agentType?: string
 }
 ```
 
@@ -358,6 +361,7 @@ type MessageOf<Type> = {
 - `at` is its ISO time. `session` is the session's id, and `context` the number of the context it is in, from 1.
 - `turn` is the `id` of the prompt that opened its turn. A task's message names its owner's turn. A message before the first prompt has none.
 - `task` is the id of the task whose message it is. A message of the session itself has none.
+- `agentType` is the agent definition of the agent the message belongs to: the task's agent for a task's message, and the agent the session runs, as `claude --agent` starts one, for the session's own. A message of a plain session has none.
 
 | Type | Constant | Its own fields |
 | --- | --- | --- |
@@ -424,6 +428,7 @@ type Turn = {
   readonly answer?: string
   readonly reason?: 'answer' | 'error'
   readonly failure?: { readonly type: string; readonly text: string }
+  readonly isAfterRefusal?: true
   readonly device?: Device
   messages(): Promise<Message[]>
   abort(): Promise<void>
@@ -454,7 +459,7 @@ type Task = {
 ```
 
 - A turn's `closedAt` is set once the agent stops. A turn still running has none.
-- The turn `onTurnEnd` hears carries why it ended. `reason` is `'answer'` when Claude finished, with its last words in `answer`, and `'error'` when a request failed, with `failure` naming the error's `type`, such as `'rate_limit'`, and its `text`. A turn a mod kept going with `beforeTurnEnd` ends only at the stop that nothing refuses. A turn read later through `turns()` has `closedAt` and none of these.
+- The turn `onTurnEnd` hears carries why it ended. `reason` is `'answer'` when Claude finished, with its last words in `answer`, and `'error'` when a request failed, with `failure` naming the error's `type`, such as `'rate_limit'`, and its `text`. A turn a mod kept going with `beforeTurnEnd` ends only at the stop that nothing refuses, and the turn `beforeTurnEnd` hears at each stop after a refusal has `isAfterRefusal: true`, so a listener can let the agent stop the second time. A turn read later through `turns()` has `closedAt` and none of these.
 
 ```ts
 sessions.current.onTurnEnd((turn) => {

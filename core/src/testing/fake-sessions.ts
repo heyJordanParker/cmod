@@ -12,7 +12,7 @@ import { Task, TaskStart } from '../session/goal/task.js'
 import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
-import { createConversation, emptyConversation, searchLimit, tasksWithAgents, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
+import { createConversation, emptyConversation, placedMessage, searchLimit, tasksWithAgents, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import type { Decide, Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
 import { testDevice } from './fake-claude.js'
@@ -300,9 +300,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       const where = place()
       const [unplaced] = messagesOf(rowOf(draft, `message-${(ids += 1)}`, now(), cwd()), task !== undefined)
       if (unplaced === undefined) throw new Error(`A ${draft.type} draft makes no message.`)
-      const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
-      const turn = task === undefined ? where.turn : where.taskTurns[task]
-      return { ...unplaced, ...call, session: where.session, context: task === undefined ? where.context : (where.tasks[task]?.context ?? where.context), ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) }
+      return placedMessage(where, unplaced, task)
     },
     place,
     wants: wantsBefore,

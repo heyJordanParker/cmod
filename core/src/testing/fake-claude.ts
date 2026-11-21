@@ -230,6 +230,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       usage: () => fakes.session.usage?.() ?? Promise.resolve({ startedAt: Date.parse('2026-01-01T00:00:00.000Z'), context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
       surfaces: () => fakes.session.surfaces?.() ?? Promise.resolve(['terminal']),
       version: async () => '2.1.317',
+      info: async () => ({ transcriptPath: '/test/transcripts/test-session.jsonl' }),
       messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
       append: rejected('session.append', () => fakes.session.append ?? appendNote),
       send: rejected('session.send', () => fakes.session.send ?? (async () => ({ isDelivered: true as const }))),

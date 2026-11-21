@@ -185,6 +185,7 @@ export function testMod<State extends object, Declared extends Options = Options
   let toolUses = 0
   let slotDraws = 0
   fake.claude.session.id = async () => answeredId
+  fake.claude.session.info = async () => ({ transcriptPath: `/test/transcripts/${answeredId}.jsonl` })
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
   const conversations = fakeSessions({

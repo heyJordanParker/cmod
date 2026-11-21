@@ -43,6 +43,12 @@ export const sessionActs = {
 
 export const terminalInterface = 'cmod/Terminal'
 
+export const providersInterface = 'cmod/Providers'
+
+export type ProvidersChange = { readonly interface: string; readonly device: Pick<Device, 'id' | 'name'> }
+
+type ChangedProviders = (name: string | undefined, device: Pick<Device, 'id' | 'name'> | undefined) => void
+
 export type HerdrTerminal = { readonly id: string; readonly socket: string }
 
 export type TerminalPlace = 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'
@@ -466,7 +472,7 @@ export function routeSessions({
         }
 
   const interfaces = interfaceServer({
-    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
+    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, [providersInterface]: {}, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
     onListen: (_connection, listening) => {
       if (listening.interface === uiInterface) {
         if (!uiEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${uiInterface} tells only Change, Redraw, Open, and Close.`)
@@ -476,7 +482,7 @@ export function routeSessions({
         if (!terminalEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${terminalInterface} tells only ${terminalEvents.join(' and ')}.`)
         return
       }
-      if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
+      if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, listening.interface === providersInterface ? `${providersInterface} tells only Change.` : `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
     },
     extraMethod: (connection, method, params) => {
       if (method === sessionActs.uiEvent) {
@@ -511,7 +517,18 @@ export function routeSessions({
     },
   })
 
-  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface || (terminal !== undefined && name === terminalInterface), listsSelf: (name) => terminal !== undefined && name === terminalInterface, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
+  const toldNames = new Set<string>()
+  const providersChanged: ChangedProviders = (name, from) =>
+    void (async () => {
+      const at = from ?? (await device())
+      const listened = interfaces.listeners(providersInterface, 'Change').map(({ matcher }) => (isObject(matcher) ? (matcher as Readonly<Record<string, unknown>>)['interface'] : undefined))
+      for (const each of name === undefined ? new Set([...toldNames, ...listened.filter((named): named is string => typeof named === 'string')]) : [name]) {
+        toldNames.add(each)
+        interfaces.emit(providersInterface, 'Change', { interface: each, device: at } satisfies ProvidersChange)
+      }
+    })().catch(report)
+
+  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface || name === providersInterface || (terminal !== undefined && name === terminalInterface), listsSelf: (name) => name === providersInterface || (terminal !== undefined && name === terminalInterface), changed: providersChanged, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
 
   const routes = rpcRoutes({
     handle: (connection) => {
@@ -596,9 +613,11 @@ export function routeProviders({
   report,
   channel,
   programs,
+  changed,
 }: {
   readonly isOwn: (name: string) => boolean
   readonly listsSelf: (name: string) => boolean
+  readonly changed: ChangedProviders
   readonly own: (connection: RpcConnection) => RpcHandler
   readonly device: () => Promise<Pick<Device, 'id' | 'name'>>
   readonly report: (error: unknown) => void
@@ -656,7 +675,7 @@ export function routeProviders({
     const here = await device()
     const stamped = (identities: readonly ProviderIdentity[]) => identities.map((identity) => ({ ...identity, device: here }))
     const self = { mod: cmodPluginName, program: cmodPluginName }
-    if (asked !== undefined) return asked === here.id ? stamped([...(await ownOf(name)), ...(isOwn(name) ? [self] : [])]) : []
+    if (asked !== undefined) return asked === here.id ? stamped([...(await ownOf(name)), ...(isOwn(name) && name !== providersInterface ? [self] : [])]) : []
     await following
     const carried = await Promise.all(
       [...devices.entries()]
@@ -693,8 +712,19 @@ export function routeProviders({
     return listeners
   }
 
+  const followedDevices = new Set<string>()
+
+  const forward = (id: string, peer: Pick<Peer, 'request'>) => {
+    if (followedDevices.has(id)) return
+    followedDevices.add(id)
+    listenersOf(id).listen(peer, listeningOf(providersInterface, 'on', 'Change', [], undefined), (told: unknown) => {
+      if (isObject(told) && typeof told['interface'] === 'string' && isObject(told['device']) && told['device']['id'] === id) changed(told['interface'], { id, name: String(told['device']['name']) })
+    })
+  }
+
   const drop = (id: string, each: DeviceServe) => {
     devices.delete(id)
+    changed(undefined, { id, name: each.name })
     if (!isLinked(each)) return each.client.close()
     each.link.close(new Error(`cmod serve dropped ${each.name}`))
     return undefined
@@ -712,8 +742,11 @@ export function routeProviders({
     })
     const each: MessageServe = { name, listeners: listenersOf(id), carrier, link, theirs }
     devices.set(id, each)
+    forward(id, peerOf(each))
     link.notify(providerActs.link, { link: link.id, ...(theirs === undefined ? {} : { answers: theirs }) } satisfies Hello)
-    if (theirs !== undefined) void each.listeners.replay(peerOf(each))
+    if (theirs === undefined) return
+    changed(undefined, { id, name })
+    void each.listeners.replay(peerOf(each))
   }
 
   const greeted = (id: string, known: MessageServe | undefined, carrier: ProviderEnd, hello: Hello) => {
@@ -725,6 +758,7 @@ export function routeProviders({
     if (known.theirs === hello.link) return
     known.theirs = hello.link
     if (hello.answers !== known.link.id) known.link.notify(providerActs.link, { link: known.link.id, answers: hello.link } satisfies Hello)
+    changed(undefined, { id, name: known.name })
     void known.listeners.replay(peerOf(known))
   }
 
@@ -753,6 +787,7 @@ export function routeProviders({
       handle: heardBy(listeners, `the cmod serve of ${name}`),
       onConnect: async (connected) => {
         reached()
+        changed(undefined, { id, name })
         await listeners.replay(connected)
       },
       onError: () => reached(),
@@ -760,6 +795,7 @@ export function routeProviders({
       keepsConnecting: true,
     })
     devices.set(id, { name, address, client, listeners })
+    forward(id, client)
     await isReached
   }
 
@@ -831,12 +867,14 @@ export function routeProviders({
     if (!isObject(params) || typeof params['interface'] !== 'string' || typeof params['mod'] !== 'string' || (params['program'] !== undefined && typeof params['program'] !== 'string')) throw new RpcError(rpcCodes.invalidParams, `${providerActs.provide} takes { interface, mod, program }.`)
     checkInterfaceName(params['interface'])
     const end = endOf({ mod: params['mod'], ...(typeof params['program'] === 'string' ? { program: params['program'] } : {}) })
+    const isNew = end.connection !== connection || !end.names.has(params['interface'])
     if (end.connection !== connection) {
       end.connection = connection
       end.names = new Set()
       void end.listeners.replay(end.link)
     }
     end.names.add(params['interface'])
+    if (isNew) changed(params['interface'], undefined)
     for (const each of end.awaited) if (each.name === undefined || each.name === params['interface']) each.provided()
     if (params['interface'] === devicesInterface) follow(end)
     return {}
@@ -871,7 +909,7 @@ export function routeProviders({
 
   const unprovide = (connection: RpcConnection, params: unknown) => {
     const name = isObject(params) ? params['interface'] : undefined
-    for (const end of ends.values()) if (end.connection === connection && typeof name === 'string') end.names.delete(name)
+    for (const end of ends.values()) if (end.connection === connection && typeof name === 'string' && end.names.delete(name)) changed(name, undefined)
     if (name === devicesInterface) followDevices()
     return {}
   }
@@ -932,6 +970,7 @@ export function routeProviders({
       for (const end of ends.values()) {
         if (end.connection !== connection) continue
         listedDevices ||= end.names.has(devicesInterface)
+        for (const name of end.names) changed(name, undefined)
         end.connection = undefined
         end.names = new Set()
       }

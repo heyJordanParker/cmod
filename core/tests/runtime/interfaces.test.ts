@@ -315,6 +315,68 @@ test('a program that provides through its connection to cmod serve answers a cal
   serve.close()
 })
 
+type ProvidersWatch = { readonly mod: string; readonly program?: string; onChange(matcher: { readonly interface: string }, listener: (change: { readonly interface: string; readonly device: { readonly id: string; readonly name: string } }) => void): unknown }
+
+function heardChanges(watch: ProvidersWatch | undefined, name: string) {
+  const changes: { readonly interface: string; readonly device: { readonly id: string; readonly name: string } }[] = []
+  const pending: { readonly count: number; readonly resolve: () => void }[] = []
+  watch?.onChange({ interface: name }, (change) => {
+    changes.push(change)
+    for (const each of pending.filter(({ count }) => changes.length >= count)) each.resolve()
+  })
+  return { changes, nth: (count: number) => new Promise<void>((resolve) => (changes.length >= count ? resolve() : void pending.push({ count, resolve }))) }
+}
+
+test("cmod serve's cmod/Providers tells a Change each time a program starts or stops providing an interface, so a caller that waits for a provider hears it arrive and leave", async () => {
+  const { serve, connect, reported } = servedComputer()
+  const caller = connect('boat')
+  const watches = (await caller.mod.providers('cmod/Providers')) as unknown as readonly ProvidersWatch[]
+  const heard = heardChanges(watches[0], 'demo/Echo')
+  await caller.client.request('$/providers', { interface: 'demo/Echo' })
+  const arrived = heard.nth(1)
+  const left = heard.nth(2)
+
+  const program = connect('demo', { mod: 'demo', program: 'echo' })
+  program.served.provide('demo/Echo', { echo: (text: string) => text })
+  await arrived
+  const whileProvided = (await caller.mod.providers('demo/Echo')).map((each) => each['program'])
+  await program.client.close()
+  await left
+
+  expect(watches.map((each) => [each.mod, each.program])).toEqual([['cmod', 'cmod']])
+  expect(whileProvided).toEqual(['echo'])
+  expect(heard.changes).toEqual([
+    { interface: 'demo/Echo', device: macDevice },
+    { interface: 'demo/Echo', device: macDevice },
+  ])
+  expect(await caller.mod.providers('demo/Echo')).toEqual([])
+  expect(reported).toEqual([])
+  await caller.client.close()
+  serve.close()
+})
+
+test("cmod serve's cmod/Providers tells a session a program on another device that starts providing an interface, named with that device, once", async () => {
+  const devices = linkedDevices()
+  const session = devices.connect(devices.mac, 'boat')
+  await devices.linked()
+  const watches = (await session.mod.providers('cmod/Providers')) as unknown as readonly ProvidersWatch[]
+  const heard = heardChanges(watches[0], 'demo/Echo')
+  await devices.settled()
+  const arrived = heard.nth(heard.changes.length + 1)
+  const beforeProvided = heard.changes.length
+
+  const program = devices.connect(devices.devbox, 'demo', { mod: 'demo', program: 'echo' })
+  program.served.provide('demo/Echo', { echo: (text: string) => text })
+  await arrived
+  await devices.settled()
+
+  expect(watches.map((each) => each.mod)).toEqual(['cmod'])
+  expect(heard.changes.slice(beforeProvided)).toEqual([{ interface: 'demo/Echo', device: devboxDevice }])
+  expect(((await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]).map((each) => each.device)).toEqual([devboxDevice])
+  expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  await devices.close()
+})
+
 test("cmod serve provides cmod/Terminal ahead of every program for each session held in a herdr-core terminal, and answers not held for any other, so the next provider is asked", async () => {
   const done: string[] = []
   const terminals: SessionTerminals = {
@@ -481,6 +543,23 @@ test('a call names one provider when several provide the interface, and a call t
   expect(unnamed).toBe("demo's echo program and boat's echo program provide demo/Echo, so cmod serve picks none. Call one through providers('demo/Echo').")
   for (const each of [first, second, caller]) await each.client.close()
   serve.close()
+})
+
+test("a request sent while cmod serve starts again, which the new cmod serve answers 410 for the old connection, reaches the new cmod serve once the client connects again, instead of failing as closed", async () => {
+  const served = (name: string) => rpcRoutes({ handle: () => async (method) => `${name} answered ${method}`, now: () => Date.now() })
+  const first = served('first')
+  let routes = first
+  const client = connectRpc({ call: addressCall(fetchOf(() => routes), 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce, retryMs: 0 })
+  const before = await client.request<string>('demo/Echo.echo', ['ping'])
+
+  first.close()
+  routes = served('second')
+  const after = await client.request<string>('demo/Echo.echo', ['ping'])
+
+  expect(before).toBe('first answered demo/Echo.echo')
+  expect(after).toBe('second answered demo/Echo.echo')
+  await client.close()
+  routes.close()
 })
 
 test('a poll its client abandons drops its connection at once: cmod serve forgets it, its calls fail as closed, and its next poll answers 410', async () => {

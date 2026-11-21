@@ -1,4 +1,5 @@
 import type {
+  SessionInfo,
   AgentInfo,
   AgentSpawnArgs,
   AgentSpawnResult,
@@ -97,6 +98,7 @@ export type Claude = {
     usage(): Promise<SessionUsage>
     surfaces(): Promise<readonly RenderSurface[]>
     version(): Promise<string>
+    info(): Promise<Pick<SessionInfo, 'transcriptPath'>>
     messages: EngineInterface['session']['messages']
     append: EngineInterface['session']['append']
     send: EngineInterface['session']['send']

@@ -72,6 +72,30 @@ function mainMessages(project: string) {
   ]
 }
 
+test.concurrent("the index names each message's agent type, a task's from its agent, and the main agent's from the session's agent-setting row, which cmod sessions list names too", async () => {
+  const home = await temporaryHome()
+  const project = join(home, 'work/app')
+  await writeFiles(home, {
+    [`${projectFolder(project)}/s1.jsonl`]: lines([{ type: 'agent-setting', agentSetting: 'release-captain', sessionId: 's1' }, ...conversation(project)]),
+    [`${projectFolder(project)}/s1/subagents/agent-a7.jsonl`]: lines([{ type: 'user', uuid: 'x1', timestamp: at(2), message: { role: 'user', content: 'find the pane file' } }]),
+    [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'explorer', description: 'Find the pane', toolUseId: 'toolu_1' }),
+  })
+
+  const listed = (await json(home, 'list', '--project', project)) as { id: string; agentType?: string }[]
+  const main = (await json(home, 'read', 'messages', 's1', '--project', project)) as { id: string; agentType?: string }[]
+  const task = (await json(home, 'read', 'messages', 's1', '--project', project, '--task', 'a7')) as { id: string; agentType?: string }[]
+
+  expect(listed.map((session) => [session.id, session.agentType])).toEqual([['s1', 'release-captain']])
+  expect(main.map((message) => [message.id, message.agentType])).toEqual([
+    ['u1', 'release-captain'],
+    ['a1:0', 'release-captain'],
+    ['a1:1', 'release-captain'],
+    ['r1', 'release-captain'],
+    ['p1', 'release-captain'],
+  ])
+  expect(task.map((message) => [message.id, message.agentType])).toEqual([['x1', 'explorer']])
+}, 60_000)
+
 test.concurrent('readers of a session longer than several write batches, running at once, each read it whole, with no row twice', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
@@ -105,7 +129,7 @@ test.concurrent('readers of a session longer than several write batches, running
     }
   })
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-12.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-13.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -142,7 +166,7 @@ test.concurrent('messages reads a conversation as typed messages placed in their
   const { project } = await writeHistory(home)
 
   expect(await json(home, 'read', 'messages', 's1', '--project', project)).toEqual(mainMessages(project))
-  expect(await json(home, 'read', 'messages', 's1', '--project', project, '--task', 'a7')).toEqual([{ id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }])
+  expect(await json(home, 'read', 'messages', 's1', '--project', project, '--task', 'a7')).toEqual([{ id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', agentType: 'explorer', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }])
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--last', '1'))).toEqual(['p1'])
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--after', 'a1:1'))).toEqual(['r1', 'p1'])
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--turn', 'p1'))).toEqual(['p1'])
@@ -219,7 +243,7 @@ test.concurrent("--task reads the agent a task runs like a conversation: its tur
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await appendFile(join(home, `${projectFolder(project)}/s1/subagents/agent-a7.jsonl`), lines([{ type: 'assistant', uuid: 'x2', timestamp: at(3), message: { role: 'assistant', model: 'claude-haiku-5', content: [{ type: 'text', text: 'It is src/panes/tree.tsx.' }], usage: { input_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 80, output_tokens: 10 } } }]))
-  const prompt = { id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }
+  const prompt = { id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', agentType: 'explorer', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }
 
   expect(await json(home, 'read', 'turns', 's1', '--project', project, '--task', 'a7')).toEqual([{ prompt, context: 1, openedAt: at(2), closedAt: at(5) }])
   expect(await json(home, 'read', 'contexts', 's1', '--project', project, '--task', 'a7')).toEqual([{ number: 1, openedAt: at(1), closedAt: at(5), task: 'a7' }])
@@ -374,8 +398,8 @@ test.concurrent("list lists the project's conversations newest first, and --ever
   await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project }), '.claude/sessions/2.json': JSON.stringify({ pid: 2 ** 22 + 7, sessionId: 's0', cwd: project }) })
 
   expect(await json(home, 'list', '--project', project)).toEqual([
-    { id: 's1', title: 'Tree pane rename', project, cwd: project, model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(6), isRunning: true },
-    { id: 's0', title: 'Add the tree pane', project, cwd: project, model: '', startedAt: at(0, 1), lastAt: at(0, 1), isRunning: false },
+    { id: 's1', title: 'Tree pane rename', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's1.jsonl'), model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(6), isRunning: true },
+    { id: 's0', title: 'Add the tree pane', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's0.jsonl'), model: '', startedAt: at(0, 1), lastAt: at(0, 1), isRunning: false },
   ])
   expect(ids(await json(home, 'list', '--project', project, '--every-project'))).toEqual(['s9', 's1', 's0'])
   expect(ids(await json(home, 'list', '--project', other, '--since', '2026-10-05'))).toEqual(['s9'])
@@ -516,14 +540,14 @@ test.concurrent('sessions leaves out a session no one prompted, and lists one wh
     [`${projectFolder(project)}/quiet.jsonl`]: lines([hook('h1', 1)]),
     [`${projectFolder(project)}/late.jsonl`]: lines([hook('h2', 2), hook('h3', 3), { type: 'user', uuid: 'u9', timestamp: at(4), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Start the late session' } }]),
   })
-  const late = { id: 'late', title: 'Start the late session', project, cwd: project, model: '', startedAt: at(4), lastAt: at(4), isRunning: false }
+  const late = { id: 'late', title: 'Start the late session', project, cwd: project, transcriptPath: join(home, projectFolder(project), 'late.jsonl'), model: '', startedAt: at(4), lastAt: at(4), isRunning: false }
 
   expect(await json(home, 'list', '--project', project)).toEqual([late])
   await cmod(home, 'sessions', 'index')
   expect(await json(home, 'list', '--project', project)).toEqual([late])
 })
 
-test.concurrent('an index made by an older cmod is deleted, and the index is history-12.sqlite', async () => {
+test.concurrent('an index made by an older cmod is deleted, and the index is history-13.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite']
@@ -531,7 +555,7 @@ test.concurrent('an index made by an older cmod is deleted, and the index is his
 
   await json(home, 'list', '--project', project)
 
-  expect([...older, 'history-12.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
+  expect([...older, 'history-13.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
 })
 
 test.concurrent('the README names the conversation index cmod writes', async () => {

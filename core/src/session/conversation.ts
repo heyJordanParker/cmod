@@ -1,6 +1,6 @@
 import { ContextEnd, ContextStart, type Context } from './context/context.js'
 import { deviceOf, type Device } from './context/turn/device.js'
-import { Message, messagesOf, tagOf, textOf, type Row } from './context/turn/message/message.js'
+import { Message, messagesOf, tagOf, textOf, type Row, type Unplaced } from './context/turn/message/message.js'
 import { Note } from './context/turn/message/note.js'
 import { Prompt } from './context/turn/message/prompt.js'
 import { ToolCall } from './context/turn/message/tool-call.js'
@@ -16,6 +16,7 @@ export type SessionData = {
   readonly color?: string
   readonly project: string
   readonly cwd: string
+  readonly transcriptPath?: string
   readonly model: string
   readonly startedAt: string
   readonly lastAt: string
@@ -68,6 +69,7 @@ export type SessionChange =
 
 export type ConversationState = {
   readonly session: string
+  readonly agentType?: string
   readonly context: number
   readonly contextOpenedAt: string
   readonly turn?: TurnData
@@ -89,7 +91,17 @@ export type Conversation = {
   startContext(at: string): SessionChange[]
   endTurn(at: string, ending: TurnEnding, task?: string): SessionChange[]
   changeGoal(text: string): SessionChange[]
+  changeAgentType(agentType: string): void
   readonly state: ConversationState
+}
+
+export type MessagePlace = Pick<ConversationState, 'session' | 'agentType' | 'context' | 'turn' | 'tasks' | 'taskTurns' | 'openCalls'>
+
+export function placedMessage(where: MessagePlace, unplaced: Unplaced, task: string | undefined, isInTurn = true, agentType = task === undefined ? where.agentType : where.tasks[task]?.agentType): Message {
+  const turn = isInTurn ? (task === undefined ? where.turn : where.taskTurns[task]) : undefined
+  const context = task === undefined ? where.context : (where.tasks[task]?.context ?? where.context)
+  const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
+  return { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }), ...(agentType === undefined ? {} : { agentType }) }
 }
 
 export const searchLimit = 50
@@ -103,7 +115,7 @@ export function emptyConversation(session: string): ConversationState {
 }
 
 export function createConversation(start: ConversationState): Conversation {
-  let { context, contextOpenedAt, turn, goal, device } = start
+  let { agentType, context, contextOpenedAt, turn, goal, device } = start
   const agentCalls = new Set(start.agentCalls)
   const endedCalls = new Map(Object.entries(start.endedCalls))
   const tasks = new Map(Object.entries(start.tasks))
@@ -171,12 +183,14 @@ export function createConversation(start: ConversationState): Conversation {
       if (row.type === 'system' && row.name === 'compact_boundary') return [...changes, ...(task === undefined ? [...endContext(row.at), ...startContext(row.at)] : compactTask(task, row.at))]
       const owner = task === undefined ? undefined : tasks.get(task)
       const placedIn = owner?.context ?? context
+      const agent = task === undefined ? agentType : owner?.agentType
+      const ofAgent = agent === undefined ? {} : { agentType: agent }
       for (const unplaced of messagesOf(row, task !== undefined)) {
         if (task === undefined && unplaced.type === Note) device = deviceOf(unplaced) ?? device
         if (unplaced.type === Prompt) {
           changes.push(...(task === undefined ? endTurn(row.at) : endTaskTurn(task, row.at)))
           const ranOn = task === undefined ? device : owner?.device
-          const opened: TurnData = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...(task === undefined ? {} : { task }) }, context: placedIn, openedAt: row.at, ...(owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }), ...(ranOn === undefined ? {} : { device: ranOn }) }
+          const opened: TurnData = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...(task === undefined ? {} : { task }), ...ofAgent }, context: placedIn, openedAt: row.at, ...(owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }), ...(ranOn === undefined ? {} : { device: ranOn }) }
           if (task === undefined) turn = opened
           else taskTurns.set(task, opened)
           changes.push({ type: TurnStart, turn: opened })
@@ -193,6 +207,7 @@ export function createConversation(start: ConversationState): Conversation {
           context: placedIn,
           ...(open === undefined ? {} : { turn: open.prompt.id }),
           ...(task === undefined ? {} : { task }),
+          ...ofAgent,
         } as Message
         changes.push({ type: Message, message: placed })
         if (placed.type === ToolCall && agentTools.includes(placed.name)) agentCalls.add(placed.callId)
@@ -224,9 +239,13 @@ export function createConversation(start: ConversationState): Conversation {
     startContext,
     endTurn: (at, ending, task) => (task === undefined ? endTurn(at, ending) : endTaskTurn(task, at, ending)),
     changeGoal,
+    changeAgentType(next) {
+      agentType = next
+    },
     get state() {
       return {
         session: start.session,
+        ...(agentType === undefined ? {} : { agentType }),
         context,
         contextOpenedAt,
         ...(turn === undefined ? {} : { turn }),

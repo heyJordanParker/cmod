@@ -98,12 +98,19 @@ isLoaded(name: string): Promise<boolean>
 
 A provider is a mod, or a mod's program, that implements a feature an interface defines. It follows VS Code's providers: an extension registers a `HoverProvider` with `registerHoverProvider`, and VS Code asks every registered `HoverProvider` for its hover. A caller asks `providers(name)` for every provider that runs and calls each one, where a dependency is one mod your mod calls by name. So a terminal app, a remote device, or a Markdown styler can each come from any mod.
 
-An interface is named `<mod>/<Name>`, after the mod that defines it, such as `demo/Platform`, and cmod defines five:
+An interface is named `<mod>/<Name>`, after the mod that defines it, such as `demo/Platform`, and cmod defines six:
 
 - `cmod/Sessions` lists, searches, and reads sessions, acts on them, and tells a `Change` for each session that starts or stops running, is visited or deleted, or changes its tasks, goal, or status, as one VS Code `FileSystemProvider` reads, writes, and reports changes for its scheme. `cmod serve` provides it for this computer, the `cmod serve` of each device a `cmod/Devices` provider names provides it for that device, and a mod whose program serves another device's sessions provides it for that device ([session.md](session.md#sessions-providers)).
 - `cmod/Devices` says where the `cmod serve` of each of your other devices listens, or carries its messages, so `cmod serve` reaches the providers there ([cmod/Devices](#cmod-devices-providers-on-your-other-devices)).
 - `cmod/UI` lists, draws, and presses each session's widgets, views, and pages, and tells a `Change` when a mod adds or removes one and a `Redraw` when one may draw new data, so an app such as the browser app draws every mod's UI. Each session's cmod plugin answers it for its own session, and `cmod serve` sends each call to the plugin that holds the session the call names ([ui.md](ui.md#every-app-reaches-them-through-cmod-ui)).
 - `cmod/Terminal` reads a session's screen, types keys into it, and shows it in a pane. `cmod serve` provides it, first in the list, for each session that runs in a terminal of herdr-core, the terminals the Herdr app shows, and answers not held for any other, so a mod whose program hosts other terminals provides it for those. Its provider tells `Shown { session, place }` after each `show` and `Pressed { session }` after each `press`, so a program that keeps track of which sessions are in use hears an agent's use of one.
+- `cmod/Providers` tells a `Change { interface, device }` each time a provider of an interface starts or stops on this computer, or on a device `cmod serve` reaches, and once for each interface you listen for when a device is reached or lost, as VS Code's `extensions.onDidChange` fires when the set of extensions changes. `cmod serve` of this computer provides it, so a caller that waits for a provider listens and calls `providers(name)` again on each `Change`:
+
+  ```ts
+  const [watch] = await providers('cmod/Providers')
+  watch?.onChange({ interface: 'demo/Platform' }, async () => platforms.set(await providers('demo/Platform')))
+  ```
+
 - `cmod/Style` draws Markdown in a mod's own style. Every mod with a Markdown style provides it, with no `provide` call ([ui.md](ui.md#styles-change-how-claude-code-draws)).
 
 The mod that defines an interface types it in its types file, on `CmodInterfaces`, with its methods and the events it tells:

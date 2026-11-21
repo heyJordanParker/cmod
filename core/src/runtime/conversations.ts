@@ -511,14 +511,15 @@ export function serveConversations({
     })
   }
 
-  const start = (id: string, source: string) => {
+  const start = (id: string, source: string, agentType: string | undefined) => {
     if (id === session) return
     const previous = session
     session = id
     live = []
     liveIds.clear()
     waitingRows.clear()
-    conversation = createConversation(emptyConversation(id))
+    const runsAs = agentType === undefined ? {} : { agentType }
+    conversation = createConversation({ ...emptyConversation(id), ...runsAs })
     contextPercent = undefined
     endedTurn = undefined
     failedWith = undefined
@@ -529,7 +530,7 @@ export function serveConversations({
       ? Promise.resolve(dispatch(conversation.startContext(new Date().toISOString())))
       : read<ConversationState | null>(id, 'state').then(
           (state) => {
-            if (session === id && state !== null) conversation = createConversation({ ...emptyConversation(id), ...state })
+            if (session === id && state !== null) conversation = createConversation({ ...emptyConversation(id), ...state, ...runsAs })
           },
           (error: unknown) => report('state', `Starts session ${id} without its earlier turns`, error),
         )
@@ -608,7 +609,7 @@ export function serveConversations({
   }
 
   router.add('classic.SessionStart', async (e, next) => {
-    start(e.session_id, e.source)
+    start(e.session_id, e.source, e.agent_type)
     return next(e)
   })
   router.add('classic.SessionEnd', async (e, next) => {

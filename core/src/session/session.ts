@@ -165,6 +165,7 @@ export type Session = Pick<RecordPart, 'search'> & {
   readonly agentType?: string
   readonly model: string
   readonly cwd: string
+  readonly transcriptPath?: string
   readonly isRunning: boolean
   readonly startedAt: string
   readonly lastAt: string
@@ -336,7 +337,7 @@ export type ProcessAnswer = {
   readonly WorktreeCreate: { readonly result: string }
   readonly Elicitation: Refusal
   readonly ElicitationResponse: Refusal
-  readonly PermissionCheck: { readonly allow: true } | { readonly ask: string } | Refusal
+  readonly PermissionCheck: { readonly allow: true; readonly note?: string } | { readonly ask: string; readonly note?: string } | Refusal | { readonly note: string }
   readonly PermissionRequest: { readonly allow: true; readonly input?: Readonly<Record<string, unknown>>; readonly updates?: readonly PermissionUpdate[] } | (Refusal & { readonly interrupt?: true })
   readonly PermissionDenial: { readonly retry: true }
   readonly ToolBatch: { readonly note: string }

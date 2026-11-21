@@ -23,9 +23,9 @@ type Transcript = { readonly path: string; readonly folder: string; readonly ses
 
 type Line = { readonly bytes: Buffer; readonly offset: number; readonly length: number }
 
-type Place = { readonly row: number; readonly id: string; readonly session: string; readonly task: string; readonly context: number; readonly turn: string | null; readonly file: number; readonly offset: number; readonly length: number; readonly part: number }
+type Place = { readonly row: number; readonly id: string; readonly session: string; readonly task: string; readonly context: number; readonly turn: string | null; readonly agent_type: string | null; readonly file: number; readonly offset: number; readonly length: number; readonly part: number }
 
-type Summary = { startedAt: string; lastAt: string; project: string; cwd: string; model: string; title: string; customTitle: string | null; color: string | null; forkedFrom: string | null; isPrompted: number }
+type Summary = { startedAt: string; lastAt: string; project: string; cwd: string; model: string; title: string; customTitle: string | null; color: string | null; agentType: string | null; forkedFrom: string | null; isPrompted: number }
 
 type Meta = { readonly task: string; readonly title: string; readonly agentType: string; readonly call: string }
 
@@ -35,9 +35,9 @@ export type Scope = { readonly project: string; readonly everyProject: boolean; 
 
 const schema = `
 create table files (id integer primary key, path text not null unique, session text not null, task text not null, offset integer not null);
-create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, color text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
+create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, color text, agent_type text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
 create table folders (id integer primary key, path text not null unique);
-create table messages (row integer primary key, id text not null, session text not null, task text not null, type text not null, context integer not null, turn text, folder integer not null, at text not null, file integer not null, offset integer not null, length integer not null, part integer not null, seq integer, unique (file, offset, part));
+create table messages (row integer primary key, id text not null, session text not null, task text not null, type text not null, context integer not null, turn text, agent_type text, folder integer not null, at text not null, file integer not null, offset integer not null, length integer not null, part integer not null, seq integer, unique (file, offset, part));
 create index messages_by_id on messages (id);
 create index messages_by_task on messages (session, task, seq);
 create index messages_by_turn on messages (session, turn, seq);
@@ -49,9 +49,9 @@ create table tasks (session text not null, id text not null, title text not null
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-12.sqlite'
+const indexFile = 'history-13.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite', 'history-12.sqlite']
 
 const chunkBytes = 65_536
 
@@ -61,7 +61,7 @@ const tailBytes = 65_536
 
 const sortedMatches = 20_000
 
-const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"type":"agent-color"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
+const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"type":"agent-color"', '"type":"agent-setting"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
 
 export function openHistory({ isInMemory = false }: { readonly isInMemory?: boolean } = {}): Database {
   if (isInMemory) {
@@ -341,6 +341,7 @@ function stepThrough(conversation: Conversation, transcripts: readonly Transcrip
       readLines(transcript.path, offsets.get(transcript.path) ?? 0, sizeOf(transcript.path), (line) => {
         const raw = wantedRow(line)
         if (raw === undefined) return true
+        if (task === undefined && raw['type'] === 'agent-setting' && typeof raw['agentSetting'] === 'string') conversation.changeAgentType(raw['agentSetting'])
         const row = rowOfLine(raw)
         const changes: SessionChange[] = []
         if (row !== undefined) {
@@ -382,8 +383,8 @@ function saveChanges(db: Database, place: { readonly session: string; readonly f
       const { message } = change
       const part = message.id === row ? 0 : Number(message.id.slice(row.length + 1))
       const added = db
-        .query('insert or ignore into messages (id, session, task, type, context, turn, folder, at, file, offset, length, part) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(message.id, session, message.task ?? '', message.type, message.context, message.turn ?? null, folder, message.at, file, line.offset, line.length, part)
+        .query('insert or ignore into messages (id, session, task, type, context, turn, agent_type, folder, at, file, offset, length, part) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(message.id, session, message.task ?? '', message.type, message.context, message.turn ?? null, message.agentType ?? null, folder, message.at, file, line.offset, line.length, part)
       const text = searchText(message)
       if (added.changes > 0 && text !== '') db.query('insert into message_text (rowid, text) values (?, ?)').run(added.lastInsertRowid, text)
     } else if (change.type === TurnStart) {
@@ -457,7 +458,7 @@ function assignSeq(db: Database, session: string): void {
 }
 
 function emptySummary(): Summary {
-  return { startedAt: '', lastAt: '', project: '', cwd: '', model: '', title: '', customTitle: null, color: null, forkedFrom: null, isPrompted: 0 }
+  return { startedAt: '', lastAt: '', project: '', cwd: '', model: '', title: '', customTitle: null, color: null, agentType: null, forkedFrom: null, isPrompted: 0 }
 }
 
 function noteRow(summary: Summary, session: string, raw: Raw): void {
@@ -470,6 +471,7 @@ function noteRow(summary: Summary, session: string, raw: Raw): void {
   }
   if (raw['type'] === 'custom-title' && typeof raw['customTitle'] === 'string') summary.customTitle = raw['customTitle']
   if (raw['type'] === 'agent-color' && typeof raw['agentColor'] === 'string') summary.color = raw['agentColor']
+  if (raw['type'] === 'agent-setting' && typeof raw['agentSetting'] === 'string') summary.agentType = raw['agentSetting']
   const forked = isObject(raw['forkedFrom']) ? raw['forkedFrom']['sessionId'] : undefined
   if (typeof forked === 'string' && forked !== session) summary.forkedFrom = forked
   const row = rowOfLine(raw)
@@ -494,9 +496,10 @@ function saveSummary(db: Database, session: string, summary: Summary): void {
        custom_title = coalesce(?7, custom_title),
        color = coalesce(?8, color),
        forked_from = coalesce(forked_from, ?9),
-       is_prompted = max(is_prompted, ?10)
+       is_prompted = max(is_prompted, ?10),
+       agent_type = coalesce(?12, agent_type)
      where id = ?11`,
-  ).run(summary.startedAt, summary.lastAt, summary.project, summary.cwd, summary.model, summary.title, summary.customTitle, summary.color, summary.forkedFrom, summary.isPrompted, session)
+  ).run(summary.startedAt, summary.lastAt, summary.project, summary.cwd, summary.model, summary.title, summary.customTitle, summary.color, summary.forkedFrom, summary.isPrompted, session, summary.agentType)
 }
 
 function summarize(db: Database, main: Transcript, size: number): void {
@@ -585,8 +588,8 @@ export function listSessions(db: Database, scope: Scope): SessionData[] {
   const running = runningSessions()
   readFolders(db, folders, false, scope.running === true ? running : undefined)
   const rows = db
-    .query<{ id: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; color: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
-      `select id, project, cwd, model, title, custom_title, nullif(color, 'default') as color, started_at, last_at, forked_from, is_fork_checked,
+    .query<{ id: string; folder: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; color: string | null; agent_type: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
+      `select id, folder, project, cwd, model, title, custom_title, nullif(color, 'default') as color, agent_type, started_at, last_at, forked_from, is_fork_checked,
          case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed
        from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`,
     )
@@ -595,7 +598,7 @@ export function listSessions(db: Database, scope: Scope): SessionData[] {
     .filter((row) => scope.running !== true || running.has(row.id))
     .map((row) => {
       const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
-      return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), isRunning: running.has(row.id) }
+      return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, transcriptPath: join(row.folder, `${row.id}.jsonl`), model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(row.agent_type === null ? {} : { agentType: row.agent_type }), isRunning: running.has(row.id) }
     })
 }
 
@@ -618,7 +621,7 @@ function parentOf(db: Database, session: string, startedAt: string): string | un
   return found?.session
 }
 
-const placeColumns = 'row, id, session, task, context, turn, file, offset, length, part'
+const placeColumns = 'row, id, session, task, context, turn, agent_type, file, offset, length, part'
 
 export type MessagesRequest = { readonly session: string; readonly project: string; readonly task?: string; readonly turn?: string; readonly after?: string; readonly last?: number }
 
@@ -894,7 +897,7 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
     for (const place of places) {
       const unplaced = lines.messages(place)?.[place.part]
       if (unplaced === undefined || unplaced.id !== place.id) stale.add(place.session)
-      else messages.push({ ...unplaced, ...(unplaced.type === ToolResult ? callOf(db, lines, place, unplaced.callId, messages) : {}), session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }) })
+      else messages.push({ ...unplaced, ...(unplaced.type === ToolResult ? callOf(db, lines, place, unplaced.callId, messages) : {}), session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }), ...(place.agent_type === null ? {} : { agentType: place.agent_type }) })
     }
     if (stale.size === 0) return messages
     db.transaction(() => {

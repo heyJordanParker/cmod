@@ -262,7 +262,7 @@ export function rpcRoutes({
       }
       return { status: 405, json: { error: `cmod has no ${request.method} ${request.path}.` } }
     } catch (error) {
-      if (error instanceof GoneError) return { status: 410, json: { error: error.message } }
+      if (error instanceof GoneError) return { status: goneStatus, json: { error: error.message } }
       throw error
     }
   }
@@ -298,6 +298,8 @@ export function rpcRoutes({
 }
 
 export class RpcUnreached extends Error {}
+
+const goneStatus = 410
 
 export function isConnectionGone(error: unknown): boolean {
   return error instanceof RpcUnreached || (error instanceof RpcError && error.code === rpcCodes.closed)
@@ -344,46 +346,49 @@ export function connectRpc({
   readonly retryMs?: number
   readonly keepsConnecting?: boolean
 }): RpcClient {
-  let current: { readonly id: string; readonly peer: Peer } | undefined
-  let connecting: Promise<{ readonly id: string; readonly peer: Peer }> | undefined
+  type Link = { readonly id: string; readonly peer: Peer; lastAsked: RpcId | undefined; readonly undelivered: Set<RpcId> }
+  let current: Link | undefined
+  let connecting: Promise<Link> | undefined
   let isClosed = false
   let queued: RpcMessage[] = []
   let flushing: Promise<void> | undefined
 
-  const flush = (id: string, peer: Peer) => {
+  const asked = (messages: readonly RpcMessage[]) => messages.flatMap((message) => ('method' in message && 'id' in message ? [message.id] : []))
+
+  const flush = (link: Link) => {
     flushing ??= (async () => {
       await Promise.resolve()
-      while (queued.length > 0 && current?.id === id) {
+      while (queued.length > 0 && current === link) {
         const batch = queued
         queued = []
-        const answer = await call(`${rpcPath}/${id}`, { method: 'POST', body: JSON.stringify(batch) }).catch((error: unknown) => ({ status: 0, text: String(error) }))
+        const answer = await call(`${rpcPath}/${link.id}`, { method: 'POST', body: JSON.stringify(batch) }).catch((error: unknown) => ({ status: 0, text: String(error) }))
         if (answer.status !== 204) {
-          lose(id, peer, new RpcUnreached(`cmod serve answered ${answer.status}: ${answer.text}`))
+          if (answer.status === goneStatus) for (const id of asked(batch)) link.undelivered.add(id)
+          lose(link, new RpcUnreached(`cmod serve answered ${answer.status}: ${answer.text}`))
           return
         }
       }
     })().finally(() => {
       flushing = undefined
-      if (queued.length > 0 && current?.id === id) flush(id, peer)
+      if (queued.length > 0 && current === link) flush(link)
     })
   }
 
-  const lose = (id: string, peer: Peer, reason: Error) => {
-    if (current?.id !== id) return
+  const lose = (link: Link, reason: Error) => {
+    if (current !== link) return
     current = undefined
+    for (const id of asked(queued)) link.undelivered.add(id)
     queued = []
-    peer.close(reason)
+    link.peer.close(reason)
     reconnect()
   }
 
-  const isCurrent = (id: string) => current?.id === id
-
-  const pollLoop = async (id: string, peer: Peer) => {
-    while (isCurrent(id) && !isClosed) {
-      const answer = await call(`${rpcPath}/${id}`, { method: 'GET' }).catch((error: unknown) => ({ status: 0, text: String(error) }))
-      if (!isCurrent(id)) return
-      if (answer.status !== 200) return lose(id, peer, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`))
-      peer.receive(JSON.parse(answer.text))
+  const pollLoop = async (link: Link) => {
+    while (current === link && !isClosed) {
+      const answer = await call(`${rpcPath}/${link.id}`, { method: 'GET' }).catch((error: unknown) => ({ status: 0, text: String(error) }))
+      if (current !== link) return
+      if (answer.status !== 200) return lose(link, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`))
+      link.peer.receive(JSON.parse(answer.text))
     }
   }
 
@@ -403,16 +408,22 @@ export function connectRpc({
       const answer = await call(`${rpcPath}/connect`, { method: 'POST' })
       if (answer.status !== 200) throw new Error(`cmod serve answered the connect with ${answer.status}: ${answer.text}`)
       const { connection: id } = JSON.parse(answer.text) as { readonly connection: string }
-      const peer: Peer = createPeer({
-        send: (message) => {
-          queued.push(message)
-          flush(id, peer)
-        },
-        handle,
-      })
-      current = { id, peer }
+      const link: Link = {
+        id,
+        peer: createPeer({
+          send: (message) => {
+            link.lastAsked = asked([message])[0] ?? link.lastAsked
+            queued.push(message)
+            flush(link)
+          },
+          handle,
+        }),
+        lastAsked: undefined,
+        undelivered: new Set(),
+      }
+      current = link
       hasConnected = true
-      void pollLoop(id, peer)
+      void pollLoop(link)
       void (async () => onConnect?.(client))().catch((error: unknown) => onError?.(error))
       return current
     } catch (error) {
@@ -434,9 +445,16 @@ export function connectRpc({
     get isConnected() {
       return current !== undefined
     },
-    async request<Result>(method: string, params?: unknown, signal?: AbortSignal) {
-      const { peer } = await connection()
-      return peer.request<Result>(method, params, signal)
+    async request<Result>(method: string, params?: unknown, signal?: AbortSignal): Promise<Result> {
+      const link = await connection()
+      const answer = link.peer.request<Result>(method, params, signal)
+      const sent = link.lastAsked
+      try {
+        return await answer
+      } catch (error) {
+        if (sent === undefined || !link.undelivered.has(sent) || !isConnectionGone(error)) throw error
+        return client.request<Result>(method, params, signal)
+      }
     },
     notify(method, params) {
       void connection()

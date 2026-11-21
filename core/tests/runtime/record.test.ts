@@ -105,21 +105,51 @@ test("a task refuses its subtask's start", async () => {
   expect(await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
 })
 
-test("beforePrompt in a task hears the spawn's prompt when Claude Code starts the subagent inside the spawn, before cmod knows its task, and its note reaches the subagent", async () => {
-  const prompts: { text: string; task: string | undefined }[] = []
+test("beforePrompt in a task hears the spawn's prompt, with the agent type of the agent it starts, when Claude Code starts the subagent inside the spawn, before cmod knows its task, and its note reaches the subagent", async () => {
+  const prompts: { text: string; task: string | undefined; agentType: string | undefined }[] = []
   const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => {
-    prompts.push({ text: prompt.text, task: prompt.task })
+    prompts.push({ text: prompt.text, task: prompt.task, agentType: prompt.agentType })
     return { note: 'You are in read-only mode.' }
   })
   await tested.settle()
 
   await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', subagentType: 'Explore', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
 
-  expect(prompts).toEqual([{ text: 'Find the pane', task: 'agent-1' }])
+  expect(prompts).toEqual([{ text: 'Find the pane', task: 'agent-1', agentType: 'Explore' }])
   expect(tested.shown.notes).toEqual(['You are in read-only mode.'])
+})
+
+test("the session names its transcript file, and a task's agent names its own under the session's subagents folder, as Claude Code writes them", async () => {
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const id = await tested.startTask({ title: 'Find the pane' })
+  const [task] = await sessions.current.goal.tasks()
+
+  expect(sessions.current.transcriptPath).toBe(`/test/transcripts/${sessions.current.id}.jsonl`)
+  expect(task?.owner.transcriptPath).toBe(`/test/transcripts/${sessions.current.id}/subagents/agent-${id}.jsonl`)
+})
+
+test("beforeTurnEnd hears isAfterRefusal on the stop that follows its own refusal, so it can let the agent stop the second time", async () => {
+  const heard: (true | undefined)[] = []
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  sessions.current.beforeTurnEnd((turn) => {
+    heard.push(turn.isAfterRefusal)
+    return turn.isAfterRefusal === true ? undefined : { refuse: 'Name the file first' }
+  })
+  await tested.settle()
+
+  const first = await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)
+  const second = await claudeCodeOf(tested).fire('Stop', { stop_hook_active: true, last_assistant_message: 'It is src/panes/tree.tsx.' } as never)
+
+  expect(heard).toEqual([undefined, true])
+  expect(first).toMatchObject({ block: 'Name the file first' })
+  expect(second).not.toHaveProperty('block')
 })
 
 test("a goal refuses its session's top-level task starts", async () => {
@@ -490,6 +520,20 @@ test('beforePermissionCheck allows, asks about, or refuses a call', async () => 
   expect(await claudeCodeOf(tested).fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
   expect(await claudeCodeOf(tested).fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
   expect(await claudeCodeOf(tested).fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
+})
+
+test("beforePermissionCheck's note reaches Claude with the result of the call it checked, and with no other call's", async () => {
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforePermissionCheck({ name: 'Bash' }, () => ({ allow: true, note: 'The deploy key is read-only, so a push from here fails.' })) }))
+  await tested.start()
+  const code = claudeCodeOf(tested)
+
+  const checked = await code.fire('tool.check', { tool: 'Bash', input: { command: 'git push' }, tool_use_id: 'toolu_7' } as never)
+  const ran = await code.fire('tool.call', { tool: 'Bash', tool_use_id: 'toolu_7', command: 'git push' } as never, { result: 'pushed' } as never)
+  const other = await code.fire('tool.call', { tool: 'Read', tool_use_id: 'toolu_8', file_path: '/work/a.ts' } as never, { result: 'a' } as never)
+
+  expect(checked).toEqual({ decision: 'allow' })
+  expect(ran).toEqual({ result: 'pushed', context: ['<demo_mod>\nThe deploy key is read-only, so a push from here fails.\n</demo_mod>'] })
+  expect(other).toEqual({ result: 'a' })
 })
 
 test('abort stops a running turn, and throws on an ended one', async () => {

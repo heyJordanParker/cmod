@@ -10,7 +10,7 @@ declare module 'claude-code' {
   interface CmodInterfaces {
     'cmod/Sessions': {
       methods: {
-        sessions(scope?: { project?: string; everyProject?: boolean; running?: boolean; since?: string }): { id: string; title: string; color?: string; project: string; cwd: string; model: string; startedAt: string; lastAt: string; forkedFrom?: string; isRunning: boolean; agentType?: string; visitedAt?: string; device?: { id: string; name: string }; status?: 'busy' | 'shell' | 'idle' | 'waiting'; waitingFor?: { dialog: string; tool?: string; input?: Record<string, unknown>; question?: string }; contextPercent?: number; lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string } }[]
+        sessions(scope?: { project?: string; everyProject?: boolean; running?: boolean; since?: string }): { id: string; title: string; color?: string; project: string; cwd: string; model: string; startedAt: string; lastAt: string; forkedFrom?: string; isRunning: boolean; agentType?: string; transcriptPath?: string; visitedAt?: string; device?: { id: string; name: string }; status?: 'busy' | 'shell' | 'idle' | 'waiting'; waitingFor?: { dialog: string; tool?: string; input?: Record<string, unknown>; question?: string }; contextPercent?: number; lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string } }[]
         search(text: string, options?: { project?: string; everyProject?: boolean; running?: boolean; since?: string; limit?: number; before?: { session: string; id: string }; record?: { session?: string; task?: string; turn?: string; context?: number; isAgent?: true } }): unknown[]
         read(session: string, part: 'messages' | 'turns' | 'contexts' | 'tasks' | 'goal' | 'usage' | 'state', options?: { project?: string; task?: string; turn?: string; context?: number; after?: string; last?: number; all?: true }): unknown
         send(session: string, message: { type: 'prompt' | 'note'; text: string; as?: 'person' | 'session' }, context?: { project?: string; caller?: string; task?: string }): void
@@ -40,6 +40,10 @@ declare module 'claude-code' {
         show(session: string, place: 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'): void
       }
       events: { Shown: { readonly session: string; readonly place: 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide' }; Pressed: { readonly session: string } }
+    }
+    'cmod/Providers': {
+      methods: {}
+      events: { Change: { readonly interface: string; readonly device: { id: string; name: string } } }
     }
     'cmod/UI': {
       methods: {

@@ -1,8 +1,10 @@
+import { modNote } from '../session/context/turn/message/note.js'
 import type { Subscription } from '../utils/subscription.js'
 import type { HookFields } from './hooks.js'
 import { defined, processPayloadOf, recordOf, type HookOn, type RouteOn, type ToolCheck } from './sessions.js'
 
 export type PermissionUse = {
+  readonly name: string
   readonly raise: (method: string, payload: HookFields, cancel: AbortSignal) => Promise<HookFields | undefined>
   readonly refusalFor: (method: string, payload: HookFields, error: Error) => { readonly refuse: string } | undefined
   readonly hookOn: HookOn
@@ -18,7 +20,7 @@ const verdictName = (decision: Verdict['decision']) => (decision === 'deny' ? 'r
 
 type BuildFlags = { readonly cmodWithoutApprove?: true }
 
-export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, hookOn, routeOn, current }) => {
+export const permissionRoutes: PermissionRoutes = (method, { name, raise, refusalFor, hookOn, routeOn, current }) => {
   const isBefore = method.startsWith('before')
   if (method.endsWith('PermissionCheck')) {
     const payloadOf = (e: ToolCheck, below: Verdict) => {
@@ -29,7 +31,16 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
       const refusal = refusalFor(method, payloadOf(e, (await next(e)) as Verdict), error)
       return refusal === undefined ? undefined : { decision: 'deny' as const, reason: refusal.refuse }
     }
-    return routeOn(
+    const notes = new Map<string, string>()
+    const delivered = isBefore
+      ? routeOn('tool.call', async (e, next) => {
+          const ran = await next(e)
+          const note = notes.get(e.tool_use_id)
+          notes.delete(e.tool_use_id)
+          return note === undefined || ran.deny !== undefined ? ran : { ...ran, context: [...(ran.context ?? []), note] }
+        })
+      : undefined
+    const checked = routeOn(
       'tool.check',
       async (e: ToolCheck, next) => {
         const below = (await next(e)) as Verdict
@@ -40,6 +51,7 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
         }
         const answer = await raise(method, payload, next.signal)
         if (answer === undefined || below.decision === 'deny') return below
+        if (typeof answer['note'] === 'string' && e.tool_use_id !== undefined) notes.set(e.tool_use_id, modNote(name, answer['note']))
         if (typeof answer['refuse'] === 'string') return { decision: 'deny', reason: answer['refuse'] }
         if (!(globalThis as BuildFlags).cmodWithoutApprove) {
           if (typeof answer['ask'] === 'string') return { decision: 'ask', reason: answer['ask'] }
@@ -49,6 +61,12 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
       },
       isBefore ? failed : undefined,
     )
+    return {
+      remove() {
+        checked.remove()
+        delivered?.remove()
+      },
+    }
   }
   const refused = (refuse: string, interrupt?: unknown) => ({ decision: defined({ behavior: 'deny', message: refuse, interrupt }) })
   return hookOn(

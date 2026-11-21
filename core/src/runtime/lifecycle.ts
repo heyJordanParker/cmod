@@ -1086,8 +1086,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     }
   }
   const followCurrent = async (id: string, title: string | undefined) => {
-    const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
-    followed = { id, title: title ?? '', project: modState.root, cwd, model, startedAt: new Date(usage.startedAt).toISOString(), ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(agentType === undefined ? {} : { agentType }) }
+    const [model, usage, { transcriptPath }] = await Promise.all([claude.session.model(), claude.session.usage(), claude.session.info()])
+    followed = { id, title: title ?? '', project: modState.root, cwd, ...(transcriptPath === '' ? {} : { transcriptPath }), model, startedAt: new Date(usage.startedAt).toISOString(), ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(agentType === undefined ? {} : { agentType }) }
     client.follow(followed)
   }
   router.add('classic.SessionStart', async (e, next) => {

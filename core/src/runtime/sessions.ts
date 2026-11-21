@@ -1,4 +1,4 @@
-import type { Args, CommandRunResult, SessionCompactResult } from 'claude-code'
+import type { Args, CommandRunResult, EventResult, SessionCompactResult } from 'claude-code'
 import type { Subscription } from '../utils/subscription.js'
 import { ContextEnd, ContextStart, type Context } from '../session/context/context.js'
 import { Message, noFiles } from '../session/context/turn/message/message.js'
@@ -46,7 +46,11 @@ export type SessionColor = { readonly session: string; readonly color?: string }
 
 const resetColors: readonly string[] = ['default', 'reset', 'none', 'gray', 'grey']
 
-const sessionFields: Readonly<Record<keyof SessionData, true>> = { id: true, title: true, color: true, project: true, cwd: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true }
+export function subagentTranscript(sessionTranscript: string | undefined, task: string): string | undefined {
+  return sessionTranscript?.endsWith('.jsonl') === true ? `${sessionTranscript.slice(0, -'.jsonl'.length)}/subagents/agent-${task}.jsonl` : undefined
+}
+
+const sessionFields: Readonly<Record<keyof SessionData, true>> = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true }
 
 export function pickedColor(args: string): string | undefined {
   const picked = args.trim().toLowerCase()
@@ -439,6 +443,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   const ownerOf = (session: string, data: TaskData): TaskOwner => {
     const parent = session === current.id ? current : known.get(session)
     const isBackground = data.isBackground === true
+    const transcriptPath = isBackground ? known.get(data.id)?.transcriptPath : subagentTranscript(parent?.transcriptPath, data.id)
     return sessionOf(
       () => ({
         id: data.id,
@@ -447,6 +452,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
         ...(data.agentType === undefined ? {} : { agentType: data.agentType }),
         model: data.model ?? '',
         cwd: parent?.cwd ?? '',
+        ...(transcriptPath === undefined ? {} : { transcriptPath }),
         isRunning: data.closedAt === undefined && (isBackground || (parent?.isRunning ?? true)),
         startedAt: data.openedAt,
         lastAt: data.closedAt ?? data.openedAt,
@@ -505,7 +511,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     if (named === 'PermissionCheck' || named === 'PermissionRequest') {
       const routes = permissionRoutes?.()
       if (routes === undefined) throw new Error(withoutPermissionCheck(name, method))
-      return routes(method, { raise, refusalFor, hookOn, routeOn, current: () => current })
+      return routes(method, { name, raise, refusalFor, hookOn, routeOn, current: () => current })
     }
     const event: { readonly on: string; readonly before?: string } = processEvents[named as ProcessName]
     const hook = (isBefore ? event.before : undefined) ?? event.on
@@ -655,6 +661,7 @@ export type ToolCheck = { readonly tool: string; readonly input: unknown; readon
 export type RouteOn = {
   (event: 'tool.check', hook: (e: ToolCheck, next: ((e: ToolCheck) => Promise<unknown>) & { readonly signal: AbortSignal }) => Promise<unknown>, failed?: (e: ToolCheck, error: Error, next: (e: ToolCheck) => Promise<unknown>) => Promise<{ readonly decision: 'deny'; readonly reason: string } | undefined>): Subscription
   (event: 'command.run', hook: (e: Args<'command.run'>, next: ((e: Args<'command.run'>) => Promise<CommandRunResult>) & { readonly signal: AbortSignal }) => Promise<CommandRunResult>, failed?: (e: Args<'command.run'>, error: Error) => Promise<CommandRunResult | undefined>): Subscription
+  (event: 'tool.call', hook: (e: Args<'tool.call'>, next: (e: Args<'tool.call'>) => Promise<EventResult<'tool.call'>>) => Promise<EventResult<'tool.call'>>): Subscription
   (event: 'session.compact', hook: (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>) => Promise<SessionCompactResult>): Subscription
 }
 
@@ -686,7 +693,7 @@ const answerKeys: Readonly<Record<string, readonly string[]>> = {
   WorktreeCreate: ['result'],
   Elicitation: ['refuse'],
   ElicitationResponse: ['refuse'],
-  PermissionCheck: ['allow', 'ask', 'refuse'],
+  PermissionCheck: ['allow', 'ask', 'refuse', 'note'],
   PermissionRequest: ['allow', 'input', 'updates', 'refuse', 'interrupt'],
   PermissionDenial: ['retry'],
   ToolBatch: ['note'],

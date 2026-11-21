@@ -46,6 +46,26 @@ test('a prompt opens the first context and a turn, sets the goal, and is placed 
   expect(prompt?.type === Message && prompt.message).toMatchObject({ type: Prompt, text: 'Rename the tree pane', from: { type: Person }, session: 's1', context: 1, turn: prompt?.type === Message ? prompt.message.id : '' })
 })
 
+test("every message names the agent type of the agent it belongs to: a task's agent's, and the session's own once it runs as an agent", () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  const before = conversation.add(typed('Plan the release'))
+  conversation.changeAgentType('release-captain')
+  conversation.add(said({ type: 'text', text: 'Planning.' }))
+  conversation.startTask({ id: 'a1', title: 'Explore the code', agentType: 'Explore', openedBy: 'toolu_1', openedAt: '2026-10-13T10:00:00.000Z' })
+  conversation.startTask({ id: 'a2', title: 'Try a fork', forkedFrom: 's1', openedBy: 'toolu_2', openedAt: '2026-10-13T10:00:00.000Z' })
+
+  const main = conversation.add(typed('Ship it'))
+  const explored = conversation.add(typed('Find the tree pane'), 'a1')
+  const forked = conversation.add(typed('Try it another way'), 'a2')
+  const agentTypes = (changes: readonly SessionChange[]) => changes.flatMap((change) => (change.type === Message ? [change.message.agentType] : change.type === TurnStart ? [change.turn.prompt.agentType] : []))
+
+  expect(agentTypes(before)).toEqual([undefined, undefined])
+  expect(agentTypes(main)).toEqual(['release-captain', 'release-captain'])
+  expect(agentTypes(explored)).toEqual(['Explore', 'Explore'])
+  expect(agentTypes(forked)).toEqual([undefined, undefined])
+  expect(createConversation(conversation.state).state.agentType).toBe('release-captain')
+})
+
 test("Claude's text and tool calls in one row become a Reply and a ToolCall, each with its own id", () => {
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Read the tree'))
