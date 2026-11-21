@@ -586,6 +586,17 @@ declare const Bun: {
 
 const builtVendors = new Map<string, Promise<string>>()
 
+async function bundleOf(entry: string, options: Omit<Parameters<typeof Bun.build>[0], 'entrypoints'>): Promise<string> {
+  const folder = `${import.meta.dir}/../node_modules/.bundle-${crypto.randomUUID()}`
+  await Bun.write(`${folder}/entry.ts`, entry)
+  try {
+    const built = await Bun.build({ entrypoints: [`${folder}/entry.ts`], ...options })
+    return (await built.outputs[0]?.text()) ?? ''
+  } finally {
+    Bun.spawnSync(['rm', '-rf', folder])
+  }
+}
+
 function vendorTheBuildShips(name: 'vendor' | 'vendor-markdown'): Promise<string> {
   const building =
     builtVendors.get(name) ??
@@ -615,11 +626,8 @@ test('no module a hook loads holds import(), which makes Claude Code refuse the 
 })
 
 test('only registerPermissionCheck with "approve": true, or a 4.x "approve" permission, brings in an allow, so the bundle of a mod that only refuses passes the plugin directory', async () => {
-  const bundled = async (name: string, body: string, steps: Record<string, unknown>) => {
-    const entry = `${import.meta.dir}/../node_modules/.bundle-${name}.ts`
-    await Bun.write(entry, `import { registerMod, registerPermissionCheck } from '${import.meta.dir}/../src/register.ts'\nexport function register(on) {\n  registerMod(on, { name: 'demo', setup() {} }, {})\n  ${body}\n}\n`)
-    const built = await Bun.build({ entrypoints: [entry], ...bundleOptions(readSteps({ cmod: steps }) ?? {}) })
-    return (await built.outputs[0]?.text()) ?? ''
+  const bundled = async (body: string, steps: Record<string, unknown>) => {
+    return bundleOf(`import { registerMod, registerPermissionCheck } from '${import.meta.dir}/../src/register.ts'\nexport function register(on) {\n  registerMod(on, { name: 'demo', setup() {} }, {})\n  ${body}\n}\n`, bundleOptions(readSteps({ cmod: steps }) ?? {}))
   }
   const shape = (code: string) => ({
     hearsPermissions: /\(\s*"(tool\.check|PermissionRequest|classic\.PermissionRequest)",/.test(code),
@@ -627,23 +635,19 @@ test('only registerPermissionCheck with "approve": true, or a 4.x "approve" perm
     allows: /(decision|behavior):\s*"allow"|decision:\s*"ask"|updatedPermissions/.test(code),
   })
 
-  expect(shape(await bundled('plain', '', { approve: true }))).toEqual({ hearsPermissions: false, refuses: false, allows: false })
-  expect(shape(await bundled('refusing', 'registerPermissionCheck(on)', {}))).toEqual({ hearsPermissions: true, refuses: true, allows: false })
-  expect(shape(await bundled('approving', 'registerPermissionCheck(on)', { approve: true }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
-  expect(shape(await bundled('approving-4x', 'registerPermissionCheck(on)', { permissions: { approve: true } }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
+  expect(shape(await bundled('', { approve: true }))).toEqual({ hearsPermissions: false, refuses: false, allows: false })
+  expect(shape(await bundled('registerPermissionCheck(on)', {}))).toEqual({ hearsPermissions: true, refuses: true, allows: false })
+  expect(shape(await bundled('registerPermissionCheck(on)', { approve: true }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
+  expect(shape(await bundled('registerPermissionCheck(on)', { permissions: { approve: true } }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
 })
 
 test("a mod that uses nothing bundles under two fifths of Claude Code's 1 MB hooks module limit, so the rest of the limit stays the mod's own", async () => {
   const vendor = await vendorTheBuildShips('vendor')
   const src = `${import.meta.dir}/../src`
-  const entry = `${import.meta.dir}/../node_modules/.bundle-minimal.ts`
-  await Bun.write(entry, `import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(on, options) {\n  registerMod(on, defineMod({ name: 'minimal', setup: () => undefined }), options)\n}\n`)
-  const built = await Bun.build({
-    entrypoints: [entry],
+  const code = await bundleOf(`import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(on, options) {\n  registerMod(on, defineMod({ name: 'minimal', setup: () => undefined }), options)\n}\n`, {
     ...bundleOptions({}),
     plugins: [{ name: 'the built vendor', setup: (build) => build.onResolve({ filter: /\/vendor\.js$/ }, () => ({ path: vendor })) }],
   })
-  const code = (await built.outputs[0]?.text()) ?? ''
   const hooksModuleLimit = 1_048_576
 
   expect(code).toContain('"session.start"')
@@ -653,14 +657,11 @@ test("a mod that uses nothing bundles under two fifths of Claude Code's 1 MB hoo
 test("a mod's bundle registers each hook on a line of its own and declares no second register, addHook, or passOn, as Anthropic's plugin directory reads it", async () => {
   const vendor = await vendorTheBuildShips('vendor')
   const src = `${import.meta.dir}/../src`
-  const entry = `${import.meta.dir}/../node_modules/.bundle-directory.ts`
-  await Bun.write(entry, `import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(addHook, options) {\n  registerMod(addHook, defineMod({ name: 'readable', setup: () => undefined }), options)\n}\n`)
-  const built = await Bun.build({
-    entrypoints: [entry],
+  const code = await bundleOf(`import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(addHook, options) {\n  registerMod(addHook, defineMod({ name: 'readable', setup: () => undefined }), options)\n}\n`, {
     ...bundleOptions({}),
     plugins: [{ name: 'the built vendor', setup: (build) => build.onResolve({ filter: /\/vendor\.js$/ }, () => ({ path: vendor })) }],
   })
-  const lines = ((await built.outputs[0]?.text()) ?? '').split('\n')
+  const lines = code.split('\n')
   const declaring = (name: string) => {
     const word = new RegExp(`(^|[^\\w$])${name.replace('$', '\\$')}($|[^\\w$])`)
     const parameters = (line: string) => [...line.matchAll(/\bfunction\s*[\w$]*\s*\(([^)]*)\)|\(([^()]*)\)\s*=>/g)].map((found) => found[1] ?? found[2] ?? '')
@@ -676,19 +677,15 @@ test("a mod's bundle registers each hook on a line of its own and declares no se
 
 test("a mod that styles reply blocks bundles the markdown reader the build ships minified, so a mod near Claude Code's 1 MB hooks module limit still fits", async () => {
   const reader = await vendorTheBuildShips('vendor-markdown')
-  const entry = `${import.meta.dir}/../node_modules/.bundle-styles.ts`
-  await Bun.write(
-    entry,
+  const code = await bundleOf(
     `import { defineMod } from '${import.meta.dir}/../src/mod.ts'\nimport { List, Paragraph } from '${import.meta.dir}/../src/ui/markdown.ts'\nexport const styles = defineMod({ name: 'demo', setup(mod) {\n  mod.styles.add({ kind: Paragraph, render: () => undefined })\n  mod.styles.add({ kind: List, render: () => undefined })\n} })\n`,
+    {
+      format: 'esm',
+      target: 'browser',
+      external: ['claude-code'],
+      plugins: [{ name: 'the built reader', setup: (build) => build.onResolve({ filter: /\/vendor-markdown\.js$/ }, () => ({ path: reader })) }],
+    },
   )
-  const built = await Bun.build({
-    entrypoints: [entry],
-    format: 'esm',
-    target: 'browser',
-    external: ['claude-code'],
-    plugins: [{ name: 'the built reader', setup: (build) => build.onResolve({ filter: /\/vendor-markdown\.js$/ }, () => ({ path: reader })) }],
-  })
-  const code = (await built.outputs[0]?.text()) ?? ''
   const minifiedBytes = 156_853
 
   expect(code).toContain('.bundle-vendor-markdown.js')
