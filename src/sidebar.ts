@@ -230,13 +230,13 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     for (const request of requests) {
       if ('open' in request && placeOf(name, request.open) === 'settings') {
         show(settingsTab)
-        await pane.open({ focus: true })
+        if (!parts.isHosted()) await pane.open({ focus: true })
         await view.show(name, `view:${request.open}`, request.params)
       } else if ('open' in request) {
         const opened: OpenTab = { mod: name, id: request.open, params: request.params }
         addTab(opened)
         show(keyOf(opened))
-        await pane.open(request.focus === true ? { focus: true } : {})
+        if (!parts.isHosted()) await pane.open(request.focus === true ? { focus: true } : {})
       } else if ('close' in request) {
         if (!view.closeView(name, request.close)) await closeTab(keyOf({ mod: name, id: request.close }))
       } else if ('scroll' in request) {
@@ -246,7 +246,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         await pane.focus(`${name}/${request.focus}:${request.key}`)
       } else if ('settings' in request) {
         show(settingsTab)
-        await pane.open({ focus: true })
+        if (!parts.isHosted()) await pane.open({ focus: true })
         await view.show(name, request.tab)
       } else {
         engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a request this cmod does not know, so it skips it: ${JSON.stringify(request)}`)
@@ -262,11 +262,15 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     tell()
   })
 
+  const reveal = async (id: string) => {
+    if (!parts.revealed(mod.name, id)) await pane.open({ focus: true })
+  }
+
   const openHistory = async () => {
     addTab(historyTab)
     show(historyKey)
     historyView.refresh()
-    await pane.open({ focus: true })
+    await reveal(historyTab.id)
     tell()
   }
 
@@ -282,12 +286,12 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         return tell()
       }
       show(settingsTab)
-      await pane.open({ focus: true })
+      await reveal(settingsTab)
       tell()
     },
     async openSettings(name?: string) {
       show(settingsTab)
-      await pane.open({ focus: true })
+      await reveal(settingsTab)
       if (name !== undefined) await view.show(name)
       tell()
     },

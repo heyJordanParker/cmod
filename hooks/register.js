@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.0.1";
+var coreVersion = "8.1.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -6638,7 +6638,8 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   const holdHere = async (client) => {
     if (session === "")
       return;
-    await client.request(sessionActs.hold, { session, project: project(), cwd: await claude.session.cwd() });
+    const [cwd, terminal, socket] = await Promise.all([claude.session.cwd(), claude.env.herdrTerminal(), claude.env.herdrSocket()]);
+    await client.request(sessionActs.hold, { session, project: project(), cwd, ...terminal && socket ? { herdrTerminal: { id: terminal, socket } } : {} });
   };
   let serveChanges;
   let isUnreached = false;
@@ -9945,6 +9946,7 @@ function drawnParts({ claude, report, press }) {
 }
 var askedWaitMs = 1000;
 var keptUiDraws = 2;
+var settingsView = "settings";
 function providedBy(listing) {
   if (!isObject(listing))
     return [];
@@ -9968,6 +9970,7 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
   const providersOf = (name) => [...provided.get(name) ?? []];
   const shownBy = new Map;
   let inApps = new Map;
+  let isHosted = false;
   const tellShown = (mod) => {
     const shown = { ...shownBy.get(mod) ?? { open: [], shown: null, isFocused: false }, inApps: inApps.get(mod) ?? [] };
     claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error) => claude.ui.warn(`pages:shown:${mod}`, `cmod: ${mod} did not hear which of its views and pages show: ${messageOf(error)}`));
@@ -10058,13 +10061,23 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
     const known = declared.get(mod);
     return known?.views.some((each) => each.id === id && each.place === "sidebar") === true || known?.pages.some((each) => each.id === id) === true;
   };
-  const tellRequested = (mod, requests) => {
+  const tellRequested = (mod, requests, isAsked) => {
+    const asked = isAsked ? { isAsked: true } : {};
     for (const request of requests) {
+      const isInSettings = "settings" in request || "open" in request && declared.get(mod)?.views.some((each) => each.id === request.open && each.place === "settings") === true;
       if ("open" in request && isShownByApps(mod, request.open))
-        tellUi("Open", { mod, id: request.open });
+        tellUi("Open", { mod, id: request.open, ...asked });
+      if (isInSettings && isShownByApps(cmodPluginName, settingsView))
+        tellUi("Open", { mod: cmodPluginName, id: settingsView, ...asked });
       if ("close" in request && isShownByApps(mod, request.close))
         tellUi("Close", { mod, id: request.close });
     }
+  };
+  const revealed = (mod, id) => {
+    if (!isHosted || !isShownByApps(mod, id))
+      return false;
+    tellUi("Open", { mod, id, isAsked: true });
+    return true;
   };
   const update = (mod, { parts: listing, redraw, requests, isAsked, isStart }) => {
     if (isStart === true)
@@ -10081,7 +10094,7 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
         tellUi("Redraw", { mod, id });
     if (requests === undefined || requests.length === 0)
       return false;
-    tellRequested(mod, requests);
+    tellRequested(mod, requests, isAsked === true);
     if (isAsked !== true)
       return void run(mod, requests), false;
     waiting.push({ mod, requests });
@@ -10203,7 +10216,8 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
       await openIn(part.mod, part.id, false);
       return null;
     },
-    shown(_session, listed) {
+    shown(_session, listed, hosted) {
+      isHosted = hosted === true;
       const next = new Map;
       for (const { mod, id } of listed)
         next.set(mod, [...next.get(mod) ?? [], id]);
@@ -10221,6 +10235,8 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
     element,
     press,
     update,
+    isHosted: () => isHosted,
+    revealed,
     tell(mod, shown) {
       shownBy.set(mod, shown);
       tellShown(mod);
@@ -11593,7 +11609,9 @@ async function startMod($, eventInput, passOn) {
       browser: () => $.env.get("BROWSER"),
       sshConnection: () => $.env.get("SSH_CONNECTION"),
       display: () => $.env.get("DISPLAY"),
-      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY")
+      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY"),
+      herdrTerminal: () => $.env.get("HC_TERMINAL_ID"),
+      herdrSocket: () => $.env.get("HC_TERMINAL_SOCKET")
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) }
@@ -11993,7 +12011,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12491,7 +12509,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12722,7 +12740,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -12910,13 +12928,15 @@ function sidebar(mod, settings, history, openInBrowser) {
     for (const request of requests) {
       if ("open" in request && placeOf(name, request.open) === "settings") {
         show(settingsTab);
-        await pane.open({ focus: true });
+        if (!parts.isHosted())
+          await pane.open({ focus: true });
         await view.show(name, `view:${request.open}`, request.params);
       } else if ("open" in request) {
         const opened = { mod: name, id: request.open, params: request.params };
         addTab(opened);
         show(keyOf(opened));
-        await pane.open(request.focus === true ? { focus: true } : {});
+        if (!parts.isHosted())
+          await pane.open(request.focus === true ? { focus: true } : {});
       } else if ("close" in request) {
         if (!view.closeView(name, request.close))
           await closeTab(keyOf({ mod: name, id: request.close }));
@@ -12927,7 +12947,8 @@ function sidebar(mod, settings, history, openInBrowser) {
         await pane.focus(`${name}/${request.focus}:${request.key}`);
       } else if ("settings" in request) {
         show(settingsTab);
-        await pane.open({ focus: true });
+        if (!parts.isHosted())
+          await pane.open({ focus: true });
         await view.show(name, request.tab);
       } else {
         engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a request this cmod does not know, so it skips it: ${JSON.stringify(request)}`);
@@ -12945,11 +12966,15 @@ function sidebar(mod, settings, history, openInBrowser) {
       await closeTab(keyOf({ mod: name, id }));
     tell();
   });
+  const reveal = async (id) => {
+    if (!parts.revealed(mod.name, id))
+      await pane.open({ focus: true });
+  };
   const openHistory = async () => {
     addTab(historyTab);
     show(historyKey);
     historyView.refresh();
-    await pane.open({ focus: true });
+    await reveal(historyTab.id);
     tell();
   };
   return {
@@ -12964,12 +12989,12 @@ function sidebar(mod, settings, history, openInBrowser) {
         return tell();
       }
       show(settingsTab);
-      await pane.open({ focus: true });
+      await reveal(settingsTab);
       tell();
     },
     async openSettings(name) {
       show(settingsTab);
-      await pane.open({ focus: true });
+      await reveal(settingsTab);
       if (name !== undefined)
         await view.show(name);
       tell();
@@ -13037,7 +13062,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13269,7 +13294,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13299,7 +13324,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13801,7 +13826,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-PUuvTH/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-yQjLKH/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
