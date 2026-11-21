@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.3.2] - 2026-11-21
+
+### Fixed
+- `cmod/Providers` tells a `Change` when a mod's session code in your session starts or stops providing an interface, as it does for a program. Before, a mod waiting for a provider that another mod's `provide` adds in its own `setup`, such as rulebook's `rulebook/Rules`, never heard it arrive when that mod started later or reloaded. The test kit tells the same `Change` for a fake with no `program` that starts or leaves.
+
 ## [8.3.1] - 2026-11-21
 
 ### Fixed

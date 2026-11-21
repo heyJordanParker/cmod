@@ -271,7 +271,9 @@ export function testMod<State extends object, Declared extends Options = Options
     if (parts !== undefined) {
       declaredViews = viewsOf(parts)
       declaredPages = pagesOf(parts)
+      const before = provides
       provides = providedBy(parts)
+      for (const named of new Set([...before, ...provides])) if (before.includes(named) !== provides.includes(named)) await served.providersChanged(named)
       ownMarkdown.clear()
     }
     if (parts !== undefined || redraw !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }) })
@@ -322,7 +324,7 @@ export function testMod<State extends object, Declared extends Options = Options
   }
   const widgetsOf = () => (widgets ??= servedWidgets())
   const cmodBeneath = createRouter()
-  const servedParts = serveParts({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined, tellUi: () => undefined })
+  const servedParts = serveParts({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined, tellUi: () => undefined, tellProviders: (names) => void Promise.all(names.map((named) => served.providersChanged(named))).catch(report) })
   servedParts.apply((_mod, requests) => applyRequests(requests))
   const after: Claude['clock']['after'] = (ms, run) => fake.claude.clock.after(ms, run)
   const report = (error: unknown) => reportPart('interfaces', 'A provider listener failed', error)
@@ -348,12 +350,16 @@ export function testMod<State extends object, Declared extends Options = Options
     return { name: named, mod, program: program as string, ...(device === undefined ? {} : { device }), methods }
   }
   const isFirst = (index: number) => given[index]?.isStarted !== false
+  const inSessionChanged = async (index: number, handle: ProvidedHandle) => {
+    await served.providersChanged((given[index] as FakeProvider).name)
+    return handle
+  }
   const providedInSession = given.map((each, index) => (each.program === undefined && isFirst(index) ? inSession(index) : undefined))
   const late = new Map<number, Promise<ProvidedHandle>>()
   const startLate = (index: number) => {
     const known = late.get(index)
     if (known !== undefined) return known
-    const started = fakeProviders().then(async () => (given[index]?.program === undefined ? inSession(index) : ((await fake.serve.provide([asProgram(index)], { after, report }))[0] as ProvidedHandle)))
+    const started = fakeProviders().then(async () => (given[index]?.program === undefined ? inSessionChanged(index, inSession(index)) : ((await fake.serve.provide([asProgram(index)], { after, report }))[0] as ProvidedHandle)))
     late.set(index, started)
     return started
   }
@@ -377,7 +383,7 @@ export function testMod<State extends object, Declared extends Options = Options
         if (isFirst(index)) throw new Error(`The test kit's fake provider ${index} runs from the start. Give it isStarted: false to start it later.`)
         void modeling(startLate(index).then(() => fake.settle()))
       },
-      remove: () => void modeling(reached().then((each) => each.remove())),
+      remove: () => void modeling(reached().then((each) => (each.remove(), given[index]?.program === undefined ? inSessionChanged(index, each) : each))),
       tell: (event, payload) => void modeling(reached().then((each) => each.tell(event, payload))),
       ask: (event, payload) => modeling(reached().then((each) => each.ask(event, payload))),
     }

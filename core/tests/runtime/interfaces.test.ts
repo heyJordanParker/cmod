@@ -1095,6 +1095,57 @@ test("testMod's fake provider with isStarted: false starts when the test calls s
   expect(answers).toEqual(['rules heard ping'])
 })
 
+test("cmod/Providers tells a mod when another mod's session code in its session starts or stops providing an interface, as it does for a program", async () => {
+  const heard: string[] = []
+  const lists: number[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      async setup() {
+        const [watch] = await providers('cmod/Providers')
+        watch?.onChange({ interface: 'demo/Echo' }, async (change) => {
+          heard.push(`${change.interface} on ${change.device.name}`)
+          lists.push((await providers('demo/Echo')).length)
+        })
+      },
+    }),
+    { providers: [{ name: 'demo/Echo', mod: 'rulebook', isStarted: false, methods: { echo: (text: string) => `rulebook heard ${text}` } }] },
+  )
+  await tested.start()
+
+  tested.providers[0].start()
+  await tested.settle()
+  const [echo] = await providers('demo/Echo')
+  const answer = await echo?.echo('ping')
+  tested.providers[0].remove()
+  await tested.settle()
+
+  expect(heard).toEqual(['demo/Echo on test-computer', 'demo/Echo on test-computer'])
+  expect(lists).toEqual([1, 0])
+  expect(answer).toBe('rulebook heard ping')
+})
+
+test("cmod/Providers tells a Change when a mod's own session code provides an interface, through the parts the mod tells the cmod plugin", async () => {
+  const heard: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'rulebook',
+      async setup() {
+        const [watch] = await providers('cmod/Providers')
+        watch?.onChange({ interface: 'demo/Echo' }, (change) => void heard.push(`${change.interface} on ${change.device.name}`))
+      },
+    }),
+  )
+  await tested.start()
+
+  const provided = provide('demo/Echo', { echo: (text: string) => `rulebook heard ${text}` })
+  await tested.settle()
+  provided.remove()
+  await tested.settle()
+
+  expect(heard).toEqual(['demo/Echo on test-computer', 'demo/Echo on test-computer'])
+})
+
 test("testMod's fake provider on another device that starts later joins the devices already reached, and the first device stays", async () => {
   const devbox = { id: 'devbox-id', name: 'devbox' }
   const laptop = { id: 'laptop-id', name: 'laptop' }

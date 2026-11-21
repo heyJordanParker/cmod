@@ -1042,6 +1042,20 @@ const settled = async (...plugins: readonly { readonly fake: FakeClaude }[]) => 
 
 const typedPrompt = (text: string) => ({ uuid: `prompt:${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } })
 
+test("the cmod plugin tells a mod's cmod/Providers listener of its own session when a session-code provider there comes or goes, and no listener whose matcher names another interface", async () => {
+  const serve = fakeServe(() => ({}), { device: async () => testDevice })
+  const heard: unknown[] = []
+  const plugin = await connected(serve, 'here', { configure: (fake) => void (fake.fakes.cmod.call = async ({ to, method, input }) => (method === interfaceMethods.heard && heard.push({ to, input }), null)) })
+  const listen = (id: string, matcher: object) => plugin.served.answer({ to: 'cmod', method: interfaceMethods.listen, input: { id, interface: 'cmod/Providers', kind: 'on', event: 'Change', mod: 'cmod', program: 'cmod', device: testDevice, matcher }, caller: 'modes' })
+  await listen('cmod/Providers#1', { interface: 'rulebook/Rules' })
+  await listen('cmod/Providers#2', { interface: 'demo/Echo' })
+
+  plugin.served.tellProviders(['rulebook/Rules'])
+  await settled(plugin)
+
+  expect(heard).toEqual([{ to: 'modes', input: { id: 'cmod/Providers#1', payload: { interface: 'rulebook/Rules', device: { id: testDevice.id, name: testDevice.name } } } }])
+})
+
 test("a mod's action on another running session reaches that session through cmod serve, and the session's answer resolves it", async () => {
   const serve = fakeServe(() => ({}), { device: async () => testDevice })
   const here = await connected(serve, 'here')

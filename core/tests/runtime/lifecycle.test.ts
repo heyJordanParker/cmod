@@ -798,6 +798,19 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   expect(answer).toEqual({})
 })
 
+test("the cmod plugin's parts tell which interfaces a mod's session code starts or stops providing, and nothing for parts that provide the same", () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const told: (readonly string[])[] = []
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined, tellProviders: (names) => void told.push(names) })
+
+  served.update('rulebook', { parts: { widgets: [], pages: [], provides: ['rulebook/Rules'] } })
+  served.update('rulebook', { parts: { widgets: [], pages: [], provides: ['rulebook/Rules'] } })
+  served.update('rulebook', { parts: { widgets: [], pages: [], provides: ['rulebook/Checks'] } })
+
+  expect(told).toEqual([['rulebook/Rules'], ['rulebook/Rules', 'rulebook/Checks']])
+  expect(served.providers('rulebook/Checks')).toEqual(['rulebook'])
+})
+
 test('while an app hosts the session, an open the person asked for tells Open with isAsked, a Settings request tells Open of the Settings view, and the cmod plugin reveals its own views in the app', () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const told: (readonly [string, unknown])[] = []

@@ -56,6 +56,7 @@ export type Conversations = {
   onUnreached(listener: () => void): void
   serveUi(methods: Implementation): void
   tellUi(event: string, payload: object): void
+  tellProviders(names: readonly string[]): void
   provide(name: string, methods: Implementation): Provided
   close(): Promise<void>
 }
@@ -991,6 +992,9 @@ export function serveConversations({
     },
     tellUi(event, payload) {
       if (session !== '') local.client.notify(sessionActs.uiEvent, { event, payload })
+    },
+    tellProviders(names) {
+      for (const name of names) void served.providersChanged(name).catch((error: unknown) => report('providers', `Could not tell the mods that a provider of ${name} came or went`, error))
     },
     provide: (name, methods) => served.provide(name, methods),
     async answer(e) {

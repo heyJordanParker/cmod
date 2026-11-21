@@ -152,6 +152,7 @@ export function serveParts({
   parts,
   tellStylers,
   tellUi,
+  tellProviders = () => undefined,
 }: {
   readonly claude: Claude
   readonly router: Router
@@ -161,6 +162,7 @@ export function serveParts({
   readonly parts: DrawnParts
   readonly tellStylers: (stylers: readonly string[]) => void
   readonly tellUi: UiTell
+  readonly tellProviders?: (names: readonly string[]) => void
 }): Parts {
   const declared = new Map<string, ModParts>()
   const provided = new Map<string, Set<string>>()
@@ -235,8 +237,10 @@ export function serveParts({
 
   const provide = (mod: string, names: readonly string[]) => {
     const wasStyler = provided.get(styleInterface)?.has(mod) === true
-    for (const [name, mods] of provided) if (!names.includes(name)) mods.delete(mod)
+    const left = [...provided].filter(([name, mods]) => !names.includes(name) && mods.delete(mod)).map(([name]) => name)
+    const arrived = names.filter((name) => provided.get(name)?.has(mod) !== true)
     for (const name of names) provided.set(name, (provided.get(name) ?? new Set<string>()).add(mod))
+    if (left.length + arrived.length > 0) tellProviders([...left, ...arrived])
     if (wasStyler || names.includes(styleInterface)) restyle(mod)
   }
 

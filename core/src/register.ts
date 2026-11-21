@@ -149,7 +149,7 @@ function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.cal
 export const serveCmodPlugin: ServeCmodPlugin = ({ claude, router, store, project, report, clear, tellRefusedPress, parts, markdownIn, tellStylers }) => {
   const conversations = serveConversations({ claude, router, store, project, report, clear, sessionCode: (name) => served.providers(name) })
   const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn })
-  const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload) })
+  const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload), tellProviders: (names) => conversations.tellProviders(names) })
   conversations.serveUi(served.ui)
   conversations.onTurnClosed((turn) => served.turnClosed(turn))
   return { conversations, widgets, parts: served }

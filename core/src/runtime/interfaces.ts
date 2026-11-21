@@ -1117,6 +1117,7 @@ export type KeptListen = { readonly caller: string; readonly listen: ProvidedLis
 
 export type ServedProviders = {
   listened(): readonly KeptListen[]
+  providersChanged(name: string): Promise<void>
   forget(caller: string): void
   answer(method: string, input: unknown, caller: string | undefined): Promise<unknown> | undefined
   provide(name: string, methods: Implementation): Provided
@@ -1238,6 +1239,15 @@ export function serveProviders({
     tell: (name, event, payload) => server.emit(name, event, payload),
     ask,
     listened: () => [...kept.values()],
+    async providersChanged(name) {
+      if (device === undefined) return
+      const here = await device()
+      const payload = { interface: name, device: here } satisfies ProvidersChange
+      const isHere = (listened: ProvidedListen) => listened.mod === cmodPluginName && listened.program === cmodPluginName && (listened.device === undefined || listened.device.id === here.id)
+      for (const { caller, listen } of kept.values()) {
+        if (listen.interface === providersInterface && listen.event === 'Change' && listen.kind === 'on' && isHere(listen) && isHeardAt(listen, [], payload)) void tell(caller, { id: listen.id, payload }, unaborted).catch(reported)
+      }
+    },
     forget(caller) {
       for (const each of [...kept.values()].filter((listened) => listened.caller === caller)) stopListening(caller, each.listen.id)
     },
