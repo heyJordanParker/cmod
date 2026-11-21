@@ -1,8 +1,10 @@
+import { Database } from 'bun:sqlite'
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { version } from '../package.json'
+import { scripts, version } from '../package.json'
 import { cmod, cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 const clients: RpcClient[] = []
@@ -165,3 +167,38 @@ test.concurrent('cmod serve refuses an action on a session no transcript names, 
   expect(running).toBe('session older runs, so it stays. End it first.')
   expect(ended).toBe('session ended has ended, so it takes no abort. Message it to resume it.')
 }, 30_000)
+
+test.concurrent("cmod serve answers every connection and every call outside the conversation index while another process holds the index's write lock, and answers the index read once the lock is free", async () => {
+  const { home, folder, client, stop } = await servedHome()
+  const read = () => client.request<readonly { readonly id: string; readonly text?: string }[]>('cmod/Sessions.read', ['ended', 'messages', { project: project(home) }])
+  const before = await read()
+  const holder = new Database(join(home, '.local/share/cmod/history-13.sqlite'))
+  holder.exec('begin immediate')
+  await appendFile(join(home, folder, 'ended.jsonl'), `${JSON.stringify({ type: 'assistant', uuid: 'ended-b', sessionId: 'ended', timestamp: '2026-11-19T10:00:04.000Z', cwd: project(home), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Ran it again.' }] } })}\n`)
+  const reading = read()
+  const connect = () => fetch('http://localhost/rpc/connect', { method: 'POST', unix: join(home, '.local/share/cmod/serve.sock') } as RequestInit).then((answer) => answer.status)
+  const connected = [await connect(), await connect()]
+  const usage = await client.request('cmod/Sessions.read', ['ended', 'usage', { project: project(home) }])
+  const isWaiting = await Promise.race([reading.then(() => false), Promise.resolve(true)])
+  holder.exec('commit')
+  holder.close()
+  const after = await reading
+  stop()
+
+  expect(connected).toEqual([200, 200])
+  expect(usage).toEqual({ model: '', contextWindow: {} })
+  expect(isWaiting).toBe(true)
+  expect(after.length).toBe(before.length + 1)
+  expect(after.at(-1)?.text).toBe('Ran it again.')
+}, 30_000)
+
+test('the build compiles each worker the cmod program starts, because a compiled cmod loads no file its build did not name', async () => {
+  const source = join(import.meta.dir, '../src')
+  const workers: string[] = []
+  for await (const path of new Bun.Glob('**/*.ts').scan({ cwd: source })) {
+    for (const [, file] of (await Bun.file(join(source, path)).text()).matchAll(/new Worker\(new URL\('\.\/([\w-]+\.ts)'/g)) workers.push(join(dirname(path), file ?? ''))
+  }
+
+  expect(workers).toContain('history-worker.ts')
+  for (const worker of workers) expect(scripts.build).toContain(` src/${worker} `)
+})

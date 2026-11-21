@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { interfaceServer, listenMethod, type Heard, type StoreChange } from '@cmodjs/core/src/runtime/interfaces.js'
 import { connectRpc, rpcRoutes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { ifMissing } from '../src/files.js'
-import { openHistory, runningFolder } from '../src/history.js'
+import { openIndex, runningFolder } from '../src/history.js'
 import { answered as answeredRpc, serveSessions } from '../src/serve.js'
 import { webApp } from '../src/web.js'
 import { cmodWith, deleteTemporaryHomes, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
@@ -245,10 +245,10 @@ test.concurrent("cmod serve follows Claude Code's session records with one watch
   const before = { CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'], XDG_DATA_HOME: process.env['XDG_DATA_HOME'] }
   Object.assign(process.env, { CLAUDE_CONFIG_DIR: join(home, '.claude'), XDG_DATA_HOME: join(home, '.local/share') })
   const watching = spyOn(fs, 'watch')
-  const db = openHistory()
+  const index = openIndex()
   const reported: string[] = []
-  const sessions = serveSessions({ db, report: (doing) => void reported.push(doing) })
-  const web = webApp({ db, sessions })
+  const sessions = serveSessions({ index, report: (doing) => void reported.push(doing) })
+  const web = webApp({ index, sessions })
   const heard: StoreChange[] = []
   const listener = sessions.interfaces.handler({ request: () => Promise.reject(new Error('The test answers no request.')), notify: (_method, params) => void heard.push((params as Heard).payload as StoreChange) })
   try {
@@ -271,7 +271,7 @@ test.concurrent("cmod serve follows Claude Code's session records with one watch
   } finally {
     await web.stop()
     sessions.close()
-    db.close()
+    await index.close()
     watching.mockRestore()
     for (const [name, value] of Object.entries(before)) {
       if (value === undefined) delete process.env[name]
@@ -342,7 +342,7 @@ function anotherStore(home: string) {
     implementations: {
       'cmod/Sessions': {
         sessions: () => [remote()],
-        read: (_session: string, part: string) => (part === 'messages' ? [{ id: 'r1-a', session: 'r1', type: 'reply', at: at(2), context: 1, turn: 'r1-u', text: 'Deployed it on the build box.' }] : part === 'state' ? { turn: turn(), openCalls: {} } : []),
+        read: (_session: string, part: string) => (part === 'messages' ? [{ id: 'r1-a', session: 'r1', type: 'reply', at: at(2), context: 1, turn: 'r1-u', text: 'Deployed it on the build box.' }] : part === 'state' ? { ...(sent.length === 0 ? {} : { turn: turn() }), openCalls: {} } : part === 'turns' ? [turn()] : []),
         send: (session: string, input: unknown) => void sent.push(['send', session, input]),
         abort: (session: string) => void sent.push(['abort', session]),
       },

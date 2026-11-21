@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, watch } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Database } from 'bun:sqlite'
 import { dataFolder, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { MissingMachineId, readDevice } from '@cmodjs/core/src/runtime/device.js'
@@ -13,7 +12,7 @@ import { startBackground, startTask, withBackgroundStatus } from './claude.js'
 import { ifMissing, readJson, writeAtomically } from './files.js'
 import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
-import { foldersIn, hasTranscript, listSessions, readContexts, readGoal, readMessages, readState, readTasks, readTurns, readUsage, runningEntries, runningFolder, searchMessages, type RunningEntry } from './history.js'
+import { foldersIn, hasTranscript, readUsage, runningEntries, runningFolder, type HistoryIndex, type RunningEntry } from './history.js'
 
 export type SessionServer = SessionRouting & { visits(): Promise<VisitedAt> }
 
@@ -25,7 +24,7 @@ const olderPluginPollMs = 8000
 
 const registryQuietMs = 300
 
-export function serveSessions({ db, report }: { readonly db: Database; readonly report: (doing: string, error: unknown) => void }): SessionServer {
+export function serveSessions({ index, report }: { readonly index: HistoryIndex; readonly report: (doing: string, error: unknown) => void }): SessionServer {
   const visitsPath = join(storeFolder(process.env), 'visited.json')
   let visited: Promise<VisitedAt> | undefined
   let writes = Promise.resolve()
@@ -63,7 +62,7 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
   const resume = async (session: string, project: string, input: unknown) => {
     const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
     if (text.trim() === '') throw new Error('send needs text.')
-    const cwd = listSessions(db, { project, everyProject: true, since: undefined }).find((each) => each.id === session)?.cwd ?? project
+    const cwd = (await index.listSessions({ project, everyProject: true, since: undefined })).find((each) => each.id === session)?.cwd ?? project
     return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
   }
 
@@ -94,13 +93,13 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
         const [visits, here] = await Promise.all([readVisits(), device])
         const project = typeof scope['project'] === 'string' ? scope['project'] : undefined
         const records = new Map(runningEntries().map((entry) => [entry.session, entry]))
-        return listSessions(db, { project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) }).map(
+        return (await index.listSessions({ project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) })).map(
           (session): SessionData => ({ ...session, ...here, isRunning: session.isRunning || held.has(session.id), ...(visits[session.id] === undefined ? {} : { visitedAt: visits[session.id] }), ...recordedStatus(records.get(session.id)) }),
         )
       },
       search(text, options) {
         const project = typeof options['project'] === 'string' ? options['project'] : undefined
-        return searchMessages(db, text, {
+        return index.searchMessages(text, {
           project: project ?? '',
           everyProject: options['everyProject'] === true || project === undefined,
           since: typeof options['since'] === 'string' ? options['since'] : undefined,
@@ -110,20 +109,20 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
           record: isObject(options['record']) ? options['record'] : {},
         })
       },
-      read(session, part, options, holding) {
+      async read(session, part, options, holding) {
         const project = typeof options['project'] === 'string' ? options['project'] : (holding(session)?.project ?? '')
         const task = taskOf(options)
         if (!hasTranscript(session, project)) {
           if (holding(session) !== undefined) return emptyPart(part)
           throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
         }
-        if (part === 'messages') return readMessages(db, { session, project, ...task, ...text('turn', options), ...text('after', options), ...count('last', options) })
-        if (part === 'turns') return readTurns(db, { session, project, ...task, ...count('context', options), ...count('last', options) })
-        if (part === 'contexts') return readContexts(db, { session, project, ...task })
-        if (part === 'tasks') return withBackgroundStatus(readTasks(db, { session, project, ...task, ...(options['all'] === true ? { isNested: true } : {}) }), (error) => report('lists the background tasks with no status', error))
-        if (part === 'goal') return readGoal(db, { session, project, ...task })
+        if (part === 'messages') return index.readMessages({ session, project, ...task, ...text('turn', options), ...text('after', options), ...count('last', options) })
+        if (part === 'turns') return index.readTurns({ session, project, ...task, ...count('context', options), ...count('last', options) })
+        if (part === 'contexts') return index.readContexts({ session, project, ...task })
+        if (part === 'tasks') return withBackgroundStatus(await index.readTasks({ session, project, ...task, ...(options['all'] === true ? { isNested: true } : {}) }), (error) => report('lists the background tasks with no status', error))
+        if (part === 'goal') return index.readGoal({ session, project, ...task })
         if (part === 'usage') return readUsage({ session, project, ...task })
-        if (part === 'state') return readState(db, { session, project })
+        if (part === 'state') return index.readState({ session, project })
         throw new RpcError(rpcCodes.invalidParams, `A session has no part ${part}. Read messages, turns, contexts, tasks, goal, usage, or state.`)
       },
       async unheld(session, action, input, context, holding) {
@@ -152,8 +151,7 @@ export function serveSessions({ db, report }: { readonly db: Database; readonly 
         }
         await rm(join(cmod, 'goals', `${session}.txt`), { force: true })
         await rm(join(cmod, 'tasks', session), { recursive: true, force: true })
-        db.query('delete from messages where session = ?').run(session)
-        db.query('delete from sessions where id = ?').run(session)
+        await index.removeSession(session)
         await writeVisits((visits) => {
           delete visits[session]
         })

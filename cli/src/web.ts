@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import type { Database } from 'bun:sqlite'
 import { basename } from 'node:path'
 import type { Server } from 'bun'
 import { isObject } from '@cmodjs/core/src/records.js'
@@ -13,9 +12,9 @@ import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
-import type { ConversationState, SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
+import type { ConversationState, SessionChange, SessionData, TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { followSessions, hasTranscript, readMessages, readState, readTurns, runningEntries, type RunningEntry } from './history.js'
+import { hasTranscript, runningEntries, type HistoryIndex, type RunningEntry } from './history.js'
 import type { SessionServer } from './serve.js'
 import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type On, type PressInput, type Screen, type ScreenActions, type UiUnit, type UnitTab } from './web-page.js'
 
@@ -104,7 +103,7 @@ class Refusal extends Error {
 
 const unitKey = ({ mod, id }: Pick<UiUnit, 'mod' | 'id'>) => `${mod}/${id}`
 
-export function webApp({ db, sessions }: { readonly db: Database; readonly sessions: SessionServer }): WebApp {
+export function webApp({ index, sessions }: { readonly index: HistoryIndex; readonly sessions: SessionServer }): WebApp {
   const agents = new Map<string, Agent>()
   const streams = new Map<string, Stream>()
   const fetched = new Map<string, Fetched>()
@@ -496,16 +495,24 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
   const follow = (entry: RunningEntry): Agent => {
     const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), stop: new AbortController() }
     const signal = AbortSignal.any([agent.stop.signal, following.signal])
-    void followSessions(db, { sessions: [entry.session], isEveryRunning: false }, entry.cwd, (_session, change) => hear(agent, change), signal).catch((error: unknown) => report(`stopped following ${entry.session}`, error))
-    if (!hasTranscript(entry.session, entry.cwd)) return agent
-    const request = { session: entry.session, project: entry.cwd }
-    const state = readState(db, request)
+    void index.follow([entry.session], entry.cwd, ({ change }) => hear(agent, change), signal).catch((error: unknown) => report(`stopped following ${entry.session}`, error))
+    if (hasTranscript(entry.session, entry.cwd)) void readFeed(agent).catch((error: unknown) => report(`shows no earlier messages of ${entry.session}`, error))
+    return agent
+  }
+
+  const readFeed = async (agent: Agent) => {
+    const { session, cwd: project } = agent.entry
+    const [state, messages, [last]] = await Promise.all([
+      callOwn<ConversationState>(sessionsInterface, 'read', [session, 'state', { project }]),
+      callOwn<SessionMessage[]>(sessionsInterface, 'read', [session, 'messages', { project, last: feedMessages }]),
+      callOwn<TurnData[]>(sessionsInterface, 'read', [session, 'turns', { project, last: 1 }]),
+    ])
     agent.isTurnOpen = state.turn !== undefined && state.turn.closedAt === undefined
+    agent.closedAt = last?.closedAt
     for (const [callId, call] of Object.entries(state.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
     const known = new Set(agent.messages.map((message) => message.id))
-    agent.messages = [...readMessages(db, { ...request, last: feedMessages }).filter((message) => !known.has(message.id)), ...agent.messages]
-    agent.closedAt = readTurns(db, { ...request, last: 1 })[0]?.closedAt
-    return agent
+    agent.messages = [...messages.filter((message) => !known.has(message.id)), ...agent.messages]
+    redrawAll()
   }
 
   const guarded = (doing: string, run: () => void) => () => {
@@ -548,12 +555,8 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
         known.entry = entry
         continue
       }
-      try {
-        agents.set(entry.session, follow(entry))
-        isChanged = true
-      } catch (error) {
-        report(`skipped ${entry.session} until its transcript reads`, error)
-      }
+      agents.set(entry.session, follow(entry))
+      isChanged = true
     }
     if (isChanged) summarizeSoon(summaryQuietMs)
     redrawAll()
@@ -574,13 +577,14 @@ export function webApp({ db, sessions }: { readonly db: Database; readonly sessi
       agent.summary = summary
       agents.set(summary.id, agent)
       if (agent.readAt === summary.lastAt) continue
-      const [messages, state] = await Promise.all([
+      const [messages, state, [last]] = await Promise.all([
         callStore<SessionMessage[]>(store, 'read', [summary.id, 'messages', { project: summary.cwd, last: feedMessages }]),
         callStore<ConversationState | null>(store, 'read', [summary.id, 'state', { project: summary.cwd }]),
+        callStore<TurnData[]>(store, 'read', [summary.id, 'turns', { project: summary.cwd, last: 1 }]),
       ])
       agent.messages = messages.filter((message) => message.task === undefined)
       agent.isTurnOpen = state?.turn !== undefined && state.turn.closedAt === undefined
-      agent.closedAt = state?.turn?.closedAt
+      agent.closedAt = last?.closedAt
       agent.openCalls.clear()
       for (const [callId, call] of Object.entries(state?.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
       agent.readAt = summary.lastAt

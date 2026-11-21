@@ -5,7 +5,7 @@ import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveSocketP
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
 import { placeHerdrMod } from '../herdr.js'
-import { openHistory, runningEntries } from '../history.js'
+import { openIndex, runningEntries } from '../history.js'
 import { answered, answeredOlderPlugin, serveSessions } from '../serve.js'
 import { isNewerCmodInstalled } from '../store.js'
 import { readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
@@ -78,9 +78,9 @@ export async function serve(): Promise<number> {
   await forgetEndedBefores(store)
   await keepReadMarks(store)
   await placeHerdrMod().catch((error: unknown) => report('placed no Herdr mod', error))
-  const db = openHistory()
-  const sessions = serveSessions({ db, report })
-  const web = webApp({ db, sessions })
+  const index = openIndex()
+  const sessions = serveSessions({ index, report })
+  const web = webApp({ index, sessions })
   await mkdir(dirname(socket), { recursive: true })
   await rm(socket, { force: true })
   const server = Bun.serve({
@@ -118,7 +118,7 @@ export async function serve(): Promise<number> {
     sessions.close()
     await server.stop(true)
     await rm(socket, { force: true })
-    db.close()
+    await index.close()
   }
 }
 

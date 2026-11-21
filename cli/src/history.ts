@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch, type Stats } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
+import { SHARE_ENV } from 'node:worker_threads'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
 import type { Device } from '@cmodjs/core/src/session/context/turn/device.js'
@@ -14,6 +15,7 @@ import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
 import { UsageChange, type Usage } from '@cmodjs/core/src/session/session.js'
 import { createConversation, emptyConversation, ownerOfSpawn, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine } from '@cmodjs/core/src/utils/text.js'
+import type { IndexMethods } from './history-worker.js'
 import { configRoot } from './settings.js'
 import { storePath } from './store.js'
 
@@ -79,6 +81,73 @@ export function openHistory({ isInMemory = false }: { readonly isInMemory?: bool
   db.exec('pragma busy_timeout = 120000')
   db.exec('pragma synchronous = normal')
   return db
+}
+
+export type IndexCall = { readonly id: number; readonly method: string; readonly args: readonly unknown[] }
+
+export type FollowedChange = { readonly session: string; readonly change: SessionChange; readonly isInProject: boolean }
+
+export type IndexAnswer = { readonly id: number; readonly value?: unknown; readonly error?: string; readonly change?: FollowedChange }
+
+type IndexReads = { readonly [Method in keyof IndexMethods]: IndexMethods[Method] extends (db: Database, ...args: infer Args) => infer Value ? (...args: Args) => Promise<Value> : never }
+
+export type HistoryIndex = IndexReads & {
+  follow(sessions: readonly string[], project: string, onChange: (followed: FollowedChange) => void, signal: AbortSignal): Promise<void>
+  close(): Promise<void>
+}
+
+export function openIndex(): HistoryIndex {
+  const worker = new Worker(new URL('./history-worker.ts', import.meta.url).href, { env: SHARE_ENV })
+  type Waiting = { resolve(value: unknown): void; reject(error: Error): void; onChange?: (followed: FollowedChange) => void }
+  const waiting = new Map<number, Waiting>()
+  let last = 0
+  let failure: Error | undefined
+  worker.onmessage = ({ data: { id, value, error, change } }: MessageEvent<IndexAnswer>) => {
+    const asked = waiting.get(id)
+    if (change !== undefined) return asked?.onChange?.(change)
+    waiting.delete(id)
+    if (error === undefined) asked?.resolve(value)
+    else asked?.reject(new Error(error))
+  }
+  worker.onerror = (event) => {
+    failure = new Error(`The conversation index stopped: ${event.message}`)
+    for (const asked of waiting.values()) asked.reject(failure)
+    waiting.clear()
+  }
+  const ask = (method: string, args: readonly unknown[], onChange?: (followed: FollowedChange) => void) => {
+    last += 1
+    const id = last
+    return {
+      id,
+      answer: new Promise<unknown>((resolve, reject) => {
+        if (failure !== undefined) return reject(failure)
+        waiting.set(id, { resolve, reject, ...(onChange === undefined ? {} : { onChange }) })
+        worker.postMessage({ id, method, args } satisfies IndexCall)
+      }),
+    }
+  }
+  const read = <Method extends keyof IndexMethods>(method: Method) => ((...args: readonly unknown[]) => ask(method, args).answer) as IndexReads[Method]
+  return {
+    listSessions: read('listSessions'),
+    searchMessages: read('searchMessages'),
+    readMessages: read('readMessages'),
+    readTurns: read('readTurns'),
+    readContexts: read('readContexts'),
+    readTasks: read('readTasks'),
+    readGoal: read('readGoal'),
+    readState: read('readState'),
+    removeSession: read('removeSession'),
+    async follow(sessions, project, onChange, signal) {
+      const { id, answer } = ask('follow', [sessions, project], onChange)
+      const unfollow = () => void ask('unfollow', [id]).answer
+      if (signal.aborted) unfollow()
+      else signal.addEventListener('abort', unfollow, { once: true })
+      await answer.finally(() => signal.removeEventListener('abort', unfollow))
+    },
+    async close() {
+      await ask('close', []).answer.finally(() => worker.terminate())
+    },
+  }
 }
 
 function createIndex(path: string): void {
@@ -544,16 +613,20 @@ function forgetDeleted(db: Database): void {
   const ended = sessions.filter((session) => !exists(join(session.folder, `${session.id}.jsonl`)))
   if (gone.length === 0 && ended.length === 0) return
   db.transaction(() => {
-    for (const session of ended) {
-      forgetSession(db, session.id)
-      db.query('delete from files where session = ?').run(session.id)
-      db.query('delete from sessions where id = ?').run(session.id)
-    }
+    for (const session of ended) removeSession(db, session.id)
     for (const file of gone) {
       db.query('delete from message_text where rowid in (select row from messages where file = ?)').run(file.id)
       db.query('delete from messages where file = ?').run(file.id)
       db.query('delete from files where id = ?').run(file.id)
     }
+  }).immediate()
+}
+
+export function removeSession(db: Database, session: string): void {
+  db.transaction(() => {
+    forgetSession(db, session)
+    db.query('delete from files where session = ?').run(session)
+    db.query('delete from sessions where id = ?').run(session)
   }).immediate()
 }
 
