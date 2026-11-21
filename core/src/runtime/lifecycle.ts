@@ -332,7 +332,7 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const isInstalledCopy = async () => {
     await recording
-    if (plugin === undefined) return true
+    if (plugin === undefined || plugin.name === cmodPluginName) return true
     const recorded = await readRecord((path) => claude().fs.read(path).catch(ifMissing(undefined)), plugin.store, plugin.name)
     return recorded === undefined || recorded.root === plugin.root
   }

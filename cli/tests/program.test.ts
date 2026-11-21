@@ -115,6 +115,18 @@ test.concurrent("cmod program --no-wait beside a holder touches the holder's loc
   await first.done
 }, 60000)
 
+test.concurrent("cmod program --no-wait of a program with a service record, as a session on another copy of the mod runs it, prints held and starts no copy while the service's holder is away, so the copy never lives in a session", async () => {
+  const home = await serverHome()
+  await writeFiles(home, { '.local/share/cmod/services/demo/fake-server.json': JSON.stringify({ label: 'com.claudemodmanager.demo.fake-server', unit: join(home, 'unit.plist') }) })
+
+  const { exitCode, stdout } = await cmod(home, 'program', 'demo', '--no-wait', '--', 'fake-server')
+
+  expect(exitCode).toBe(0)
+  expect(stdout.trim()).toBe('held')
+  expect(serverIds(home, 'start')).toEqual([])
+  expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
+}, 60000)
+
 test.concurrent('the holder touches its file in the lock every 5 seconds', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'demo', '--', 'fake-server')

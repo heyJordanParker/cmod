@@ -7,6 +7,7 @@ import { ifMissing, readJson, writeAtomically } from '../files.js'
 import { placeHerdrMod } from '../herdr.js'
 import { openHistory, runningEntries } from '../history.js'
 import { answered, answeredOlderPlugin, serveSessions } from '../serve.js'
+import { isNewerCmodInstalled } from '../store.js'
 import { readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 import { webApp } from '../web.js'
 
@@ -20,7 +21,8 @@ cmod serve is the one server of this computer's Claude Code sessions. The cmod
 plugin runs it as a service of the computer, com.claudemodmanager.cmod.cmod, of
 launchd's Interactive class on macOS, because every session waits on it. It
 listens on serve.sock in the cmod store, which only you can open, and prints
-unix:<socket> once it listens.
+unix:<socket> once it listens. It exits 0 within 5 seconds of a newer cmod
+landing in the cmod store, so its service starts the newer one.
 
 On that socket it serves the cmod/Sessions interface: the reads cmod sessions
 answers, from the conversation index it keeps open, the actions on a session,
@@ -93,7 +95,7 @@ export async function serve(): Promise<number> {
   process.stdout.write(`unix:${socket}\n`)
   let page: number | undefined
   try {
-    while (!ending.signal.aborted) {
+    while (!ending.signal.aborted && !(await isNewerCmodInstalled())) {
       const isOn = parsePreferences(await readJson(preferencesPath(store)), preferencesPath(store)).servesWebUi
       if (isOn && page === undefined) page = await openPage(web, store, report)
       if (!isOn && page !== undefined) {

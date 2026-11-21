@@ -2,7 +2,8 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { cmod, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { version } from '../package.json'
+import { cmod, cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 const clients: RpcClient[] = []
 
@@ -60,6 +61,17 @@ async function servedHome(status: object = {}) {
   const stop = () => serving.child.kill()
   return { home, folder, client, act, nextHeard, stop, stopped: () => (stop(), serving.done) }
 }
+
+test.concurrent('a cmod serve older than the newest cmod installed exits 0 and takes its socket away, so its service starts the newer one', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodFromSource, [`.local/share/cmod/bin/cmod/${Number(version.split('.')[0]) + 1}.0.0/cmod`]: cmodFromSource })
+
+  const { exitCode, stdout } = await cmod(home, 'serve')
+
+  expect(exitCode).toBe(0)
+  expect(stdout).toStartWith('unix:')
+  expect(existsSync(join(home, '.local/share/cmod/serve.sock'))).toBe(false)
+}, 60000)
 
 test.concurrent("cmod serve lists each of this computer's sessions with the name and id of the device cmod device reads", async () => {
   const { home, client, stop } = await servedHome()

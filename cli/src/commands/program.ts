@@ -11,7 +11,7 @@ import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
 import { folderEnvironment, killMs, programsFolder, stopCopy } from '../program.js'
-import { removeService, startService } from '../service.js'
+import { removeService, serviceNames, startService } from '../service.js'
 import { isHolding, modLock, startTime, takeLock } from '../store.js'
 import { hasTailnetChanged, readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 
@@ -35,6 +35,8 @@ every 5 seconds, so a session can tell a live holder from a killed one. Every
 other one prints the address in that file, then each new one, and takes over
 once the holder exits. With --no-wait, another one touches the holder's file,
 prints held, and exits 0, and the session follows the instance file itself.
+A --no-wait run of a program with a service record does so with no holder too,
+because the service's own holder takes the lock back.
 The holder stops the command on SIGTERM, SIGINT, or SIGHUP, and when its parent
 process exits, and exits with the command's exit code when the command exits on
 its own. The cmod command that replaces the command's file in the store's
@@ -153,6 +155,11 @@ export async function run(argv: string[]): Promise<number> {
     } finally {
       await lock[Symbol.asyncDispose]()
     }
+  }
+  if (values['no-wait'] && (await serviceNames(mod)).includes(basename(executable))) {
+    await touchHolders(lockPath)
+    process.stdout.write('held\n')
+    return 0
   }
   const isNoWait = values['no-wait'] || values.service
   const ending = new AbortController()

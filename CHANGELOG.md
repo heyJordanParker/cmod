@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Fixed
+- `cmod serve` runs as a service on a computer where several marketplaces list cmod and a `cmod setup` recorded one of their copies. A session on another copy ran it only while the session lasted, so the computer's sessions went unreachable from your other devices.
+- `cmod serve` moves to a new cmod within 5 seconds of its download, so what a release adds to it, such as `cmod/Terminal`'s `Shown` and `Pressed`, reaches every session and program without a restart of the computer. Before, it kept running the version it started on.
+- A mod's service keeps its program after the program restarts. A session still on the mod's earlier copy could take the program over at that moment, so it ran inside that session and stopped when the session ended, until the service took it back.
+
 ## [8.2.0] - 2026-11-21
 
 ### Added

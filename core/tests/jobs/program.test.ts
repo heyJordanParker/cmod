@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
 import { defineMod } from '../../src/mod.js'
+import { engineOf } from '../../src/runtime/engine.js'
 import { providerHoldMs } from '../../src/runtime/interfaces.js'
 import { testMod } from '../../src/testing.js'
 
@@ -501,6 +502,19 @@ test('a session on a copy other than the one set up follows the running service,
   await tested.settle()
 
   expect(spawned).toEqual([])
+})
+
+test("every copy of the cmod plugin counts as the installed copy, even when a cmod setup recorded another, because Claude Code loads one cmod of the several marketplaces that list it, and its copy writes cmod serve's service, while another mod's copy the record does not name does not", async () => {
+  const recordOf = (name: string) => ({ [`/test/home/.local/share/cmod/records/${name}.json`]: JSON.stringify({ name, version: '8.2.0', root: '/test/plugins/cache/anyhost/cmod/8.2.0', installedAt: '2026-11-21T10:02:49.000Z', scriptsSha256: 'sha', uninstall: null, program: null, keys: {}, permissions: [], grantedOnUpdate: [], installedBy: null }) })
+  const copyOf = async (name: string) => {
+    let engine: ReturnType<typeof engineOf> | undefined
+    const tested = testMod(defineMod({ name, setup: (mod) => void (engine = engineOf(mod)) }), { files: recordOf(name) })
+    await tested.start()
+    return (engine as ReturnType<typeof engineOf>).isInstalledCopy()
+  }
+
+  expect(await copyOf('cmod')).toBe(true)
+  expect(await copyOf('demo')).toBe(false)
 })
 
 test('a mod with no services folder in the cmod store spawns no cmod process at its start', async () => {
