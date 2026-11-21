@@ -330,16 +330,25 @@ test("cmod serve provides cmod/Terminal ahead of every program for each session 
   await anyhost.client.request('$/providers', { interface: 'cmod/Terminal' })
   const caller = connect('boat')
 
-  const found = (await caller.mod.providers('cmod/Terminal')) as unknown as readonly { readonly mod: string; screen(session: string): Promise<string>; press(session: string, keys: string): Promise<unknown>; show(session: string, place: string): Promise<unknown> }[]
+  const found = (await caller.mod.providers('cmod/Terminal')) as unknown as readonly { readonly mod: string; screen(session: string): Promise<string>; press(session: string, keys: string): Promise<unknown>; show(session: string, place: string): Promise<unknown>; onShown(listener: (shown: unknown) => void): unknown; onPressed(listener: (pressed: unknown) => void): unknown }[]
   const [ownTerminal] = found
+  const heard: unknown[] = []
+  const shownHeard = new Promise<void>((resolve) => ownTerminal?.onShown((shown) => resolve(void heard.push(['Shown', shown]))))
+  ownTerminal?.onPressed((pressed) => void heard.push(['Pressed', pressed]))
+  await caller.client.request('$/providers', { interface: 'cmod/Terminal' })
   const screen = await ownTerminal?.screen('s1')
   await ownTerminal?.press('s1', '1\r')
   await ownTerminal?.show('s1', 'peek')
+  await shownHeard
   const elsewhere = await ownTerminal?.screen('s2').catch((error: unknown) => String(error))
 
   expect(found.map((each) => each.mod)).toEqual(['cmod', 'anyhost'])
   expect(screen).toBe('the screen of t7')
   expect(done).toEqual(['/hc.sock t7 pressed "1\\r"', 't7 shown at peek'])
+  expect(heard).toEqual([
+    ['Pressed', { session: 's1' }],
+    ['Shown', { session: 's1', place: 'peek' }],
+  ])
   expect(elsewhere).toContain('No session s2 runs in a herdr-core terminal on this computer.')
   expect(reported).toEqual([])
   await Promise.all([plugin.client.close(), anyhost.client.close(), caller.client.close()])

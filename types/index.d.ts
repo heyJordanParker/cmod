@@ -39,6 +39,7 @@ declare module 'claude-code' {
         press(session: string, keys: string): void
         show(session: string, place: 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'): void
       }
+      events: { Shown: { readonly session: string; readonly place: 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide' }; Pressed: { readonly session: string } }
     }
     'cmod/UI': {
       methods: {

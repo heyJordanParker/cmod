@@ -98,7 +98,7 @@ test("a program cmod 7 downloaded into CMOD_DATA/bin moves to CMOD_CACHE/bin at 
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(result.exitCode).toBe(0)
-  expect(await readdir(data(home))).toEqual(['bin', 'history.db'])
+  expect((await readdir(data(home))).sort()).toEqual(['bin', 'history.db'])
   expect((await readdir(data(home, 'bin'))).sort()).toEqual(['hello', 'helper'])
   expect(await readlink(data(home, 'bin/hello'))).toBe(cache(home, 'bin/hello'))
   expect(await output(data(home, 'bin/hello'))).toBe('hello 0.9.0\n')

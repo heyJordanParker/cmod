@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-11-21
+
+### Added
+- `cmod serve`'s `cmod/Terminal` tells `Shown { session, place }` after it shows a session's terminal and `Pressed { session }` after it types into one, so a program that stops idle sessions hears an agent's use of one and keeps it running.
+
 ## [8.1.0] - 2026-11-21
 
 ### Added

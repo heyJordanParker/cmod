@@ -49,6 +49,8 @@ export type TerminalPlace = 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'
 
 export const terminalPlaces: readonly TerminalPlace[] = ['focus', 'peek', 'tab', 'right', 'down', 'hide']
 
+const terminalEvents: readonly string[] = ['Shown', 'Pressed']
+
 export type SessionTerminals = {
   screen(terminal: HerdrTerminal): Promise<string>
   press(terminal: HerdrTerminal, keys: string): Promise<void>
@@ -452,11 +454,13 @@ export function routeSessions({
           press: async (session: string, keys: unknown) => {
             if (typeof keys !== 'string') throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.press takes the keys as one string, such as "1\\r".`)
             await terminals.press(heldTerminal(session), keys)
+            interfaces.emit(terminalInterface, 'Pressed', { session }, [session])
             return null
           },
           show: async (session: string, place: unknown) => {
             if (!terminalPlaces.includes(place as TerminalPlace)) throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.show takes a place: ${terminalPlaces.join(', ')}.`)
             await terminals.show(heldTerminal(session), place as TerminalPlace)
+            interfaces.emit(terminalInterface, 'Shown', { session, place }, [session])
             return null
           },
         }
@@ -466,6 +470,10 @@ export function routeSessions({
     onListen: (_connection, listening) => {
       if (listening.interface === uiInterface) {
         if (!uiEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${uiInterface} tells only Change, Redraw, Open, and Close.`)
+        return
+      }
+      if (listening.interface === terminalInterface) {
+        if (!terminalEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${terminalInterface} tells only ${terminalEvents.join(' and ')}.`)
         return
       }
       if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
