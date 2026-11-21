@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.3.0";
+var coreVersion = "8.3.1";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -4363,7 +4363,9 @@ function createProviders({ name, call, changed, after, report }) {
     answer
   };
 }
-function serveProviders({ serve, listeners, provider, tell, sessionCode, device, after, report }) {
+function serveProviders({ serve, listeners, provider, tell, sessionCode, device, after, report, changed = () => {
+  return;
+} }) {
   const implementations = {};
   const server = interfaceServer({ implementations });
   const handle = server.handler(serve);
@@ -4391,6 +4393,22 @@ ${id}`;
     return null;
   };
   const sessionListeners = sessionCodeListeners(tell, after, report);
+  const kept = new Map;
+  const listenFor = (caller, listening) => {
+    const answer = listening.program === undefined ? sessionListeners.listen(String(caller), listening) : listen(caller, listening);
+    kept.set(`${caller}
+${listening.id}`, { caller: String(caller), listen: listening });
+    changed();
+    return answer;
+  };
+  const stopListening = (caller, id) => {
+    sessionListeners.unlisten(String(caller), id);
+    unlisten(caller, id);
+    if (kept.delete(`${caller}
+${id}`))
+      changed();
+    return null;
+  };
   const ask = (name, event, payload) => askInTurn(server.listeners(name, event).filter((listening) => listening.kind === "before" && isHeardAt(listening, [], payload)).map((listening) => ({ ...listening, ask: (signal) => listening.connection.request(beforeMethod, { id: listening.id, payload }, signal) })), after, report);
   const listed = async (named) => {
     const mods = sessionCode(named);
@@ -4419,11 +4437,9 @@ ${id}`;
       if (method === interfaceMethods.provider)
         return waitForProvider(asked);
       if (method === interfaceMethods.listen)
-        return new Promise((resolve) => resolve(asked["program"] === undefined ? sessionListeners.listen(String(caller), input) : listen(caller, input)));
-      if (method === interfaceMethods.unlisten) {
-        sessionListeners.unlisten(String(caller), String(asked["id"]));
-        return Promise.resolve(unlisten(caller, String(asked["id"])));
-      }
+        return new Promise((resolve) => resolve(listenFor(caller, input)));
+      if (method === interfaceMethods.unlisten)
+        return Promise.resolve(stopListening(caller, String(asked["id"])));
       if (method === interfaceMethods.tell)
         return Promise.resolve(sessionListeners.tell(String(caller), input));
       if (method === interfaceMethods.ask)
@@ -4452,6 +4468,11 @@ ${id}`;
     },
     tell: (name, event, payload) => server.emit(name, event, payload),
     ask,
+    listened: () => [...kept.values()],
+    forget(caller) {
+      for (const each of [...kept.values()].filter((listened) => listened.caller === caller))
+        stopListening(caller, each.listen.id);
+    },
     handler(method, params, signal) {
       const isProvided = method === listenMethod || method === unlistenMethod || !method.startsWith("$/") && method.includes(".");
       return isProvided ? Promise.resolve(handle(method, params, signal)) : undefined;
@@ -6522,6 +6543,7 @@ var questionTool = "AskUserQuestion";
 var permissionPrompt = "permission prompt";
 var keptClosings = 200;
 var keptMessages = 200;
+var noneKept = { subscribed: {}, watched: {}, provided: [] };
 function serveConversations({ claude, router, store, project, report, clear, keepsConnecting = true, sessionCode = () => [], provider, tell = (caller, heard) => new Promise((resolve) => claude.clock.after(0, () => resolve(claude.cmod.call({ to: caller, method: interfaceMethods.heard, input: heard })))) }) {
   const folder = dataFolder(store, cmodPluginName);
   const goals = `${folder}/goals`;
@@ -6715,7 +6737,8 @@ function serveConversations({ claude, router, store, project, report, clear, kee
       return { id, name };
     },
     after: (ms, run) => claude.clock.after(ms, run),
-    report: (error) => report("providers", "A provider listener failed", error)
+    report: (error) => report("providers", "A provider listener failed", error),
+    changed: () => void saveListeners().catch((error) => report("listeners", "Could not keep the provider listeners of this session", error))
   });
   const others = new Map;
   const keyOf = ({ mod, program, device }) => `${device?.id ?? ""}
@@ -6827,13 +6850,14 @@ ${program ?? ""}`;
   };
   const keptOf = () => ({
     subscribed: Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)])),
-    watched: [...watched.values()].reduce((all, watch) => ({ ...all, [watch.mod]: { ...all[watch.mod], [watch.target]: watch.list } }), {})
+    watched: [...watched.values()].reduce((all, watch) => ({ ...all, [watch.mod]: { ...all[watch.mod], [watch.target]: watch.list } }), {}),
+    provided: served.listened()
   });
   const saveListeners = (isEnding = false) => {
     const at = session;
     if (at === "")
       return Promise.resolve();
-    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(isEnding ? { subscribed: {}, watched: {} } : keptOf())));
+    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(isEnding ? noneKept : keptOf())));
   };
   const restoreListeners = () => {
     const at = session;
@@ -6848,6 +6872,10 @@ ${program ?? ""}`;
           if (!watched.has(`${caller}
 ${target}`))
             watch(caller, target, list);
+      const listening = served.listened();
+      for (const { caller, listen } of read.provided ?? [])
+        if (!listening.some((each) => each.caller === caller && each.listen.id === listen.id))
+          served.answer(interfaceMethods.listen, listen, caller)?.catch((error) => report("listeners", `Could not listen again for ${caller} on ${listen.interface}`, error));
     });
   };
   const hear = (caller, id, list) => {
@@ -6867,7 +6895,9 @@ ${target}`;
       watched.set(key, { mod: caller, target, list });
   };
   const forgetMod = (mod) => {
-    const wasHeard = heard.delete(mod);
+    const wasProvided = served.listened().some((each) => each.caller === mod);
+    served.forget(mod);
+    const wasHeard = heard.delete(mod) || wasProvided;
     subscribed.delete(mod);
     clear(`changed:${mod}`);
     const wasWatching = [...watched.keys()].filter((key) => key.startsWith(`${mod}
@@ -6983,9 +7013,9 @@ ${target}`;
     });
     listenToServe();
     starting.then(reconcileTasks);
-    if (heard.size === 0 && watched.size === 0)
+    if (heard.size === 0 && watched.size === 0 && served.listened().length === 0)
       return;
-    Promise.all([previous === "" ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify({ subscribed: {}, watched: {} }))), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
+    Promise.all([previous === "" ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify(noneKept))), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
   };
   const reconcileTasks = async () => {
     if (session === "")
@@ -7053,7 +7083,7 @@ ${target}`;
     return next(e);
   });
   router.add("classic.SessionEnd", async (e, next) => {
-    if (subscribed.size > 0 || watched.size > 0)
+    if (subscribed.size > 0 || watched.size > 0 || served.listened().length > 0)
       await saveListeners(true).catch((error) => report("follow", "Left its listeners registered", error));
     return next(e);
   });
@@ -11919,6 +11949,15 @@ function program(options) {
       state = "backoff";
       claude.clock.after(wait * 1000, () => void start());
     };
+    const answer = () => {
+      if (state === "running")
+        return address === undefined ? Promise.reject(noAddress()) : Promise.resolve(address);
+      if (state === "fatal")
+        return Promise.reject(failure);
+      if (state === "stopped")
+        start();
+      return new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+    };
     announce(`the ${executable} program`);
     claude.session.surfaces().then((surfaces) => {
       if (surfaces.length > 0 && state === "stopped")
@@ -11929,13 +11968,7 @@ function program(options) {
         return state;
       },
       ready() {
-        if (state === "running")
-          return address === undefined ? Promise.reject(noAddress()) : Promise.resolve(address);
-        if (state === "fatal")
-          return Promise.reject(failure);
-        if (state === "stopped")
-          start();
-        return new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+        return state === "running" && isFollowing ? instanceFile().then(track).then(answer) : answer();
       },
       provider(name) {
         if (!isElected)
@@ -12046,7 +12079,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12544,7 +12577,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12775,7 +12808,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13097,7 +13130,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13329,7 +13362,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13359,7 +13392,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13861,7 +13894,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
