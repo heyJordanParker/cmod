@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.3.3] - 2026-11-21
+
+### Fixed
+- `cmod serve` keeps answering every session while another cmod process writes the conversation index, such as the first `cmod sessions` after an update rebuilding it. Before, serve waited for that write and refused every connection until it finished, so sessions lost their providers, devices, and actions, and the browser app stopped, for as long as an hour. Serve now reads the index on a thread of its own, and a read of the index waits for the write while everything else goes on.
+- Deleting an ended session through `cmod/Sessions` also takes its turns, contexts, tasks, and search text out of the conversation index. Before, they stayed in the index for good.
+- The browser app shows when the last turn of a session on another device ended, as it does for a session on this computer.
+
 ## [8.3.2] - 2026-11-21
 
 ### Fixed

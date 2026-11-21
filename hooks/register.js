@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.3.2";
+var coreVersion = "8.3.3";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -12098,7 +12098,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12596,7 +12596,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12827,7 +12827,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13149,7 +13149,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13381,7 +13381,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13411,7 +13411,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13913,7 +13913,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-IaYjSB/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
