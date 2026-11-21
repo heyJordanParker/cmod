@@ -361,6 +361,7 @@ test.concurrent("the browser app lists the running sessions of every other sessi
   await writeFiles(home, { '.local/share/cmod/instances/demo/sessions-server.json': other.instance })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
+  await browser.showing('app-1')
   const listed = await browser.showing('build-box-1')
   await browser.press(listed, 'row:r1', 'data-press', { kind: 'press' })
   const opened = await browser.showing('data-key="prompt:r1:0"')
