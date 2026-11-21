@@ -43,6 +43,7 @@ type FakeProvider = {
   readonly mod: string
   readonly program?: string
   readonly device?: { readonly id: string; readonly name: string }
+  readonly isStarted?: false
   readonly methods: InterfaceMethods<name>
 }
 ```
@@ -438,6 +439,7 @@ Each fake is a `Provided` ([dependencies.md](dependencies.md#interfaces-several-
 - `tell(event, payload)` tells each `onE` listener on the fake.
 - `ask(event, payload)` asks each `beforeE` listener and resolves with their answers.
 - `remove()` makes the fake leave, so `providers(name)` no longer lists it, and a call to it fails with `<mod>'s <program> program does not run, so it answers no <interface>.`
+- `start()` starts a fake listed with `isStarted: false`, which runs nothing until then, so a mod tests a provider that arrives after it starts. `cmod/Providers` tells its `Change` for a start and a `remove()` as it does in a session.
 
 Each waits until the calls and listeners the mod already sent reach the fake, so a listener the mod just added hears the next `tell`.
 

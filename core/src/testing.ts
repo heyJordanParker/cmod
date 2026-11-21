@@ -79,7 +79,7 @@ export type ShownPart = {
 export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent']; readonly pane: ShownPart; readonly view: ShownPart; readonly page: ShownPart }
 
 export type FakeProvider = {
-  readonly [Name in InterfaceName]: { readonly name: Name; readonly mod: string; readonly program?: string; readonly device?: { readonly id: string; readonly name: string }; readonly methods: InterfaceMethods<Name> }
+  readonly [Name in InterfaceName]: { readonly name: Name; readonly mod: string; readonly program?: string; readonly device?: { readonly id: string; readonly name: string }; readonly isStarted?: false; readonly methods: InterfaceMethods<Name> }
 }[InterfaceName]
 
 export type TestOptions<State extends object, Declared extends Options = Options, Given extends readonly FakeProvider[] = readonly FakeProvider[]> = {
@@ -143,7 +143,7 @@ export type TestedMod<State extends object, Given extends readonly FakeProvider[
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
   readonly shown: Shown
-  readonly providers: { readonly [Index in keyof Given]: Provided<Given[Index]['name']> }
+  readonly providers: { readonly [Index in keyof Given]: Provided<Given[Index]['name']> & { start(): void } }
 }
 
 const defaultColumns = 80
@@ -337,29 +337,46 @@ export function testMod<State extends object, Declared extends Options = Options
     after,
     report,
   })
-  const providedInSession = given.map(({ name: named, mod, program, methods }) => {
-    if (program !== undefined) return undefined
+  const inSession = (index: number) => {
+    const { name: named, mod, methods } = given[index] as FakeProvider
     const made = sessionMods.get(mod) ?? createProviders({ name: mod, call: (_to, method, input) => served.answer(method, input, mod) ?? Promise.reject(new Error(`${mod} reaches no ${method} in the test kit.`)), changed: () => undefined, after, report })
     sessionMods.set(mod, made)
     return made.provide(named, methods)
-  })
-  let fakesReady: Promise<readonly ProvidedHandle[]> | undefined
+  }
+  const asProgram = (index: number) => {
+    const { name: named, mod, program, device, methods } = given[index] as FakeProvider
+    return { name: named, mod, program: program as string, ...(device === undefined ? {} : { device }), methods }
+  }
+  const isFirst = (index: number) => given[index]?.isStarted !== false
+  const providedInSession = given.map((each, index) => (each.program === undefined && isFirst(index) ? inSession(index) : undefined))
+  const late = new Map<number, Promise<ProvidedHandle>>()
+  const startLate = (index: number) => {
+    const known = late.get(index)
+    if (known !== undefined) return known
+    const started = fakeProviders().then(async () => (given[index]?.program === undefined ? inSession(index) : ((await fake.serve.provide([asProgram(index)], { after, report }))[0] as ProvidedHandle)))
+    late.set(index, started)
+    return started
+  }
+  let fakesReady: Promise<readonly (ProvidedHandle | undefined)[]> | undefined
   const fakeProviders = () =>
     (fakesReady ??= (async () => {
-      const programs = await fake.serve.provide(
-        given.flatMap(({ name: named, mod, program, device, methods }) => (program === undefined ? [] : [{ name: named, mod, program, ...(device === undefined ? {} : { device }), methods }])),
-        { after, report },
-      )
-      let next = 0
-      return providedInSession.map((inSession) => inSession ?? (programs[next++] as ProvidedHandle))
+      const first = given.flatMap((each, index) => (each.program !== undefined && isFirst(index) ? [index] : []))
+      const programs = await fake.serve.provide(first.map(asProgram), { after, report })
+      return given.map((_each, index) => providedInSession[index] ?? (first.includes(index) ? programs[first.indexOf(index)] : undefined))
     })())
-  const fakeProvider = (index: number): ProvidedHandle => {
-    const reached = async () => {
-      const each = (await fakeProviders())[index] as ProvidedHandle
+  const fakeProvider = (index: number): ProvidedHandle & { start(): void } => {
+    const reached = async (): Promise<ProvidedHandle> => {
+      const started = late.get(index)
+      const each = (await fakeProviders())[index] ?? (started === undefined ? undefined : await started)
+      if (each === undefined) throw new Error(`The test kit's fake provider ${index} has isStarted: false, so start() it before it tells, asks, or leaves.`)
       await fake.settle()
       return each
     }
     return {
+      start: () => {
+        if (isFirst(index)) throw new Error(`The test kit's fake provider ${index} runs from the start. Give it isStarted: false to start it later.`)
+        void modeling(startLate(index).then(() => fake.settle()))
+      },
       remove: () => void modeling(reached().then((each) => each.remove())),
       tell: (event, payload) => void modeling(reached().then((each) => each.tell(event, payload))),
       ask: (event, payload) => modeling(reached().then((each) => each.ask(event, payload))),

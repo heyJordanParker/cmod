@@ -5,7 +5,7 @@ import { coreVersion } from '../../src/records.js'
 import { serveCmodPlugin } from '../../src/register.js'
 import type { Claude } from '../../src/runtime/claude.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
-import { interfaceListeners, interfaceServer, listeningOf, methodName, sessionsInterface, uiInterface } from '../../src/runtime/interfaces.js'
+import { interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, sessionsInterface, uiInterface } from '../../src/runtime/interfaces.js'
 import { createLifecycle, type Lifecycle } from '../../src/runtime/lifecycle.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes } from '../../src/runtime/rpc.js'
@@ -650,6 +650,38 @@ test('a cmod plugin that restarts mid-session keeps asking and telling the mods 
   ])
 })
 
+test("a cmod plugin that restarts mid-session keeps telling a mod what the providers it listened to tell, until the mod stops listening", async () => {
+  const disk = fakeFiles({})
+  const plugin = async () => {
+    const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+    const router = createRouter()
+    const heard: unknown[] = []
+    fake.fakes.fs = disk
+    fake.fakes.process.spawn = () => printed('[]')
+    fake.fakes.cmod.call = async ({ to, method, input }) => (method === interfaceMethods.heard && heard.push({ to, input }), null)
+    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {}, sessionCode: (name) => (name === 'other/Thing' ? ['other'] : []) })
+    await router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'resume' } as never, async () => ({}))
+    const call = (method: string, input: unknown, caller: string) => served.answer({ to: 'cmod', method, input, caller })
+    return { fake, heard, call }
+  }
+  const before = await plugin()
+  await before.call(interfaceMethods.listen, { id: 'other/Thing#1', interface: 'other/Thing', kind: 'on', event: 'Change', mod: 'other' }, 'demo')
+  await before.fake.settle()
+
+  const after = await plugin()
+  await after.fake.settle()
+  await after.call(interfaceMethods.tell, { interface: 'other/Thing', event: 'Change', payload: { count: 1 } }, 'other')
+  await after.fake.settle()
+  await after.call(interfaceMethods.unlisten, { id: 'other/Thing#1' }, 'demo')
+  const again = await plugin()
+  await again.fake.settle()
+  await again.call(interfaceMethods.tell, { interface: 'other/Thing', event: 'Change', payload: { count: 2 } }, 'other')
+  await again.fake.settle()
+
+  expect(after.heard).toEqual([{ to: 'demo', input: { id: 'other/Thing#1', payload: { count: 1 } } }])
+  expect(again.heard).toEqual([])
+})
+
 test("a cmod plugin that restarts after a mod listened again reads every saved listener back whole, and keeps them all", async () => {
   const disk = fakeFiles({})
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -701,7 +733,7 @@ test("a cmod plugin that restarts after a mod listened again reads every saved l
   })
   const prompts = { 'test-session': [{ event: 'prompt' }] }
   const compactions = { 'test-session': [{ event: 'contextEnd' }] }
-  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: prompts, other: prompts }, watched: { demo: compactions, other: compactions } })
+  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: prompts, other: prompts }, watched: { demo: compactions, other: compactions }, provided: [] })
 })
 
 test("one compaction of a task moves its context once, and one of the session moves the session's once", async () => {
@@ -782,7 +814,7 @@ test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and a
 
   expect(reported).toEqual([])
   expect(asked).toEqual(['demo', 'demo'])
-  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/mine.json'))).toEqual({ subscribed: {}, watched: {} })
+  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/mine.json'))).toEqual({ subscribed: {}, watched: {}, provided: [] })
 })
 
 test('a mod that left the session is told of a change once, quietly, and its listeners go with it', async () => {

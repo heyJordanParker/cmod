@@ -113,7 +113,7 @@ An interface is named `<mod>/<Name>`, after the mod that defines it, such as `de
 
 - `cmod/Style` draws Markdown in a mod's own style. Every mod with a Markdown style provides it, with no `provide` call ([ui.md](ui.md#styles-change-how-claude-code-draws)).
 
-The mod that defines an interface types it in its types file, on `CmodInterfaces`, with its methods and the events it tells:
+`@cmodjs/core` types cmod's own interfaces, so they type-check in every mod. The mod that defines any other interface types it in its types file, on `CmodInterfaces`, with its methods and the events it tells:
 
 ```ts
 declare module 'claude-code' {

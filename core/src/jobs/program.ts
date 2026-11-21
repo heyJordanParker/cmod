@@ -199,6 +199,13 @@ export function program(options: {
       claude.clock.after(wait * 1000, () => void start())
     }
 
+    const answer = (): Promise<Address> => {
+      if (state === 'running') return address === undefined ? Promise.reject(noAddress()) : Promise.resolve(address)
+      if (state === 'fatal') return Promise.reject(failure)
+      if (state === 'stopped') void start()
+      return new Promise((resolve, reject) => waiting.push({ resolve, reject }))
+    }
+
     announce(`the ${executable} program`)
     void claude.session.surfaces().then((surfaces) => {
       if (surfaces.length > 0 && state === 'stopped') void start()
@@ -209,10 +216,7 @@ export function program(options: {
         return state
       },
       ready() {
-        if (state === 'running') return address === undefined ? Promise.reject(noAddress()) : Promise.resolve(address)
-        if (state === 'fatal') return Promise.reject(failure)
-        if (state === 'stopped') void start()
-        return new Promise((resolve, reject) => waiting.push({ resolve, reject }))
+        return state === 'running' && isFollowing ? instanceFile().then(track).then(answer) : answer()
       },
       provider<Name extends InterfaceName>(name: Name) {
         if (!isElected) return Promise.reject(new Error(`${mod.name}: provider(${name}) needs the ${executable} program to run as singleInstance or isService, because only one copy of a program can provide an interface.`))

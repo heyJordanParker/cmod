@@ -120,6 +120,17 @@ test("a new mod's tests pass the type check", async () => {
   expect(result).toEqual({ output: '', exitCode: 0 })
 })
 
+test("a new mod type-checks every interface cmod serve provides, with nothing beside it but Claude Code's own types", async () => {
+  const root = await copyOfNewMod()
+  await writeFiles(root, {
+    'src/watch.ts': "import { providers } from '@cmodjs/core/mod.js'\n\nexport async function watchRules(heard: (name: string) => void): Promise<void> {\n  const [watch] = await providers('cmod/Providers')\n  watch?.onChange({ interface: 'cmod/Sessions' }, (change) => heard(`${change.interface} on ${change.device.name}`))\n  const [terminal] = await providers('cmod/Terminal')\n  await terminal?.show('s1', 'tab')\n}\n",
+  })
+
+  const result = await typeCheck(root)
+
+  expect(result).toEqual({ output: '', exitCode: 0 })
+})
+
 test("a new mod's type check fails on a test that misuses expect", async () => {
   const root = await copyOfNewMod()
   await writeFiles(root, { 'tests/count.test.ts': "import { expect, test } from 'bun:test'\n\ntest('a count is a number', () => {\n  expect(1).toBe('one')\n})\n" })

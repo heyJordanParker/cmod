@@ -1068,6 +1068,52 @@ test("testMod's fake provider with no program is another mod's session code: it 
   expect(await heard).toBe('eu-2')
 })
 
+test("testMod's fake provider with isStarted: false starts when the test calls start(), so a mod hears it arrive through cmod/Providers and reaches it", async () => {
+  const heard: string[] = []
+  const answers: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      async setup() {
+        const [watch] = await providers('cmod/Providers')
+        watch?.onChange({ interface: 'demo/Echo' }, async (change) => {
+          heard.push(`${change.interface} on ${change.device.name}`)
+          for (const echo of await providers('demo/Echo')) answers.push(await echo.echo('ping'))
+        })
+      },
+    }),
+    { providers: [{ name: 'demo/Echo', mod: 'rulebook', program: 'rules', isStarted: false, methods: { echo: (text: string) => `rules heard ${text}` } }] },
+  )
+  await tested.start()
+  const before = await providers('demo/Echo')
+
+  tested.providers[0].start()
+  await tested.settle()
+
+  expect(before).toEqual([])
+  expect(heard).toEqual(['demo/Echo on test-computer'])
+  expect(answers).toEqual(['rules heard ping'])
+})
+
+test("testMod's fake provider on another device that starts later joins the devices already reached, and the first device stays", async () => {
+  const devbox = { id: 'devbox-id', name: 'devbox' }
+  const laptop = { id: 'laptop-id', name: 'laptop' }
+  const tested = testMod(defineMod({ name: 'modes', setup() {} }), {
+    providers: [
+      { name: 'demo/Echo', mod: 'demo', program: 'echo', device: devbox, methods: { echo: (text: string) => `devbox heard ${text}` } },
+      { name: 'demo/Echo', mod: 'demo', program: 'echo', device: laptop, isStarted: false, methods: { echo: (text: string) => `laptop heard ${text}` } },
+    ],
+  })
+  await tested.start()
+
+  tested.providers[1].start()
+  await tested.settle()
+  const found = await providers('demo/Echo')
+
+  expect(found.map((each) => each.device.name).sort()).toEqual(['devbox', 'laptop'])
+  expect((await Promise.all(found.map((each) => each.echo('ping')))).sort()).toEqual(['devbox heard ping', 'laptop heard ping'])
+})
+
 test("testMod refuses a fake session-code provider on another device, with the program to give instead", () => {
   expect(() => testMod(defineMod({ name: 'notes', setup: () => undefined }), { providers: [{ name: 'demo/Echo', mod: 'boat', device: devboxDevice, methods: { echo: (text) => text } }] })).toThrow(
     "boat's session code provides demo/Echo only in this session, on this computer, so it takes no device. Give the program that provides it on devbox, with program: '<executable>'.",

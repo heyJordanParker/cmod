@@ -55,6 +55,8 @@ export function fakeServe(
 ): FakeServe {
   const answer = <Key extends keyof SessionComputer>(key: Key): SessionComputer[Key] => (fakes()[key] ?? unfaked[key])
   const linked = new Map<string, FakeServe>()
+  const reached = new Map<string, Here>()
+  let devices: Provided | undefined
   let requests = 0
   const routing = routeSessions({
     device,
@@ -93,8 +95,11 @@ export function fakeServe(
     async provide(given, connection) {
       if (given.length === 0) return []
       const here = await device()
-      const others = new Map(given.flatMap(({ device: on }) => (on === undefined || on.id === here.id ? [] : [[on.id, on] as const])))
-      for (const on of others.values()) if (!linked.has(socketOf(on.id))) linked.set(socketOf(on.id), fakeServe(() => ({}), { device: async () => on, clock }))
+      const added = new Map(given.flatMap(({ device: on }) => (on === undefined || on.id === here.id || reached.has(on.id) ? [] : [[on.id, on] as const])))
+      for (const on of added.values()) {
+        reached.set(on.id, on)
+        linked.set(socketOf(on.id), fakeServe(() => ({}), { device: async () => on, clock }))
+      }
       const provided = await Promise.all(
         given.map(async ({ name, mod, program, device: on, methods }) => {
           const { client, served } = connectTo((on === undefined ? undefined : linked.get(socketOf(on.id))) ?? serve, { ...connection, provider: { mod, program } })
@@ -103,10 +108,14 @@ export function fakeServe(
           return each
         }),
       )
-      if (others.size === 0) return provided
+      if (added.size === 0) return provided
+      if (devices !== undefined) {
+        for (const on of added.keys()) devices.tell('Change', { device: on })
+        return provided
+      }
       const { client, served } = connectTo(serve, { ...connection, provider: deviceLink })
-      served.provide(devicesInterface, {
-        devices: () => [...others.values()].map(({ id, name }) => ({ id, name, address: socketOf(id) })),
+      devices = served.provide(devicesInterface, {
+        devices: () => [...reached.values()].map(({ id, name }) => ({ id, name, address: socketOf(id) })),
         send: (to: string) => {
           throw new Error(`The test kit reaches device ${to} at its address, so it carries no message.`)
         },

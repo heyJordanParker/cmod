@@ -1113,7 +1113,11 @@ export function createProviders({ name, call, changed, after, report }: { readon
   }
 }
 
+export type KeptListen = { readonly caller: string; readonly listen: ProvidedListen }
+
 export type ServedProviders = {
+  listened(): readonly KeptListen[]
+  forget(caller: string): void
   answer(method: string, input: unknown, caller: string | undefined): Promise<unknown> | undefined
   provide(name: string, methods: Implementation): Provided
   tell(name: string, event: string, payload: unknown): void
@@ -1131,8 +1135,10 @@ export function serveProviders({
   device,
   after,
   report,
+  changed = () => undefined,
 }: {
   readonly serve: Pick<Peer, 'request' | 'notify'>
+  readonly changed?: () => void
   readonly listeners: InterfaceListeners
   readonly provider?: ProviderIdentity
   readonly tell: (caller: string, heard: ProvidedHeard, signal: AbortSignal) => Promise<unknown>
@@ -1164,6 +1170,19 @@ export function serveProviders({
     return null
   }
   const sessionListeners = sessionCodeListeners(tell, after, report)
+  const kept = new Map<string, KeptListen>()
+  const listenFor = (caller: string | undefined, listening: ProvidedListen) => {
+    const answer = listening.program === undefined ? sessionListeners.listen(String(caller), listening) : listen(caller, listening)
+    kept.set(`${caller}\n${listening.id}`, { caller: String(caller), listen: listening })
+    changed()
+    return answer
+  }
+  const stopListening = (caller: string | undefined, id: string) => {
+    sessionListeners.unlisten(String(caller), id)
+    unlisten(caller, id)
+    if (kept.delete(`${caller}\n${id}`)) changed()
+    return null
+  }
   const ask = (name: string, event: string, payload: unknown) =>
     askInTurn(
       server.listeners(name, event).filter((listening) => listening.kind === 'before' && isHeardAt(listening, [], payload)).map((listening) => ({ ...listening, ask: (signal: AbortSignal) => listening.connection.request(beforeMethod, { id: listening.id, payload } satisfies Heard, signal) })),
@@ -1193,11 +1212,8 @@ export function serveProviders({
       const asked = isObject(input) ? input : {}
       if (method === interfaceMethods.providers) return listed(String(asked['name']))
       if (method === interfaceMethods.provider) return waitForProvider(asked)
-      if (method === interfaceMethods.listen) return new Promise((resolve) => resolve(asked['program'] === undefined ? sessionListeners.listen(String(caller), input as ProvidedListen) : listen(caller, input as ProvidedListen)))
-      if (method === interfaceMethods.unlisten) {
-        sessionListeners.unlisten(String(caller), String(asked['id']))
-        return Promise.resolve(unlisten(caller, String(asked['id'])))
-      }
+      if (method === interfaceMethods.listen) return new Promise((resolve) => resolve(listenFor(caller, input as ProvidedListen)))
+      if (method === interfaceMethods.unlisten) return Promise.resolve(stopListening(caller, String(asked['id'])))
       if (method === interfaceMethods.tell) return Promise.resolve(sessionListeners.tell(String(caller), input as ProvidedTell))
       if (method === interfaceMethods.ask) return sessionListeners.ask(String(caller), input as ProvidedTell)
       const call = asked as Partial<ProvidedCall>
@@ -1221,6 +1237,10 @@ export function serveProviders({
     },
     tell: (name, event, payload) => server.emit(name, event, payload),
     ask,
+    listened: () => [...kept.values()],
+    forget(caller) {
+      for (const each of [...kept.values()].filter((listened) => listened.caller === caller)) stopListening(caller, each.listen.id)
+    },
     handler(method, params, signal) {
       const isProvided = method === listenMethod || method === unlistenMethod || (!method.startsWith('$/') && method.includes('.'))
       return isProvided ? Promise.resolve(handle(method, params, signal)) : undefined

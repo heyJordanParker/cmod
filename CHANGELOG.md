@@ -4,6 +4,16 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.3.1] - 2026-11-21
+
+### Fixed
+- `cmod/Providers`, `cmod/Sessions`, `cmod/Devices`, `cmod/Terminal`, and `cmod/UI` type-check in every mod: `@cmodjs/core` declares them. Before, `cmod check` gave a mod none of them, so `providers('cmod/Providers')` failed its type check.
+- A mod keeps hearing the providers it listens to after the cmod plugin restarts by itself, as `/reload-plugins` does after a cmod update. Before, the restart dropped every provider listener until the mod restarted too.
+- `ready()` of a program another session holds never answers with the address of a copy that already exited: it reads the instance file again first, and waits for the new copy when the file is gone. Before, a call right after the copy stopped could reach its closed socket.
+
+### Added
+- The test kit starts a fake provider listed with `isStarted: false` when the test calls its `start()`, so a mod tests a provider that arrives after it, and hears its `cmod/Providers` `Change`.
+
 ## [8.3.0] - 2026-11-21
 
 ### Added

@@ -2031,7 +2031,7 @@ test('the cmod plugin takes what a mod listens to while it installs, and serves 
   bootstrap.exit(0)
   await fake.settle()
 
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: { demo: { 'test-session': watches } } })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: { demo: { 'test-session': watches } }, provided: [] })
 })
 
 test('the cmod plugin answers what a mod listens to at once while its own setup still runs, so the caller spends none of its 10 s hook budget waiting', async () => {
@@ -2055,7 +2055,7 @@ test('the cmod plugin answers what a mod listens to at once while its own setup 
   await fake.settle()
 
   expect(lifecycle.phase).toBe('active')
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: {} })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: {}, provided: [] })
 })
 
 test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {

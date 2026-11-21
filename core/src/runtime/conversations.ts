@@ -16,7 +16,7 @@ import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import { MissingMachineId } from './device.js'
-import { interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type ProvidedHeard, type ProviderIdentity, type StoreChange, type HeldSession } from './interfaces.js'
+import { interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type KeptListen, type ProvidedHeard, type ProviderIdentity, type StoreChange, type HeldSession } from './interfaces.js'
 import { runCmod } from './programs.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from './rpc.js'
 import type { RoutedHook, Router } from './router.js'
@@ -64,7 +64,9 @@ const keptClosings = 200
 
 const keptMessages = 200
 
-type Kept = { readonly subscribed: Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>; readonly watched: Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>> }
+type Kept = { readonly subscribed: Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>; readonly watched: Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>; readonly provided?: readonly KeptListen[] }
+
+const noneKept: Kept = { subscribed: {}, watched: {}, provided: [] }
 
 type Registered = { remove(): void }
 
@@ -274,6 +276,7 @@ export function serveConversations({
     },
     after: (ms, run) => claude.clock.after(ms, run),
     report: (error) => report('providers', 'A provider listener failed', error),
+    changed: () => void saveListeners().catch((error: unknown) => report('listeners', 'Could not keep the provider listeners of this session', error)),
   })
 
   const others = new Map<string, OtherProvider>()
@@ -388,12 +391,13 @@ export function serveConversations({
   const keptOf = (): Kept => ({
     subscribed: Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)])),
     watched: [...watched.values()].reduce<Record<string, Record<string, readonly Listened[]>>>((all, watch) => ({ ...all, [watch.mod]: { ...all[watch.mod], [watch.target]: watch.list } }), {}),
+    provided: served.listened(),
   })
 
   const saveListeners = (isEnding = false) => {
     const at = session
     if (at === '') return Promise.resolve()
-    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(isEnding ? ({ subscribed: {}, watched: {} } satisfies Kept) : keptOf())))
+    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(isEnding ? noneKept : keptOf())))
   }
 
   const restoreListeners = () => {
@@ -402,6 +406,8 @@ export function serveConversations({
       const read = JSON.parse(await claude.fs.read(`${listeners}/${at}.json`).catch(ifMissing('{}'))) as Partial<Kept>
       for (const [caller, lists] of Object.entries(read.subscribed ?? {})) if (!subscribed.has(caller)) for (const [id, list] of Object.entries(lists)) hear(caller, id, list)
       for (const [caller, targets] of Object.entries(read.watched ?? {})) for (const [target, list] of Object.entries(targets)) if (!watched.has(`${caller}\n${target}`)) watch(caller, target, list)
+      const listening = served.listened()
+      for (const { caller, listen } of read.provided ?? []) if (!listening.some((each) => each.caller === caller && each.listen.id === listen.id)) void served.answer(interfaceMethods.listen, listen, caller)?.catch((error: unknown) => report('listeners', `Could not listen again for ${caller} on ${listen.interface}`, error))
     })
   }
 
@@ -421,7 +427,9 @@ export function serveConversations({
   }
 
   const forgetMod = (mod: string) => {
-    const wasHeard = heard.delete(mod)
+    const wasProvided = served.listened().some((each) => each.caller === mod)
+    served.forget(mod)
+    const wasHeard = heard.delete(mod) || wasProvided
     subscribed.delete(mod)
     clear(`changed:${mod}`)
     const wasWatching = [...watched.keys()].filter((key) => key.startsWith(`${mod}\n`))
@@ -548,8 +556,8 @@ export function serveConversations({
     listening = Promise.all([restored, holding]).then(() => undefined)
     listenToServe()
     void starting.then(reconcileTasks)
-    if (heard.size === 0 && watched.size === 0) return
-    void Promise.all([previous === '' ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify({ subscribed: {}, watched: {} } satisfies Kept))), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
+    if (heard.size === 0 && watched.size === 0 && served.listened().length === 0) return
+    void Promise.all([previous === '' ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify(noneKept))), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
   }
 
   const reconcileTasks = async () => {
@@ -613,7 +621,7 @@ export function serveConversations({
     return next(e)
   })
   router.add('classic.SessionEnd', async (e, next) => {
-    if (subscribed.size > 0 || watched.size > 0) await saveListeners(true).catch((error: unknown) => report('follow', 'Left its listeners registered', error))
+    if (subscribed.size > 0 || watched.size > 0 || served.listened().length > 0) await saveListeners(true).catch((error: unknown) => report('follow', 'Left its listeners registered', error))
     return next(e)
   })
 

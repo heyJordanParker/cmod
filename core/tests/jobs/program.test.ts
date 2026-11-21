@@ -341,6 +341,36 @@ test("a following session starts cmod program once the holder's instance file is
   expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/next.sock' })
 })
 
+test("a following session's ready() reads the instance file again, so it never answers with the address of a copy whose holder removed the file, before the file watch notices", async () => {
+  let starts = 0
+  const { tested, ready } = preview(
+    () => {
+      starts += 1
+      return starts === 1 ? written([{ stream: 'stdout', text: 'held\n' }], true) : written([{ stream: 'stdout', text: 'unix:/tmp/next.sock\n' }], false)
+    },
+    true,
+    heldCopy,
+  )
+  tested.fakes.clock.every = () => ({ cancel: () => undefined })
+  tested.fakes.clock.after = (_ms, fn) => {
+    fn()
+    return { cancel: () => undefined }
+  }
+  const started = await ready()
+  const before = await started.ready()
+  const read = tested.fakes.fs.read
+  tested.fakes.fs.read = async (path) => {
+    if (path === instanceFile) throw new Error(`ENOENT: no such file, read '${path}'`)
+    return (read as NonNullable<typeof read>)(path)
+  }
+
+  const after = await started.ready()
+
+  expect(before).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
+  expect(after).toEqual({ url: 'http://localhost', socketPath: '/tmp/next.sock' })
+  expect(starts).toBe(2)
+})
+
 test('an isService program asks cmod program --service for the computer-wide copy, and ready() resolves the address the service wrote to the instance file', async () => {
   const spawned: ProcessSpawnRequest[] = []
   let handle: Program | undefined
