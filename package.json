@@ -12,6 +12,6 @@
   },
   "files": ["cli/bin/cmod", "cli/package.json", "hooks", "rules", "setup", "src", "types/index.d.ts"],
   "dependencies": {
-    "@cmodjs/core": "^8.3.2"
+    "@cmodjs/core": "^8.3.3"
   }
 }
