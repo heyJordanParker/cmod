@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-11-21
+
+### Added
+- Every message names the agent it belongs to in `agentType`: a task's message its task's agent, such as `Explore`, and a session's own message the agent the session runs, as `claude --agent` starts one. A `beforePrompt` listener hears it on a task's first prompt too, so it knows which agent a prompt starts without waiting for `onTaskStart`. `cmod sessions list` and `cmod/Sessions` `sessions` name a session's `agentType` as well.
+- `cmod serve` provides `cmod/Providers`, which tells a `Change { interface, device }` each time a provider of an interface starts or stops on this computer or a device it reaches. A mod or program that waits for another mod's provider listens with `onChange({ interface })` and calls `providers(name)` again, instead of polling.
+- Every session and task owner names its conversation file in `transcriptPath`, the file Claude Code writes, and a task owner its own file in the session's `subagents` folder.
+- A `beforePermissionCheck` listener answers a `note`, alone or with `allow`, `ask`, or `refuse`, and Claude reads it with the result of the call it checked, as it reads a `beforeToolCall` note.
+- The turn `beforeTurnEnd` hears has `isAfterRefusal: true` at each stop that follows a refusal, so a listener can let the agent stop the second time instead of refusing it for good.
+
+### Fixed
+- A session that asks `cmod serve` something while `cmod serve` starts again gets its answer from the new `cmod serve`: a request the old one never received goes out again once the session connects again. Before, it failed, so a session resumed at that moment started without its earlier turns and lost its color.
+- `cmod serve` runs as a service on a computer where several marketplaces list cmod and a `cmod setup` recorded one of their copies. A session on another copy ran it only while the session lasted, so the computer's sessions went unreachable from your other devices.
+- `cmod serve` moves to a new cmod within 5 seconds of its download, so what a release adds to it, such as `cmod/Terminal`'s `Shown` and `Pressed`, reaches every session and program without a restart of the computer. Before, it kept running the version it started on.
+- A mod's service keeps its program after the program restarts. A session still on the mod's earlier copy could take the program over at that moment, so it ran inside that session and stopped when the session ended, until the service took it back.
+
 ## [8.2.0] - 2026-11-21
 
 ### Added

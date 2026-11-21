@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.2.0";
+var coreVersion = "8.3.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -1194,6 +1194,12 @@ function tasksWithAgents(tasks, agents) {
     return agent === undefined ? task : { ...task, status: agent.status, ...agent.name === undefined ? {} : { name: agent.name }, ...agent.spawnedBy === undefined ? {} : { spawnedBy: agent.spawnedBy } };
   });
 }
+function placedMessage(where, unplaced, task, isInTurn = true, agentType = task === undefined ? where.agentType : where.tasks[task]?.agentType) {
+  const turn = isInTurn ? task === undefined ? where.turn : where.taskTurns[task] : undefined;
+  const context = task === undefined ? where.context : where.tasks[task]?.context ?? where.context;
+  const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined;
+  return { ...unplaced, ...call, session: where.session, context, ...turn === undefined ? {} : { turn: turn.prompt.id }, ...task === undefined ? {} : { task }, ...agentType === undefined ? {} : { agentType } };
+}
 var searchLimit = 50;
 var agentTools = ["Agent", "Task"];
 var asyncLaunch = "Async agent launched";
@@ -1201,7 +1207,7 @@ function emptyConversation(session) {
   return { session, context: 0, contextOpenedAt: "", agentCalls: [], endedCalls: {}, tasks: {}, taskTurns: {} };
 }
 function createConversation(start) {
-  let { context, contextOpenedAt, turn, goal, device } = start;
+  let { agentType, context, contextOpenedAt, turn, goal, device } = start;
   const agentCalls = new Set(start.agentCalls);
   const endedCalls = new Map(Object.entries(start.endedCalls));
   const tasks = new Map(Object.entries(start.tasks));
@@ -1270,13 +1276,15 @@ function createConversation(start) {
         return [...changes, ...task === undefined ? [...endContext(row.at), ...startContext(row.at)] : compactTask(task, row.at)];
       const owner = task === undefined ? undefined : tasks.get(task);
       const placedIn = owner?.context ?? context;
+      const agent = task === undefined ? agentType : owner?.agentType;
+      const ofAgent = agent === undefined ? {} : { agentType: agent };
       for (const unplaced of messagesOf(row, task !== undefined)) {
         if (task === undefined && unplaced.type === Note)
           device = deviceOf(unplaced) ?? device;
         if (unplaced.type === Prompt) {
           changes.push(...task === undefined ? endTurn(row.at) : endTaskTurn(task, row.at));
           const ranOn = task === undefined ? device : owner?.device;
-          const opened = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...task === undefined ? {} : { task } }, context: placedIn, openedAt: row.at, ...owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }, ...ranOn === undefined ? {} : { device: ranOn } };
+          const opened = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...task === undefined ? {} : { task }, ...ofAgent }, context: placedIn, openedAt: row.at, ...owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }, ...ranOn === undefined ? {} : { device: ranOn } };
           if (task === undefined)
             turn = opened;
           else
@@ -1297,7 +1305,8 @@ function createConversation(start) {
           session: start.session,
           context: placedIn,
           ...open === undefined ? {} : { turn: open.prompt.id },
-          ...task === undefined ? {} : { task }
+          ...task === undefined ? {} : { task },
+          ...ofAgent
         };
         changes.push({ type: Message, message: placed });
         if (placed.type === ToolCall && agentTools.includes(placed.name))
@@ -1335,9 +1344,13 @@ function createConversation(start) {
     startContext,
     endTurn: (at, ending, task) => task === undefined ? endTurn(at, ending) : endTaskTurn(task, at, ending),
     changeGoal,
+    changeAgentType(next) {
+      agentType = next;
+    },
     get state() {
       return {
         session: start.session,
+        ...agentType === undefined ? {} : { agentType },
         context,
         contextOpenedAt,
         ...turn === undefined ? {} : { turn },
@@ -3361,12 +3374,7 @@ function installBefore({ claude, router, hooks }) {
   const { place, wants, fold, failedBefore } = hooks;
   const now = () => new Date().toISOString();
   const asked = async (event, change, decide) => await decide(event, change) ?? {};
-  const message = (where, unplaced, task, isInTurn = true) => {
-    const turn = isInTurn ? task === undefined ? where.turn : where.taskTurns[task] : undefined;
-    const context = task === undefined ? where.context : where.tasks[task]?.context ?? where.context;
-    const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined;
-    return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...turn === undefined ? {} : { turn: turn.prompt.id }, ...task === undefined ? {} : { task } } };
-  };
+  const message = (where, unplaced, task, isInTurn = true, agentType) => ({ type: Message, message: placedMessage(where, unplaced, task, isInTurn, agentType ?? (task === undefined ? where.agentType : where.tasks[task]?.agentType)) });
   const submitted = (e) => (where) => message(where, { id: "", at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false);
   const received = (e) => (where) => message(where, { id: "", at: now(), type: Prompt, text: e.text, from: { type: "session" } }, e.agentId, false);
   const refusedOnFailure = (event, change, error, next) => next.called ? undefined : failedBefore(event, change, error)?.refuse;
@@ -3383,7 +3391,7 @@ function installBefore({ claude, router, hooks }) {
     const task = e.agentId === undefined ? undefined : where.tasks[e.agentId];
     return e.agentId !== undefined && task === undefined ? undefined : { type: ContextEnd, context: closingContext(where, task, now()) };
   };
-  const turnEnded = (turn) => turn === undefined ? undefined : { type: TurnEnd2, turn: { ...turn, closedAt: now() } };
+  const turnEnded = (turn, isAfterRefusal = false) => turn === undefined ? undefined : { type: TurnEnd2, turn: { ...turn, closedAt: now(), ...isAfterRefusal ? { isAfterRefusal } : {} } };
   const titles = new Map;
   const spawned = new Map;
   const startedBy = new Map;
@@ -3581,7 +3589,7 @@ function installBefore({ claude, router, hooks }) {
       const text = open?.text ?? prompt;
       if (text === undefined)
         return next(e);
-      const answer = await asked(Prompt, message(where, { id: open?.id ?? "", at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false), fold(next.signal));
+      const answer = await asked(Prompt, message(where, { id: open?.id ?? "", at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false, where.tasks[e.agent_id]?.agentType ?? e.agent_type), fold(next.signal));
       return withNote(await next(e), answer.note);
     }),
     router.add("classic.SubagentStop", async (e, next) => {
@@ -3592,25 +3600,25 @@ function installBefore({ claude, router, hooks }) {
       };
       if (next.signal.aborted || !await wants(TurnEnd2))
         return stopped(await next(e));
-      const change = turnEnded((await place()).taskTurns[e.agent_id]);
+      const change = turnEnded((await place()).taskTurns[e.agent_id], e.stop_hook_active);
       if (change === undefined)
         return stopped(await next(e));
       const answer = await askedAtStop(change, next.signal);
       return stopped(answeredStop(await next(e), answer, next.signal));
     }, async (e, error, next) => {
-      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.taskTurns[e.agent_id]), error, next);
+      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.taskTurns[e.agent_id], e.stop_hook_active), error, next);
       return refusal === undefined ? undefined : { ...await next(e), block: refusal };
     }),
     router.add("classic.Stop", async (e, next) => {
       if (next.signal.aborted || !await wants(TurnEnd2))
         return next(e);
-      const change = turnEnded((await place()).turn);
+      const change = turnEnded((await place()).turn, e.stop_hook_active);
       if (change === undefined)
         return next(e);
       const answer = await askedAtStop(change, next.signal);
       return answeredStop(await next(e), answer, next.signal);
     }, async (e, error, next) => {
-      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.turn), error, next);
+      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.turn, e.stop_hook_active), error, next);
       return refusal === undefined ? undefined : { ...await next(e), block: refusal };
     }),
     router.add("session.compact", async (e, next) => {
@@ -3931,6 +3939,7 @@ function errorDataOf(error) {
 var rpcPath = "/rpc";
 class RpcUnreached extends Error {
 }
+var goneStatus = 410;
 function isConnectionGone(error) {
   return error instanceof RpcUnreached || error instanceof RpcError && error.code === rpcCodes.closed;
 }
@@ -3948,41 +3957,46 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
   let isClosed = false;
   let queued = [];
   let flushing;
-  const flush = (id, peer) => {
+  const asked = (messages) => messages.flatMap((message) => ("method" in message) && ("id" in message) ? [message.id] : []);
+  const flush = (link) => {
     flushing ??= (async () => {
       await Promise.resolve();
-      while (queued.length > 0 && current?.id === id) {
+      while (queued.length > 0 && current === link) {
         const batch = queued;
         queued = [];
-        const answer = await call(`${rpcPath}/${id}`, { method: "POST", body: JSON.stringify(batch) }).catch((error) => ({ status: 0, text: String(error) }));
+        const answer = await call(`${rpcPath}/${link.id}`, { method: "POST", body: JSON.stringify(batch) }).catch((error) => ({ status: 0, text: String(error) }));
         if (answer.status !== 204) {
-          lose(id, peer, new RpcUnreached(`cmod serve answered ${answer.status}: ${answer.text}`));
+          if (answer.status === goneStatus)
+            for (const id of asked(batch))
+              link.undelivered.add(id);
+          lose(link, new RpcUnreached(`cmod serve answered ${answer.status}: ${answer.text}`));
           return;
         }
       }
     })().finally(() => {
       flushing = undefined;
-      if (queued.length > 0 && current?.id === id)
-        flush(id, peer);
+      if (queued.length > 0 && current === link)
+        flush(link);
     });
   };
-  const lose = (id, peer, reason) => {
-    if (current?.id !== id)
+  const lose = (link, reason) => {
+    if (current !== link)
       return;
     current = undefined;
+    for (const id of asked(queued))
+      link.undelivered.add(id);
     queued = [];
-    peer.close(reason);
+    link.peer.close(reason);
     reconnect();
   };
-  const isCurrent = (id) => current?.id === id;
-  const pollLoop = async (id, peer) => {
-    while (isCurrent(id) && !isClosed) {
-      const answer = await call(`${rpcPath}/${id}`, { method: "GET" }).catch((error) => ({ status: 0, text: String(error) }));
-      if (!isCurrent(id))
+  const pollLoop = async (link) => {
+    while (current === link && !isClosed) {
+      const answer = await call(`${rpcPath}/${link.id}`, { method: "GET" }).catch((error) => ({ status: 0, text: String(error) }));
+      if (current !== link)
         return;
       if (answer.status !== 200)
-        return lose(id, peer, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`));
-      peer.receive(JSON.parse(answer.text));
+        return lose(link, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`));
+      link.peer.receive(JSON.parse(answer.text));
     }
   };
   let hasConnected = false;
@@ -4005,16 +4019,22 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
       if (answer.status !== 200)
         throw new Error(`cmod serve answered the connect with ${answer.status}: ${answer.text}`);
       const { connection: id } = JSON.parse(answer.text);
-      const peer = createPeer({
-        send: (message) => {
-          queued.push(message);
-          flush(id, peer);
-        },
-        handle
-      });
-      current = { id, peer };
+      const link = {
+        id,
+        peer: createPeer({
+          send: (message) => {
+            link.lastAsked = asked([message])[0] ?? link.lastAsked;
+            queued.push(message);
+            flush(link);
+          },
+          handle
+        }),
+        lastAsked: undefined,
+        undelivered: new Set
+      };
+      current = link;
       hasConnected = true;
-      pollLoop(id, peer);
+      pollLoop(link);
       (async () => onConnect?.(client))().catch((error) => onError?.(error));
       return current;
     } catch (error) {
@@ -4036,8 +4056,16 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
       return current !== undefined;
     },
     async request(method, params, signal) {
-      const { peer } = await connection();
-      return peer.request(method, params, signal);
+      const link = await connection();
+      const answer = link.peer.request(method, params, signal);
+      const sent = link.lastAsked;
+      try {
+        return await answer;
+      } catch (error) {
+        if (sent === undefined || !link.undelivered.has(sent) || !isConnectionGone(error))
+          throw error;
+        return client.request(method, params, signal);
+      }
     },
     notify(method, params) {
       connection().then(({ peer }) => peer.notify(method, params)).catch(() => {
@@ -5788,7 +5816,10 @@ var conversationMethods = {
   sessionColor: "cmod:sessionColor"
 };
 var resetColors = ["default", "reset", "none", "gray", "grey"];
-var sessionFields = { id: true, title: true, color: true, project: true, cwd: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true };
+function subagentTranscript(sessionTranscript, task) {
+  return sessionTranscript?.endsWith(".jsonl") === true ? `${sessionTranscript.slice(0, -".jsonl".length)}/subagents/agent-${task}.jsonl` : undefined;
+}
+var sessionFields = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true };
 function pickedColor(args) {
   const picked = args.trim().toLowerCase();
   return resetColors.includes(picked) ? undefined : picked;
@@ -6156,6 +6187,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   const ownerOf = (session, data) => {
     const parent = session === current.id ? current : known.get(session);
     const isBackground = data.isBackground === true;
+    const transcriptPath = isBackground ? known.get(data.id)?.transcriptPath : subagentTranscript(parent?.transcriptPath, data.id);
     return sessionOf(() => ({
       id: data.id,
       title: data.title,
@@ -6163,6 +6195,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       ...data.agentType === undefined ? {} : { agentType: data.agentType },
       model: data.model ?? "",
       cwd: parent?.cwd ?? "",
+      ...transcriptPath === undefined ? {} : { transcriptPath },
       isRunning: data.closedAt === undefined && (isBackground || (parent?.isRunning ?? true)),
       startedAt: data.openedAt,
       lastAt: data.closedAt ?? data.openedAt,
@@ -6215,7 +6248,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       const routes = permissionRoutes?.();
       if (routes === undefined)
         throw new Error(withoutPermissionCheck(name, method));
-      return routes(method, { raise, refusalFor, hookOn, routeOn, current: () => current });
+      return routes(method, { name, raise, refusalFor, hookOn, routeOn, current: () => current });
     }
     const event = processEvents[named];
     const hook = (isBefore ? event.before : undefined) ?? event.on;
@@ -6380,7 +6413,7 @@ var answerKeys = {
   WorktreeCreate: ["result"],
   Elicitation: ["refuse"],
   ElicitationResponse: ["refuse"],
-  PermissionCheck: ["allow", "ask", "refuse"],
+  PermissionCheck: ["allow", "ask", "refuse", "note"],
   PermissionRequest: ["allow", "input", "updates", "refuse", "interrupt"],
   PermissionDenial: ["retry"],
   ToolBatch: ["note"],
@@ -6913,7 +6946,7 @@ ${target}`;
         rereadGoal();
     });
   };
-  const start = (id, source) => {
+  const start = (id, source, agentType) => {
     if (id === session)
       return;
     const previous = session;
@@ -6921,7 +6954,8 @@ ${target}`;
     live = [];
     liveIds.clear();
     waitingRows.clear();
-    conversation = createConversation(emptyConversation(id));
+    const runsAs = agentType === undefined ? {} : { agentType };
+    conversation = createConversation({ ...emptyConversation(id), ...runsAs });
     contextPercent = undefined;
     endedTurn = undefined;
     failedWith = undefined;
@@ -6931,7 +6965,7 @@ ${target}`;
       readColor(id);
     starting = isNew ? Promise.resolve(dispatch(conversation.startContext(new Date().toISOString()))) : read(id, "state").then((state) => {
       if (session === id && state !== null)
-        conversation = createConversation({ ...emptyConversation(id), ...state });
+        conversation = createConversation({ ...emptyConversation(id), ...state, ...runsAs });
     }, (error) => report("state", `Starts session ${id} without its earlier turns`, error));
     const restored = restoreListeners().catch((error) => report("listeners", "Could not read back the mods' listeners of this session", error));
     starting = Promise.all([starting, restored]).then(() => {
@@ -7015,7 +7049,7 @@ ${target}`;
     onTurnClosed(lastTurn);
   };
   router.add("classic.SessionStart", async (e, next) => {
-    start(e.session_id, e.source);
+    start(e.session_id, e.source, e.agent_type);
     return next(e);
   });
   router.add("classic.SessionEnd", async (e, next) => {
@@ -10559,7 +10593,7 @@ function createLifecycle(definition, permissionRoutes = () => {
   };
   const isInstalledCopy = async () => {
     await recording;
-    if (plugin === undefined)
+    if (plugin === undefined || plugin.name === cmodPluginName)
       return true;
     const recorded = await readRecord((path) => claude().fs.read(path).catch(ifMissing(undefined)), plugin.store, plugin.name);
     return recorded === undefined || recorded.root === plugin.root;
@@ -11330,8 +11364,8 @@ async function createMod(definition, runtime) {
     }
   };
   const followCurrent = async (id, title) => {
-    const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()]);
-    followed = { id, title: title ?? "", project: modState.root, cwd, model, startedAt: new Date(usage.startedAt).toISOString(), ...forkedFrom === undefined ? {} : { forkedFrom }, ...agentType === undefined ? {} : { agentType } };
+    const [model, usage, { transcriptPath }] = await Promise.all([claude.session.model(), claude.session.usage(), claude.session.info()]);
+    followed = { id, title: title ?? "", project: modState.root, cwd, ...transcriptPath === "" ? {} : { transcriptPath }, model, startedAt: new Date(usage.startedAt).toISOString(), ...forkedFrom === undefined ? {} : { forkedFrom }, ...agentType === undefined ? {} : { agentType } };
     client.follow(followed);
   };
   router.add("classic.SessionStart", async (e, next) => {
@@ -11588,6 +11622,7 @@ async function startMod($, eventInput, passOn) {
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
       version: async () => (await $.session.version()).version,
+      info: () => $.session.info(),
       messages: (args) => args === undefined ? $.session.messages() : $.session.messages(args),
       append: (args) => $.session.append(args),
       send: (args) => $.session.send(args)
@@ -12011,7 +12046,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12509,7 +12544,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12740,7 +12775,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13062,7 +13097,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13294,7 +13329,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13324,7 +13359,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13826,7 +13861,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-2hVwJG/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-jPX1Hg/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
