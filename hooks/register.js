@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.3.1";
+var coreVersion = "8.3.2";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -4107,6 +4107,7 @@ var sessionActs = {
   ui: "$/ui",
   uiEvent: "$/uiEvent"
 };
+var providersInterface = "cmod/Providers";
 var interfaceMethods = { providers: "cmod:providers", provider: "cmod:provider", provided: "cmod:provided", listen: "cmod:listenProvided", unlisten: "cmod:unlistenProvided", tell: "cmod:tellProvided", ask: "cmod:askProvided", heard: "cmod:heard" };
 var providerActs = { provide: "$/provide", unprovide: "$/unprovide", providers: "$/providers", provider: "$/provider", call: "$/call", link: "$/link" };
 var providerHoldMs = hookMs / 4;
@@ -4469,6 +4470,17 @@ ${id}`))
     tell: (name, event, payload) => server.emit(name, event, payload),
     ask,
     listened: () => [...kept.values()],
+    async providersChanged(name) {
+      if (device === undefined)
+        return;
+      const here = await device();
+      const payload = { interface: name, device: here };
+      const isHere = (listened) => listened.mod === cmodPluginName && listened.program === cmodPluginName && (listened.device === undefined || listened.device.id === here.id);
+      for (const { caller, listen } of kept.values()) {
+        if (listen.interface === providersInterface && listen.event === "Change" && listen.kind === "on" && isHere(listen) && isHeardAt(listen, [], payload))
+          tell(caller, { id: listen.id, payload }, unaborted).catch(reported);
+      }
+    },
     forget(caller) {
       for (const each of [...kept.values()].filter((listened) => listened.caller === caller))
         stopListening(caller, each.listen.id);
@@ -7483,6 +7495,10 @@ ${target}`;
       if (session !== "")
         local.client.notify(sessionActs.uiEvent, { event, payload });
     },
+    tellProviders(names) {
+      for (const name of names)
+        served.providersChanged(name).catch((error) => report("providers", `Could not tell the mods that a provider of ${name} came or went`, error));
+    },
     provide: (name, methods) => served.provide(name, methods),
     async answer(e) {
       const method = methods[e.method];
@@ -10028,7 +10044,9 @@ function pagesOf(input) {
 function partsOf(mod, listing) {
   return { mod, widgets: widgetsOf(listing), views: viewsOf(listing), pages: pagesOf(listing) };
 }
-function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi }) {
+function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi, tellProviders = () => {
+  return;
+} }) {
   const declared = new Map;
   const provided = new Map;
   const providersOf = (name) => [...provided.get(name) ?? []];
@@ -10096,11 +10114,12 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
   };
   const provide = (mod, names) => {
     const wasStyler = provided.get(styleInterface)?.has(mod) === true;
-    for (const [name, mods] of provided)
-      if (!names.includes(name))
-        mods.delete(mod);
+    const left = [...provided].filter(([name, mods]) => !names.includes(name) && mods.delete(mod)).map(([name]) => name);
+    const arrived = names.filter((name) => provided.get(name)?.has(mod) !== true);
     for (const name of names)
       provided.set(name, (provided.get(name) ?? new Set).add(mod));
+    if (left.length + arrived.length > 0)
+      tellProviders([...left, ...arrived]);
     if (wasStyler || names.includes(styleInterface))
       restyle(mod);
   };
@@ -11701,7 +11720,7 @@ function routeCallFailure(_$, eventInput, passOn) {
 var serveCmodPlugin = ({ claude, router, store, project, report, clear, tellRefusedPress, parts, markdownIn, tellStylers }) => {
   const conversations = serveConversations({ claude, router, store, project, report, clear, sessionCode: (name) => served.providers(name) });
   const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn });
-  const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload) });
+  const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload), tellProviders: (names) => conversations.tellProviders(names) });
   conversations.serveUi(served.ui);
   conversations.onTurnClosed((turn) => served.turnClosed(turn));
   return { conversations, widgets, parts: served };
@@ -12079,7 +12098,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12577,7 +12596,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12808,7 +12827,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13130,7 +13149,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13362,7 +13381,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13392,7 +13411,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13894,7 +13913,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-JMWKQ8/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-3PVEjM/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
