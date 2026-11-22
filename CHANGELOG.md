@@ -4,6 +4,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-11-22
+
 ### Added
 - `List`, `ListItem`, `Badge`, and `Banner` in `ui/components.js`: a list of rows with a status dot, a short status in a tone's color, and a notice with its actions. `Progress` takes a `label` for screen readers.
 
