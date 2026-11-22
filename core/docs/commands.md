@@ -167,7 +167,7 @@ Adds the plugin's marketplace to Claude Code and installs the plugin through Cla
 cmod update [name]
 ```
 
-Updates the named plugin, or every plugin Claude Code has installed, through Claude Code, then runs the install step of each mod whose version or scripts changed. A linked plugin is skipped, because saving its files updates it. When Claude Code fails to update a plugin, `cmod update` names it, updates the rest, and exits 1. Every running session then loads the new version.
+Updates the named plugin, or every plugin Claude Code has installed, through Claude Code, then runs the install step of each mod whose version or scripts changed. A linked plugin is skipped, because saving its files updates it. When Claude Code fails to update a plugin, `cmod update` names it, updates the rest, and exits 1. An updated cmod plugin also downloads its cmod program, as a session start does, so `cmod serve` moves to the new version without one. Every running session then loads the new version.
 
 ### cmod remove
 

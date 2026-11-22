@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { changePlugin, listPlugins, type InstalledPlugin } from '../claude.js'
 import { usesCmod } from '../plugin.js'
-import { startProgress } from '../progress.js'
+import { capture } from '../process.js'
+import { startProgress, type Progress } from '../progress.js'
 import { modLock, storePath, takeLock } from '../store.js'
 import { followUpdates, installCmodPlugin, installMod } from './install.js'
 
@@ -17,7 +19,9 @@ Updates the named plugin, or every plugin Claude Code has installed, through
 Claude Code, then runs the install step of each mod whose version or scripts
 changed. A linked plugin is skipped, because saving its files updates it. When
 Claude Code fails to update a plugin, cmod update names it, updates the rest,
-and exits 1. Every running session loads the new version.`
+and exits 1. An updated cmod plugin also downloads its cmod program, as a
+session start does, and cmod serve starts again on it. Every running session
+loads the new version.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -50,12 +54,27 @@ export async function run(argv: string[]): Promise<number> {
 
   const listed = await listPlugins()
   const mods: InstalledPlugin[] = []
+  const cmodCopies = new Set<string>()
   for (const id of updated) {
     const plugin = listed.find((entry) => entry.id === id)
     if (plugin === undefined) throw new Error(`Claude Code updated ${id} but claude plugin list no longer shows it.`)
+    if (plugin.name === 'cmod') cmodCopies.add(plugin.installPath)
     if (await usesCmod(plugin.installPath, plugin.name)) mods.push(plugin)
   }
+  for (const root of cmodCopies) exitCode = Math.max(exitCode, await fetchCmodProgram(root, progress))
   const isCmodNew = mods.length > 0 && (await installCmodPlugin(progress))
   for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, [], progress, isCmodNew))
   return exitCode
+}
+
+async function fetchCmodProgram(root: string, progress: Progress): Promise<number> {
+  const bootstrap = join(root, 'setup', 'bootstrap.sh')
+  progress.step('Downloading the cmod program')
+  const { exitCode, stdout, stderr } = await capture(['sh', bootstrap])
+  if (exitCode !== 0) {
+    progress.fail(stderr.trim() || `${bootstrap} exited ${exitCode}`)
+    return 1
+  }
+  progress.succeed(stdout.trim().split('\n').at(-1)?.replace(/^progress \d+ \d+ /, '') ?? `Ran ${bootstrap}`)
+  return 0
 }

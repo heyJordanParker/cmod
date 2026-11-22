@@ -30,6 +30,7 @@ async function marketplaceHome(plugins: Record<string, Record<string, string>>):
     'market/.claude-plugin/marketplace.json': JSON.stringify({ name: 'market', owner: { name: 'test' }, plugins: [...Object.keys(plugins), 'cmod'].map((name) => ({ name, source: `./${name}` })) }),
     'available/cmod@cmod': cmodPlugin,
     'installed/cmod@cmod': cmodPlugin,
+    'setup/bootstrap.sh': bootstrap,
   }
   for (const [name, pluginFiles] of Object.entries(plugins)) {
     for (const [path, text] of Object.entries(pluginFiles)) files[`market/${name}/${path}`] = text
@@ -65,6 +66,8 @@ async function claudeCalls(home: string): Promise<string> {
 }
 
 const storeOf = (home: string) => join(home, '.local/share/cmod')
+
+const bootstrap = '#!/bin/sh\necho "$0" >> "$HOME/bootstraps"\necho "progress 1 2 Linking cmod"\necho "progress 2 2 cmod 0.1.0 is installed"\n'
 
 test('install <name> runs the install step of a plugin Claude Code already holds', async () => {
   const home = await temporaryHome()
@@ -414,6 +417,7 @@ test('cmod update cmod updates every copy of the cmod plugin, and sets up no hot
   await writeFiles(home, {
     'cmod-plugin/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '4.0.0' }),
     'cmod-plugin/package.json': JSON.stringify({ name: 'cmod', cmod: { hotkeys: { sidebar: { title: 'Show or hide the Sidebar', default: 'ctrl+q' } } } }),
+    'cmod-plugin/setup/bootstrap.sh': bootstrap,
     'available/cmod@cmod': copy('cmod@cmod'),
     'installed/cmod@cmod': copy('cmod@cmod'),
     'available/cmod@market': copy('cmod@market'),
@@ -425,6 +429,27 @@ test('cmod update cmod updates every copy of the cmod plugin, and sets up no hot
   expect(result.exitCode).toBe(0)
   expect(await claudeCalls(home)).toBe('plugin list --json\nplugin update cmod@cmod --json\nplugin update cmod@market --json\nplugin list --json\n')
   expect(existsSync(storeOf(home))).toBe(false)
+})
+
+test('cmod update cmod downloads the cmod program of the updated plugin, so cmod serve moves to it without a session start', async () => {
+  const home = await marketplaceHome({})
+
+  const result = await cmod(home, 'update', 'cmod')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('✔ cmod 0.1.0 is installed\n')
+  expect(await readFile(join(home, 'bootstraps'), 'utf8')).toBe(`${join(home, 'setup/bootstrap.sh')}\n`)
+})
+
+test('cmod update cmod exits 1 and names the failure when the cmod program fails to download', async () => {
+  const home = await marketplaceHome({})
+  await writeFiles(home, { 'setup/bootstrap.sh': '#!/bin/sh\necho "cmod bootstrap: the download of cmod 0.1.0 failed" >&2\nexit 1\n' })
+
+  const result = await cmod(home, 'update', 'cmod')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stdout).toContain('✔ Updated cmod@cmod through Claude Code\n')
+  expect(result.stdout).toContain('cmod bootstrap: the download of cmod 0.1.0 failed')
 })
 
 test('cmod update updates every plugin Claude Code holds, and checks the setup of the mods only', async () => {
