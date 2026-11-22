@@ -306,6 +306,47 @@ textarea.input{resize:vertical}
 .markdown table{border-collapse:collapse}.markdown th,.markdown td{border:1px solid var(--subtle);padding:0 1ch}
 .markdown hr{border:0;border-top:1px solid var(--subtle)}
 .gap{color:var(--warning)}
+.tabs,.panel,.dialog,.banner{display:flex;flex-direction:column;gap:var(--row);min-width:0}
+.tablist{display:flex;gap:2ch;overflow-x:auto;border-bottom:1px solid var(--subtle)}
+.tab{font:inherit;color:var(--inactive);background:none;border:0;border-bottom:2px solid transparent;padding:0;cursor:pointer;white-space:nowrap}
+.tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--claude)}
+.tab:hover,.tab:focus-visible{color:var(--text);outline:none}
+.split{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:1ch}
+.panel{border:1px solid var(--subtle);border-radius:6px;padding:calc(var(--row)/2) 1ch;gap:calc(var(--row)/2);flex:1}
+.panel-title,.dialog-title{font:inherit;font-weight:700;margin:0}
+.panel-body,.dialog-body,.banner-body{display:flex;flex-direction:column;min-width:0}
+.switch{font:inherit;color:inherit;background:none;border:0;padding:0;display:inline-flex;gap:1ch;align-items:center;cursor:pointer;align-self:flex-start}
+.switch-track{width:3ch;height:calc(var(--row) - 6px);border-radius:999px;background:var(--subtle);position:relative;transition:background .15s}
+.switch-track::after{content:'';position:absolute;top:2px;left:2px;height:calc(100% - 4px);aspect-ratio:1;border-radius:50%;background:var(--text);transition:transform .15s}
+.switch[aria-checked="true"] .switch-track{background:var(--claude)}
+.switch[aria-checked="true"] .switch-track::after{transform:translateX(calc(3ch - 100% - 4px))}
+.switch:focus-visible .switch-track{outline:1px solid var(--claude);outline-offset:2px}
+.tooltip{text-decoration:underline dotted var(--inactive)}
+.help{position:relative;display:inline-flex}
+.help-button{font:inherit;color:var(--inactive);background:none;border:1px solid var(--subtle);border-radius:50%;width:var(--row);height:var(--row);padding:0;cursor:pointer}
+.help-card{position:absolute;bottom:100%;left:0;max-width:36ch;background:var(--text);color:var(--background);padding:0 1ch;border-radius:4px;z-index:1}
+.actions{display:flex;gap:2ch;flex-wrap:wrap}
+.pagination{display:flex;gap:2ch;align-items:center}
+.button:disabled{opacity:.45;cursor:default;background:none;color:inherit}
+.progress{height:6px;border:0;border-radius:999px;background:var(--subtle);accent-color:var(--claude);align-self:center}
+.progress::-webkit-progress-bar{background:var(--subtle);border-radius:999px}.progress::-webkit-progress-value{background:var(--claude);border-radius:999px}.progress::-moz-progress-bar{background:var(--claude);border-radius:999px}
+.list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.list-item{font:inherit;color:var(--inactive);background:none;border:0;border-radius:4px;padding:0 1ch;display:flex;gap:1ch;align-items:center;width:100%;text-align:left;cursor:pointer}
+li.list-item{cursor:default}
+.list-item.selected{background:var(--userMessageBackground);color:var(--text);font-weight:700}
+button.list-item:hover,button.list-item:focus-visible{background:var(--userMessageBackground);color:var(--text);outline:none}
+.item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.description{color:var(--inactive);font-weight:400}
+.dot{width:1ch;height:1ch;border-radius:50%;background:var(--inactive);flex:0 0 auto}
+.dot.tone-off{background:none;border:1px solid var(--inactive)}
+.badge{font-size:.85em;border-radius:999px;padding:0 1ch;background:var(--userMessageBackground);color:var(--inactive);white-space:nowrap}
+.banner{border-radius:6px;padding:calc(var(--row)/2) 1ch;gap:calc(var(--row)/2);background:var(--userMessageBackground)}
+.tone-info{--tone:var(--suggestion)}.tone-success{--tone:var(--success)}.tone-warning{--tone:var(--warning)}.tone-critical{--tone:var(--error)}
+.dot.tone-info,.dot.tone-success,.dot.tone-warning,.dot.tone-critical{background:var(--tone)}
+.badge.tone-info,.badge.tone-success,.badge.tone-warning,.badge.tone-critical{color:var(--tone);background:color-mix(in srgb,var(--tone) 15%,transparent)}
+.banner.tone-info,.banner.tone-success,.banner.tone-warning,.banner.tone-critical{background:color-mix(in srgb,var(--tone) 12%,transparent)}
+.banner-title{color:var(--tone,inherit)}
+@media (prefers-reduced-motion:reduce){.switch-track,.switch-track::after{transition:none}}
 `
 
 type Frame = { readonly draw: number; readonly html: string }

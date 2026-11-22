@@ -141,6 +141,62 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
     return `<img class="svg" alt="${escaped(accessibleName(props))}" src="data:image/svg+xml,${encodeURIComponent(source)}"${attribute('style', size === '' ? undefined : size)}>`
   },
   Raster: (props) => rasterHtml(typeof props['cells'] === 'string' ? props['cells'] : '', numberOr(props['columns'], 1), accessibleName(props)),
+  Tabs: (props, drawing) => {
+    const tabs = (Array.isArray(props['tabs']) ? props['tabs'] : []) as readonly Props[]
+    const buttons = tabs.map((tab) => {
+      const label = textOr(tab['label'], '')
+      const hotkey = typeof tab['hotkey'] === 'string' && hotkeys.test(tab['hotkey']) ? tab['hotkey'] : undefined
+      return `<button type="button" role="tab" class="tab" aria-selected="${tab['isSelected'] === true}"${attribute('data-key', `${textOr(props['key'], '')}tab:${textOr(tab['key'], label)}`)}${handlerAttribute('data-press', tab['onSelect'])}${attribute('data-hotkey', hotkey)}>${escaped(label)}</button>`
+    })
+    return `<div class="tabs"><div role="tablist" class="tablist">${buttons.join('')}</div><div role="tabpanel" class="tabpanel">${nodeHtml(props['children'], drawing)}</div></div>`
+  },
+  Split: (props, drawing) => `<div class="split">${(Array.isArray(props['children']) ? props['children'] : [props['children']]).map((child: unknown) => `<div class="split-part">${nodeHtml(child, drawing)}</div>`).join('')}</div>`,
+  Panel: (props, drawing) => `<section class="panel"><h3 class="panel-title">${escaped(textOr(props['title'], ''))}</h3><div class="panel-body">${nodeHtml(props['children'], drawing)}</div></section>`,
+  Toggle: (props) => {
+    const label = textOr(props['label'], '')
+    return `<button type="button" role="switch" class="switch" aria-checked="${props['checked'] === true}"${attribute('data-key', `${textOr(props['key'], '')}toggle:${label}`)}${handlerAttribute('data-press', props['onToggle'])}><span class="switch-track"></span>${escaped(label)}</button>`
+  },
+  Tooltip: (props, drawing) => `<span class="tooltip"${attribute('title', textOr(props['text'], ''))}>${nodeHtml(props['children'], drawing)}</span>`,
+  Help: (props) => {
+    const text = textOr(props['text'], '')
+    const isOpen = props['isOpen'] === true
+    return `<span class="help"><button type="button" class="help-button" aria-label="Help" aria-expanded="${isOpen}"${attribute('title', text)}${handlerAttribute('data-press', props['onToggle'])}>?</button>${isOpen ? `<span class="help-card" role="note">${escaped(text)}</span>` : ''}</span>`
+  },
+  Dialog: (props, drawing) => `<div role="dialog" class="dialog"${attribute('aria-label', textOr(props['title'], ''))}><h3 class="dialog-title">${escaped(textOr(props['title'], ''))}</h3><div class="dialog-body">${nodeHtml(props['children'], drawing)}</div><div class="actions">${nodeHtml(props['actions'], drawing)}</div></div>`,
+  Pagination: (props) => {
+    const step = (handler: unknown, label: string, hotkey: string) =>
+      `<button type="button" class="button"${handlerOf(handler) === undefined ? ' disabled' : `${handlerAttribute('data-press', handler)}${attribute('data-hotkey', hotkey)}`}>${label}</button>`
+    return `<nav class="pagination" aria-label="Pages">${step(props['onPrevious'], 'Previous', 'p')}<span class="t">${numberOr(props['page'], 1)} of ${numberOr(props['pages'], 1)}</span>${step(props['onNext'], 'Next', 'n')}</nav>`
+  },
+  Progress: (props) => {
+    const label = typeof props['label'] === 'string' ? props['label'] : undefined
+    return `<progress class="progress" max="100" value="${numberOr(props['value'], 0)}"${attribute('aria-label', label)}${attribute('style', `width:${across(numberOr(props['width'], 24))}`)}></progress>`
+  },
+  List: (props, drawing) => `<ul class="list"${attribute('aria-label', textOr(props['label'], ''))}>${nodeHtml(props['children'], drawing)}</ul>`,
+  ListItem: (props) => {
+    const dot = props['tone'] === undefined ? '' : `<span class="dot tone-${toneOf(props['tone'])}" aria-hidden="true"></span>`
+    const description = typeof props['description'] === 'string' ? `<span class="description">${escaped(props['description'])}</span>` : ''
+    const inner = `${dot}<span class="item-label">${escaped(textOr(props['label'], ''))}</span>${description}`
+    const isSelected = props['isSelected'] === true
+    if (handlerOf(props['onPress']) === undefined) return `<li class="list-item${isSelected ? ' selected' : ''}"${isSelected ? ' aria-current="true"' : ''}>${inner}</li>`
+    return `<li><button type="button" class="list-item${isSelected ? ' selected' : ''}"${isSelected ? ' aria-current="true"' : ''}${attribute('data-key', keyOf(props))}${handlerAttribute('data-press', props['onPress'])}>${inner}</button></li>`
+  },
+  Badge: (props, drawing) => `<span class="badge tone-${toneOf(props['tone'])}">${nodeHtml(props['children'], drawing)}</span>`,
+  Banner: (props, drawing) => {
+    const title = typeof props['title'] === 'string' ? `<strong class="banner-title">${escaped(props['title'])}</strong>` : ''
+    const actions = props['actions'] === undefined ? '' : `<div class="actions">${nodeHtml(props['actions'], drawing)}</div>`
+    return `<div role="status" class="banner tone-${toneOf(props['tone'])}">${title}<div class="banner-body">${nodeHtml(props['children'], drawing)}</div>${actions}</div>`
+  },
+}
+
+const tones: ReadonlySet<unknown> = new Set(['neutral', 'info', 'success', 'warning', 'critical', 'off'])
+
+function toneOf(value: unknown): string {
+  return tones.has(value) ? (value as string) : 'neutral'
+}
+
+function textOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
 }
 
 function accessibleName(props: Props): string {

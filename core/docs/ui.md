@@ -79,28 +79,35 @@ An element built outside a render, at module load or in a hook, holds its props 
 
 ## Components
 
-`ui/components.js` exports controls built from the elements and Claude Code's theme colors, so they follow the person's theme and look the same in every mod. Each is a component like the ones a mod writes: a function of props, used in a render.
+`ui/components.js` exports controls every app draws as its own, as React Native's core components and Shopify's UI extension components do. A component keeps its name and its props in the drawing a part sends: Claude Code draws it from the elements and its theme colors, the browser as semantic HTML with its ARIA role, and Herdr as its native control. So a mod that draws a tab row, a list, or a notice with these components looks right in each app, and a mod that builds the same from `Box` and `Text` looks like a terminal everywhere. Each is a function of props, used in a render.
 
 ```ts
+type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'critical'
 Tabs(props: { tabs: readonly { key: string; label: string; hotkey?: string }[]; selected: string; onSelect(key: string): void; children? })
 Split(props: { children: readonly JSX.Element[] })
 Panel(props: { title: string; children? })
+List(props: { label: string; children? })
+ListItem(props: { key: string; label: string; description?: string; tone?: Tone | 'off'; isSelected?: boolean; onPress?(): void })
+Badge(props: { tone?: Tone; children })
+Banner(props: { tone?: Tone; title?: string; children?; actions? })
 Toggle(props: { label: string; checked: boolean; onChange(checked: boolean): void })
 Tooltip(props: { text: string; children? })
 Help(props: { text: string; isOpen: boolean; onOpenChange(isOpen: boolean): void })
 Dialog(props: { title: string; children?; actions })
 Pagination(props: { page: number; pages: number; onPage(page: number): void })
-Progress(props: { value: number; width?: number })
+Progress(props: { value: number; width?: number; label?: string })
 ```
 
 - `Tabs` draws a row of tabs over `children`. The selected tab's label is bold and underlined. Each other tab is a `Button`, so a part that holds the keyboard switches tabs by Tab and Enter or a click. A tab given a `hotkey`, one digit or one lowercase letter, draws it before its label, as `o: Open`, and that key switches to it. Leave the Sidebar's digits to the Sidebar: inside a page, a tab's hotkey that matches one replaces it.
 - `Split` lays its children side by side in equal widths. `Panel` frames one part of a page or pane in a rounded border with its bold title in the top border, as `╭─ Changed files ──╮`, grows to fill the room its parent gives it, and is never narrower than its title.
+- `List` holds `ListItem` rows, and `label` names the list for a screen reader. A `ListItem` draws `● label` with the dot in its `tone`'s color, `○` for `'off'`, and `description` dim after the label. The selected row draws on the highlight background in bold, and any other row with `onPress` is a quiet `Button` keyed `key`.
+- `Badge` draws a short status, such as `warning`, in its `tone`'s color. `Banner` draws a notice that needs the person: its `title` and text in its `tone`'s color, and its `actions`, the buttons, in a row under them.
 - `Toggle` draws `[x] label` or `[ ] label` as a `Button`. Enter or a click calls `onChange` with the other value.
 - `Tooltip` shows `text` in an inverted card above its children while the pointer rests on them. The card opens upward, because Claude Code paints a card over the rows drawn before it and under the rows drawn after it. It has no border, so a one-line card needs one free row above its children. The pointer alone opens it, so put nothing only a tooltip says.
 - `Help` draws a `?` that shows `text` the same way. A press of `?` keeps the card open until the next press, so the keyboard reaches it too. Keep `isOpen` in `mod.state`.
 - `Dialog` lays out a dialog's title, body, and `actions`, the buttons in a row. Put the safe action first, as the `primary` Button with `autoFocus`.
 - `Pagination` draws `p: Previous  2 of 5  n: Next`. `p` and `n` are its hotkeys, and an end it cannot pass is dim text.
-- `Progress` fills `value` percent of `width` columns, 24 unless given. Put the count or a label beside it in a `Text`, or pass it as a loading toast's `description`.
+- `Progress` fills `value` percent of `width` columns, 24 unless given, and `label` names the bar for a screen reader. Put the count beside it in a `Text`, or pass it as a loading toast's `description`.
 - `Tabs`, `Toggle`, `Help`, and `Pagination` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
 
 ## Views and pages
@@ -227,9 +234,9 @@ event Close { session, mod, id }
 
 ### Herdr draws them through cmod/UI
 
-The Herdr app shows Claude Code in its terminals, and cmod's Herdr mod draws every mod's widgets, views, and pages beside them, so a mod writes no Herdr code. `cmod serve` places it in `mods/cmod/` of Herdr's home ([cmod serve](commands.md#cmod-serve)), and it reaches each session through [`cmod ui`](commands.md#cmod-ui), with `surface: 'herdr'` and `columns` its width in 8-pixel columns. Toasts and questions stay in Claude Code's own terminal, which Herdr shows.
+The Herdr app shows Claude Code in its terminals, and cmod's Herdr mod draws every mod's widgets, views, and pages beside them, so a mod writes no Herdr code. `cmod serve` places it in `mods/cmod/` of Herdr's home ([cmod serve](commands.md#cmod-serve)). It holds one WebSocket to `cmod serve`, at the address `serve.json` names, for as long as Herdr runs, and calls `cmod/UI` over it with `surface: 'herdr'` and `columns` its width in 8-pixel columns. A lost connection keeps the last drawing with a note above it and connects again after 0.5, 1, 2, 5, then every 10 seconds. Toasts and questions stay in Claude Code's own terminal, which Herdr shows.
 
-It shows the session of the focused terminal: the terminal's foreground process, whose `sessions/<pid>.json` in Claude Code's config folder names the session. A terminal of a shell, or on another machine, names no session, so a dock keeps the last session it showed, as a mod pane taking the keyboard does.
+It shows the session of the focused terminal: the terminal's foreground process, whose `sessions/<pid>.json` in Claude Code's config folder names the session. A terminal of a shell, or on another machine, names no session, so a dock keeps the last session it showed, as a mod pane taking the keyboard does. It keeps the last drawing of the 12 sessions it showed last, so a session it comes back to shows at once while it draws again, and a session it never drew shows nothing for 400 ms before its loading state. A session it cannot show, because no cmod plugin holds it, says why with Try again, and shows its views on its own once the session's cmod plugin holds it again, as after `/reload-plugins`.
 
 It never docks itself, because Herdr writes a dock into whichever layout file shows when it first sees the mod, once per Herdr home, and a layout another mod rewrites loses it for good. Herdr shows it in two ways. `mod.open` with `{ "name": "cmod" }` opens the dock as a window over any layout, Herdr's own included, and closes it when run again: from `herdr-app do mod.open:cmod`, a `keys.json` binding such as `"ctrl-shift-m": "mod.open:cmod"`, or another mod's `run`. The window takes no keyboard, so the dock keeps following the focused terminal, and Herdr remembers where it was dragged. A layout author places it anywhere a mod goes instead, with the `props` that say what it shows:
 
@@ -246,7 +253,8 @@ Each dock and page tab tells `show` the view or page it draws, under a client na
 
 Each element draws as Herdr's own, and each `label`, or a `Text`'s text, is its accessible name:
 
-- `Box` draws a flex row or column with its gap, padding, margin, sizes, and background, a column as 8 pixels across, a row as 20 pixels down, and a space step as 8 pixels. A `borderStyle` draws a card, and a `Box` at `position: 'absolute'` and `top: 0` beside one, the terminal's title on a border, draws as a heading above that card.
+- `Box` draws a flex row or column with its gap, padding, margin, sizes, and background, a column as 8 pixels across, a row as 20 pixels down, and a space step as 8 pixels. A `borderStyle` draws a card.
+- Each component of `ui/components.js` draws as Herdr's control of the same job: `Tabs` as its tabs, `Panel` as a heading above a card, `List` and `ListItem` as a list with a status dot, `Toggle` as its switch, `Progress` as its progress bar, `Pagination` with a disabled end, `Badge` and `Banner` in their tone's color, `Tooltip` and `Help` as its tooltip, and `Split` as equal columns.
 - `Text` draws its text with its color, weight, and style. A theme color such as `'success'` draws in the Herdr theme's color of the same meaning. A `Text` with a `backgroundColor` draws as a chip, and text that lays out in cells, with block or box-drawing characters or a run of spaces, keeps the terminal font so its columns line up.
 - `Button` draws Herdr's button: `variant: 'primary'` as its solid button, a `plain` and `dimColor` one as a quiet row of a list, and any other as an outlined one, with its `label` and its `hotkey`. A press runs its handler, and a `Button` with `href` opens an `http:` or `https:` page in the browser, and copies any other link.
 - `Input` draws a field, and `rows` above 1 a text area. Each change runs `onInput`, and Enter runs `onSubmit`.

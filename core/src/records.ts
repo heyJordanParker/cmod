@@ -305,6 +305,12 @@ export function serveSocketPath(store: string): string {
   return `${store}/serve.sock`
 }
 
+export function serveAppsPath(store: string): string {
+  return `${store}/serve.json`
+}
+
+export type ServeApps = { readonly url: string; readonly token: string }
+
 export type ProgramInstance = { readonly pid: number; readonly started: string; readonly address?: string; readonly tailnetUrl?: string; readonly provides?: readonly string[] }
 
 export const processTypes = ['Interactive', 'Background'] as const

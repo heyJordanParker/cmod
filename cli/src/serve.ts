@@ -1,11 +1,12 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, watch } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { dataFolder, isObject, storeFolder } from '@cmodjs/core/src/records.js'
+import { dataFolder, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
 import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { MissingMachineId, readDevice } from '@cmodjs/core/src/runtime/device.js'
 import { routeSessions, type HoldingOf, type SessionContext, type SessionRouting, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
-import { RpcError, rpcCodes, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
+import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
 import { startBackground, startTask, withBackgroundStatus } from './claude.js'
@@ -197,6 +198,46 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
 function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'status' | 'waitingFor'> {
   if (entry?.status === undefined) return {}
   return { status: entry.status, ...(entry.status === 'waiting' && entry.waitingFor !== undefined ? { waitingFor: { dialog: entry.waitingFor } } : {}) }
+}
+
+export type AppServer = ServeApps & { stop(): Promise<void> }
+
+const appsPath = '/ui'
+
+const unreadMessage = 1003
+
+export function serveApps(routes: RpcRoutes, report: (doing: string, error: unknown) => void): AppServer {
+  const token = randomBytes(32).toString('base64url')
+  const isToken = (given: string | null) => given !== null && given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token))
+  const server = Bun.serve<{ connection?: RpcConnection }>({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request, server) {
+      const url = new URL(request.url)
+      if (url.pathname !== appsPath) return Response.json({ error: `cmod serve has no ${url.pathname}. Apps connect to ${appsPath}.` }, { status: 404 })
+      if (!isToken(url.searchParams.get('token'))) return Response.json({ error: 'cmod serve takes the token serve.json in the cmod store gives.' }, { status: 401 })
+      return server.upgrade(request, { data: {} }) ? undefined : Response.json({ error: `${appsPath} takes a WebSocket.` }, { status: 426 })
+    },
+    websocket: {
+      open(socket) {
+        socket.data.connection = routes.channel((message) => void socket.send(JSON.stringify(message)))
+      },
+      message(socket, data) {
+        let message: unknown
+        try {
+          message = JSON.parse(String(data))
+        } catch (error) {
+          report('closed an app that sent a message that is not JSON', error)
+          return socket.close(unreadMessage, 'cmod serve reads JSON-RPC messages only.')
+        }
+        socket.data.connection?.receive(message)
+      },
+      close(socket) {
+        socket.data.connection?.close(new Error('the app closed its connection'))
+      },
+    },
+  })
+  return { url: `ws://127.0.0.1:${server.port}${appsPath}`, token, stop: () => server.stop(true) }
 }
 
 export function answered(routes: RpcRoutes, request: Request): Promise<Response> | undefined {

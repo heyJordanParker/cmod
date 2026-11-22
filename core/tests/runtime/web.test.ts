@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { parsePreferences, parseWebUi } from '../../src/records.js'
 import { htmlOf } from '../../src/runtime/web.js'
-import { Dialog, Help, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
+import { Badge, Banner, Dialog, Help, List, ListItem, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
 import { Box, Button, Code, elementData, Image, Input, Markdown, Raster, Select, Svg, Text, type Handler } from '../../src/ui/elements.js'
 
 const drawn = (element: unknown) => {
@@ -64,11 +64,10 @@ test('a Button with children draws them in place of its label, and its label nam
   expect(html).toBe('<button type="button" class="button" aria-label="Open run 7" data-key="run-7" data-press="0">Run 7 <span class="t" style="color:color-mix(in srgb, var(--text) 55%, transparent)">2m</span></button>')
 })
 
-test('a Panel draws its border as a cell-wide frame and its title over the top border', () => {
+test('a Panel draws as a section headed by its title', () => {
   const { html } = drawn(Panel({ title: 'Runs', children: Text({ children: 'passed' }) }))
 
-  expect(html).toContain('<div class="b bordered" style="flex-direction:column;flex-grow:1;min-width:10ch;padding-top:calc(1 * var(--row));padding-right:2ch;padding-bottom:calc(1 * var(--row));padding-left:2ch;--border-color:var(--subtle);--border-style:solid;--border-radius:0.5ch;--border-width:1px">')
-  expect(html).toContain('<div class="b" style="position:absolute;top:calc(0 * var(--row));left:2ch"><span class="t cut" style="font-weight:700"> Runs </span></div>')
+  expect(html).toBe('<section class="panel"><h3 class="panel-title">Runs</h3><div class="panel-body"><span class="t">passed</span></div></section>')
 })
 
 test('text a mod draws never becomes markup, and a style or color it names is dropped unless it is one the browser draws', () => {
@@ -137,7 +136,7 @@ test('an element this cmod web does not know draws a note naming it, so a newer 
   expect(htmlOf({ $cmodElement: 'Hologram', props: {} })).toBe('<span class="gap">The browser draws no Hologram.</span>')
 })
 
-test('every component of ui/components.js draws in the browser from the elements it is built of, each control with the handler it runs', () => {
+test('every component of ui/components.js draws in the browser as its own HTML control, each with the handler it runs', () => {
   const { html, handlers } = drawn(
     Box({
       flexDirection: 'column',
@@ -150,21 +149,33 @@ test('every component of ui/components.js draws in the browser from the elements
         Help({ text: 'Press r to rerun', isOpen: false, onOpenChange: () => undefined }),
         Dialog({ title: 'Delete the branch?', actions: [Button({ variant: 'primary', autoFocus: true, label: 'Keep it', onPress: () => undefined })], children: Text({ children: 'Its commits go.' }) }),
         Pagination({ page: 1, pages: 3, onPage: () => undefined }),
-        Progress({ value: 50, width: 4 }),
+        Progress({ value: 50, width: 4, label: 'Context used' }),
+        List({ label: 'Mods', children: [ListItem({ key: 'mod:demo', label: 'demo', tone: 'warning', isSelected: true }), ListItem({ key: 'mod:old', label: 'old', tone: 'off', onPress: () => undefined })] }),
+        Badge({ tone: 'warning', children: 'warning' }),
+        Banner({ tone: 'critical', title: 'Off', children: 'Claude Code does not load it.' }),
       ],
     }),
   )
 
   expect(html).not.toContain('class="gap"')
-  expect(html).toContain('data-hotkey="l"><span class="hotkey">l</span>: Logs</button>')
-  expect(html).toContain('>left</span>')
-  expect(html).toContain(' Changed files ')
-  expect(html).toContain('Follow</button>')
-  expect(html).toContain('The last run')
-  expect(html).toContain('Its commits go.')
-  expect(html).toContain('data-press="3" autofocus>Keep it</button>')
-  expect(html).toContain('██')
-  expect(handlers).toHaveLength(5)
+  expect(html).toContain('<div role="tablist" class="tablist"><button type="button" role="tab" class="tab" aria-selected="true" data-key="tab:runs" data-press="0" data-hotkey="r">Runs</button><button type="button" role="tab" class="tab" aria-selected="false" data-key="tab:logs" data-press="1" data-hotkey="l">Logs</button></div><div role="tabpanel" class="tabpanel"><span class="t">run 7</span></div>')
+  expect(html).toContain('<div class="split"><div class="split-part"><span class="t">left</span></div><div class="split-part"><span class="t">right</span></div></div>')
+  expect(html).toContain('<h3 class="panel-title">Changed files</h3>')
+  expect(html).toContain('<button type="button" role="switch" class="switch" aria-checked="true" data-key="toggle:Follow" data-press="2"><span class="switch-track"></span>Follow</button>')
+  expect(html).toContain('<span class="tooltip" title="The last run"><span class="t">run 7</span></span>')
+  expect(html).toContain('<button type="button" class="help-button" aria-label="Help" aria-expanded="false" title="Press r to rerun" data-press="3">?</button>')
+  expect(html).toContain('<div role="dialog" class="dialog" aria-label="Delete the branch?"><h3 class="dialog-title">Delete the branch?</h3>')
+  expect(html).toContain('data-press="4" autofocus>Keep it</button>')
+  expect(html).toContain('<nav class="pagination" aria-label="Pages"><button type="button" class="button" disabled>Previous</button><span class="t">1 of 3</span><button type="button" class="button" data-press="5" data-hotkey="n">Next</button></nav>')
+  expect(html).toContain('<progress class="progress" max="100" value="50" aria-label="Context used" style="width:4ch"></progress>')
+  expect(html).toContain('<ul class="list" aria-label="Mods"><li class="list-item selected" aria-current="true"><span class="dot tone-warning" aria-hidden="true"></span><span class="item-label">demo</span></li><li><button type="button" class="list-item" data-key="mod:old" data-press="6"><span class="dot tone-off" aria-hidden="true"></span><span class="item-label">old</span></button></li></ul>')
+  expect(html).toContain('<span class="badge tone-warning">warning</span>')
+  expect(html).toContain('<div role="status" class="banner tone-critical"><strong class="banner-title">Off</strong><div class="banner-body">Claude Code does not load it.</div></div>')
+  expect(handlers).toHaveLength(7)
+})
+
+test('a tone a mod names that is not one of the tones draws as neutral, so no text reaches a class', () => {
+  expect(htmlOf({ $cmodElement: 'Badge', props: { tone: '"><script>', children: 'x' } })).toBe('<span class="badge tone-neutral">x</span>')
 })
 
 test("web.json holds the web UI's port, and preferences.json says whether the person wants it", () => {

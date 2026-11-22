@@ -32,6 +32,8 @@ export const uiMethods = ['widgets', 'views', 'pages', 'draw', 'press', 'open', 
 
 export const uiEvents: readonly string[] = ['Change', 'Redraw', 'Open', 'Close']
 
+export const uiParts = ['widgets', 'views', 'pages'] as const
+
 export const sessionActs = {
   hold: '$/hold',
   act: '$/act',
@@ -456,6 +458,10 @@ export function routeSessions({
 
   const ui: Implementation = { ...Object.fromEntries(uiMethods.map((method) => [method, (session: string, ...args: unknown[]) => askedUi(session, method, args)])), show }
 
+  const relisted = (session: string) => {
+    for (const part of uiParts) interfaces.emit(uiInterface, 'Change', { session, part }, [session])
+  }
+
   const heldTerminal = (session: string) => {
     const terminal = holderOf(session)?.herdrTerminal
     if (terminal === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
@@ -507,6 +513,7 @@ export function routeSessions({
         for (const [each, holder] of holders) if (holder.session === session && each !== connection) holders.delete(each)
         holders.set(connection, { session, project, cwd, ...(isObject(herdrTerminal) && typeof herdrTerminal.id === 'string' && typeof herdrTerminal.socket === 'string' ? { herdrTerminal: { id: herdrTerminal.id, socket: herdrTerminal.socket } } : {}), connection, told: known?.session === session ? known.told : {} })
         changed({ session, part: 'running' })
+        relisted(session)
         toldShown.delete(session)
         tellShown(session)
         return { result: {} }
@@ -552,6 +559,7 @@ export function routeSessions({
       providers.closed(connection)
       if (holder === undefined) return
       toldShown.delete(holder.session)
+      if (holderOf(holder.session) === undefined) relisted(holder.session)
       changed({ session: holder.session, part: 'running' })
       if (Object.keys(holder.told).length > 0) changed({ session: holder.session, part: 'status' })
     },

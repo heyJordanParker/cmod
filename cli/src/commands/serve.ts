@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveSocketPath, storeFolder, webPath } from '@cmodjs/core/src/records.js'
+import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveAppsPath, serveSocketPath, storeFolder, webPath, type ServeApps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
 import { placeHerdrMod } from '../herdr.js'
 import { openIndex, runningEntries } from '../history.js'
-import { answered, answeredOlderPlugin, serveSessions } from '../serve.js'
+import { answered, answeredOlderPlugin, serveApps, serveSessions } from '../serve.js'
 import { isNewerCmodInstalled } from '../store.js'
 import { readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 import { webApp } from '../web.js'
@@ -52,8 +52,13 @@ before 7.0.0 kept its session's before listeners, whose session no longer runs,
 and moves the replies cmod web serve before 7.0.0 marked read, web-read.json, to
 visited.json.
 
+An app that is no session, such as cmod's Herdr mod, reaches the same calls
+over a WebSocket on 127.0.0.1 at /ui. Its address and a token made at each
+start are in serve.json in the cmod store, which only you can read, and a
+connection without ?token=<token> is refused.
+
 At its start it also places cmod's Herdr mod, which draws every session's
-widgets, views, and pages in Herdr through cmod ui, in mods/cmod of Herdr's
+widgets, views, and pages in Herdr over that WebSocket, in mods/cmod of Herdr's
 home: $HERDR_APP_HOME, else $XDG_CONFIG_HOME/herdr-app, else
 ~/.config/herdr-app, when that folder exists. It writes only a file that
 differs, records each file it wrote in herdr.json in the cmod store, and leaves
@@ -90,6 +95,8 @@ export async function serve(): Promise<number> {
     },
   })
   await chmod(socket, 0o600)
+  const apps = serveApps(sessions.routes, report)
+  await writeAtomically(serveAppsPath(store), `${JSON.stringify({ url: apps.url, token: apps.token } satisfies ServeApps, null, 2)}\n`, { mode: 0o600 })
   const ending = new AbortController()
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => ending.abort())
   process.stdout.write(`unix:${socket}\n`)
@@ -117,7 +124,9 @@ export async function serve(): Promise<number> {
     if (page !== undefined) await stopServing('cmod', 'cmod').catch((error: unknown) => report('kept the browser app on your tailnet', error))
     sessions.close()
     await server.stop(true)
+    await apps.stop()
     await rm(socket, { force: true })
+    await rm(serveAppsPath(store), { force: true })
     await index.close()
   }
 }

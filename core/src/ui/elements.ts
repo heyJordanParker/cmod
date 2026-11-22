@@ -44,9 +44,20 @@ type Drawing = { readonly table: CompletedTable; readonly markdown: ((props: Mar
 
 const unbuilt = Symbol('an element built outside a render')
 
-type Unbuilt = { readonly [unbuilt]: { readonly name: ElementName; readonly props: object } }
+type Unbuilt = { readonly [unbuilt]: { readonly name: string; readonly props: object } }
 
 let drawing: Drawing | undefined
+
+const lowerings = new Map<string, (props: object) => RenderElement>()
+
+export function hostComponent<Props extends object, Canonical extends object>(name: string, canonical: (props: Props) => Canonical, lower: (props: Canonical) => JSX.Element): (props: Props) => JSX.Element {
+  lowerings.set(name, lower as unknown as (props: object) => RenderElement)
+  return (props) => elementNamed(name, canonical(props))
+}
+
+function elementNamed(name: string, props: object): RenderElement {
+  return drawing === undefined ? ({ [unbuilt]: { name, props } } satisfies Unbuilt as unknown as RenderElement) : build(drawing, name, props)
+}
 
 export function drawWith<Drawn>(table: ElementTable, draw: () => Drawn, markdown?: (props: MarkdownProps) => RenderElement): Drawn {
   const outer = drawing
@@ -60,14 +71,15 @@ export function drawWith<Drawn>(table: ElementTable, draw: () => Drawn, markdown
 }
 
 function element<Name extends keyof Terminal & ElementName>(name: Name): Terminal[Name] {
-  const construct = (props: object) => (drawing === undefined ? ({ [unbuilt]: { name, props } } satisfies Unbuilt as unknown as RenderElement) : build(drawing, name, props))
-  return construct
+  return (props: object) => elementNamed(name, props)
 }
 
-function build(current: Drawing, name: ElementName, props: object): RenderElement {
+function build(current: Drawing, name: string, props: object): RenderElement {
+  const lower = lowerings.get(name)
+  if (lower !== undefined) return lower(props)
   const ready = 'children' in props ? { ...props, children: built(current, props.children) } : props
   if (name === 'Markdown' && current.markdown !== undefined) return current.markdown(ready as MarkdownProps)
-  return current.table[name](ready)
+  return current.table[name as ElementName](ready)
 }
 
 function built(current: Drawing, value: unknown): unknown {
@@ -124,9 +136,10 @@ export function elementOf(data: unknown, keyPrefix: string, press: (handler: num
   }
   const name = fields[elementKey]
   if (name === undefined) return Object.fromEntries(Object.entries(fields).map(([key, each]) => [key, elementOf(each, keyPrefix, press)]))
-  if (typeof name !== 'string' || !Object.hasOwn(constructors, name)) throw new Error(`a widget drew ${String(name)}, which is not an element of ui/elements.js.`)
+  if (typeof name !== 'string' || !(Object.hasOwn(constructors, name) || lowerings.has(name))) throw new Error(`a widget drew ${String(name)}, which is not an element of ui/elements.js or ui/components.js.`)
   const props = elementOf(fields['props'], keyPrefix, press) as Record<string, unknown>
-  return constructors[name as keyof typeof constructors]((typeof props['key'] === 'string' ? { ...props, key: `${keyPrefix}${props['key']}` } : props) as never)
+  const keyed = typeof props['key'] === 'string' ? { ...props, key: `${keyPrefix}${props['key']}` } : props
+  return Object.hasOwn(constructors, name) ? constructors[name as keyof typeof constructors](keyed as never) : elementNamed(name, keyed)
 }
 
 const focusable: ReadonlySet<unknown> = new Set(['Button', 'Input', 'Select'])

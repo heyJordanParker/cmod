@@ -8,7 +8,7 @@ import { cmodError, cmodStore, newestCmodVersion } from '../node_modules/@cmodjs
 import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
-import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
+import { Badge, Banner, List, ListItem, Panel, Tabs, Toggle } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Input, Markdown, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { changelogSections, unreleased, type ChangelogSection } from '../node_modules/@cmodjs/core/utils/changelog.js'
 import { ifMissing, relativePath } from '../node_modules/@cmodjs/core/utils/paths.js'
@@ -63,8 +63,6 @@ const preferenceTitles = {
 } satisfies Partial<Record<keyof Preferences, string>>
 
 const viewSection = 'view:'
-
-const selectedColor = 'userMessageBackground'
 
 const statusColumns = 2
 
@@ -279,14 +277,14 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))]
     }
 
-    let hasLoaded = false
     const refresh = async () => {
-      hasLoaded = true
       const failed = (what: string) => (error: unknown) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`)
       await load().then((views) => void (mod.state.memory.views = views), failed('The mods'))
       await readLog(mod).then((log) => void (mod.state.memory.log = log), failed('The Log'))
       await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed('The preferences'))
     }
+
+    void refresh()
 
     const act = (task: () => Promise<string | undefined>) =>
       void task()
@@ -376,7 +374,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
                 wrap: 'truncate-end',
                 children: [
                   Text({ bold: true, children: entry.mod }),
-                  ...(entry.level === 'warning' ? [Text({ color: 'warning', children: ' warning' })] : []),
+                  ...(entry.level === 'warning' ? [' ', Badge({ tone: 'warning', children: 'warning' })] : []),
                   Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ''}` }),
                 ],
               }),
@@ -396,13 +394,14 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       if (section === 'preferences') {
         return Box({
           flexDirection: 'column',
+          gap: 1,
           children: Object.entries(preferenceTitles).map(([key, title]) => {
             const isOn = mod.state.memory.preferences[key as keyof Preferences]
             const turn = async () => {
               await writePreference(mod, key as keyof Preferences, !isOn)
               return undefined
             }
-            return Button({ plain: true, key: `preference:${key}`, label: `${isOn ? '[x]' : '[ ]'} ${title}`, onPress: () => act(turn) })
+            return Toggle({ label: title, checked: isOn, onChange: () => act(turn) })
           }),
         })
       }
@@ -456,38 +455,33 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     return {
       draw(columns, isFocused, surface) {
-        if (!hasLoaded) void refresh()
         const { removing, views } = mod.state.memory
         const { notice } = mod.state.session
         const { view, section: shownSection } = shownOf()
         if (view === undefined) return Text({ dimColor: true, children: notice ?? 'Reading your mods…' })
         const sections = sectionsOf(view)
-        const status = (each: ModView) => (!each.isOn ? Text({ dimColor: true, children: '○ ' }) : each.pendingSteps.length > 0 ? Text({ color: 'warning', children: '● ' }) : Text({ dimColor: true, children: '● ' }))
+        const toneOf = (each: ModView) => (!each.isOn ? 'off' : each.pendingSteps.length > 0 ? 'warning' : 'neutral')
         const rowLabel = (each: ModView) => `${each.name}${each.isOn ? '' : ' (off)'}`
         const listColumns = Math.max(...views.map((each) => rowLabel(each).length)) + statusColumns + rowPadding + panelColumns
         const isWide = columns - listColumns - 1 >= detailMinColumns
         const mods = Panel({
           title: 'Mods',
-          children: Box({
-            flexDirection: 'column',
+          children: List({
+            label: 'Mods',
             children: views.map((each) =>
-              each === view
-                ? Box({ backgroundColor: selectedColor, paddingX: 1, children: Text({ wrap: 'truncate-end', children: [status(each), Text({ bold: true, children: rowLabel(each) })] }) })
-                : Box({
-                    paddingX: 1,
-                    children: Button({
-                      plain: true,
-                      dimColor: true,
-                      key: `mod:${each.name}`,
-                      onPress: () => {
-                        mod.state.session.selected = each.name
-                        mod.state.session.viewParams = null
-                        mod.state.memory.removing = null
-                        changed()
-                      },
-                      children: [status(each), rowLabel(each)],
-                    }),
-                  }),
+              ListItem({
+                key: `mod:${each.name}`,
+                label: each.name,
+                ...(each.isOn ? {} : { description: '(off)' }),
+                tone: toneOf(each),
+                isSelected: each === view,
+                onPress: () => {
+                  mod.state.session.selected = each.name
+                  mod.state.session.viewParams = null
+                  mod.state.memory.removing = null
+                  changed()
+                },
+              }),
             ),
           }),
         })
@@ -513,12 +507,10 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         const removal =
           removing === view.name
             ? [
-                Box({
-                  flexDirection: 'column',
-                  children: [
-                    Text({ color: 'warning', wrap: 'wrap', children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
-                    Box({ gap: 2, flexShrink: 0, children: [filledButton({ key: 'keep', variant: 'primary', label: 'Keep', onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: 'remove-confirmed', label: 'Remove', onPress: () => remove(view.name) })] }),
-                  ],
+                Banner({
+                  tone: 'warning',
+                  children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.`,
+                  actions: [filledButton({ key: 'keep', variant: 'primary', label: 'Keep', onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: 'remove-confirmed', label: 'Remove', onPress: () => remove(view.name) })],
                 }),
               ]
             : []
@@ -529,42 +521,31 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             return undefined
           })
         const attention = [
-          ...(view.isOn ? [] : [Text({ color: 'warning', wrap: 'wrap', children: 'Off: Claude Code does not load it.' })]),
-          ...(view.pendingSteps.length === 0 ? [] : [Box({ flexDirection: 'column', children: [Text({ color: 'warning', wrap: 'wrap', children: `Needs setup: ${view.pendingSteps.join(', ')}` }), filledButton({ key: 'finish', variant: 'primary', label: 'Finish setup', onPress: finishSetup })] })]),
+          ...(view.isOn ? [] : [Banner({ tone: 'warning', children: 'Off: Claude Code does not load it.' })]),
+          ...(view.pendingSteps.length === 0 ? [] : [Banner({ tone: 'warning', children: `Needs setup: ${view.pendingSteps.join(', ')}`, actions: [filledButton({ key: 'finish', variant: 'primary', label: 'Finish setup', onPress: finishSetup })] })]),
         ]
-        const row = Box({
-          flexWrap: 'wrap',
-          children: sections.map(({ key, label }) =>
-            key === shownSection
-              ? Text({ backgroundColor: selectedColor, bold: true, wrap: 'truncate-end', children: ` ${label} ` })
-              : Box({
-                  paddingX: 1,
-                  flexShrink: 0,
-                  children: Button({
-                    plain: true,
-                    dimColor: true,
-                    key: `section:${key}`,
-                    label,
-                    onPress: () => {
-                      mod.state.session.section = key
-                      mod.state.session.viewParams = null
-                      changed()
-                    },
-                  }),
-                }),
-          ),
-        })
         const detailColumns = (isWide ? columns - listColumns - 1 : columns) - panelColumns
+        const tabs = Tabs({
+          tabs: sections,
+          selected: shownSection,
+          onSelect: (key) => {
+            mod.state.session.section = key
+            mod.state.session.viewParams = null
+            changed()
+          },
+          children: drawSection(view, shownSection, detailColumns, isFocused, surface),
+        })
         const details = Panel({
           title: view.name,
           children: Box({
             flexDirection: 'column',
             gap: 1,
-            children: [header, ...removal, ...attention, row, drawSection(view, shownSection, detailColumns, isFocused, surface), ...(notice === null ? [] : [Text({ dimColor: true, wrap: 'wrap', children: notice })])],
+            children: [header, ...removal, ...attention, tabs, ...(notice === null ? [] : [Text({ dimColor: true, wrap: 'wrap', children: notice })])],
           }),
         })
         return isWide ? Box({ flexGrow: 1, columnGap: 1, children: [Box({ width: listColumns, flexShrink: 0, children: mods }), details] }) : Box({ flexDirection: 'column', flexGrow: 1, gap: 1, children: [Box({ flexDirection: 'column', flexShrink: 0, children: mods }), details] })
       },
+      refresh,
       shownView() {
         const { view, section } = shownOf()
         return view !== undefined && section.startsWith(viewSection) ? { mod: view.name, id: section.slice(viewSection.length) } : undefined

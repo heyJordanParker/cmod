@@ -7,7 +7,7 @@ import { elementData, elementOf, Text, type Handler } from '../ui/elements.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
-import { styleInterface, type Implementation } from './interfaces.js'
+import { styleInterface, uiParts, type Implementation } from './interfaces.js'
 import type { Router } from './router.js'
 import { partMethods, stalePress, type DrawnPart, type PageDeclaration, type PartPress, type PartRequest, type PartsUpdate, type ShownParts, type ViewDeclaration, type WidgetDeclaration } from './ui.js'
 import { areaComponents, widgetsOf, type Widgets } from './widgets.js'
@@ -117,6 +117,7 @@ export type Parts = {
   apply(listener: PartApply): void
   onOpen(listener: PartOpen): void
   onStart(listener: (mod: string) => void): void
+  onDeclare(listener: (mod: string) => void): void
   turnClosed(turn: TurnData): void
   readonly ui: Implementation
 }
@@ -181,6 +182,7 @@ export function serveParts({
   let applyTo: PartApply = async () => undefined
   let openIn: PartOpen = async () => undefined
   let started: (mod: string) => void = () => undefined
+  let declaredChanged: (mod: string) => void = () => undefined
 
   const run = (mod: string, requests: readonly PartRequest[]) =>
     applyTo(mod, requests).catch((error: unknown) => report(`pages:${mod}`, `Could not show the view or page ${mod} asked for`, error))
@@ -216,7 +218,9 @@ export function serveParts({
     const before = declared.get(mod)
     const after = partsOf(mod, listing)
     declared.set(mod, after)
-    for (const part of ['widgets', 'views', 'pages'] as const) if (JSON.stringify(before?.[part] ?? []) !== JSON.stringify(after[part])) tellUi('Change', { part })
+    const changedParts = uiParts.filter((part) => JSON.stringify(before?.[part] ?? []) !== JSON.stringify(after[part]))
+    for (const part of changedParts) tellUi('Change', { part })
+    if (before === undefined || changedParts.length > 0) declaredChanged(mod)
   }
 
   const ask = (mod: string) => {
@@ -446,6 +450,9 @@ export function serveParts({
     },
     onStart(listener) {
       started = listener
+    },
+    onDeclare(listener) {
+      declaredChanged = listener
     },
     turnClosed(turn) {
       closedTurn = turn

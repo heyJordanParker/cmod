@@ -7,10 +7,11 @@ import type { HerdrTerminal, SessionTerminals } from '@cmodjs/core/src/runtime/i
 import { capture } from './process.js'
 import mainJs from '../../herdr/cmod/main.js' with { type: 'text' }
 import modJson from '../../herdr/cmod/mod.json' with { type: 'json' }
+import panelJs from '../../herdr/cmod/panel.js' with { type: 'text' }
 import { home, ifMissing, readJson, readText, writeAtomically } from './files.js'
 import { storePath, takeLock } from './store.js'
 
-const carried: Readonly<Record<string, string>> = { 'main.js': mainJs, 'mod.json': `${JSON.stringify(modJson)}\n` }
+const carried: Readonly<Record<string, string>> = { 'main.js': mainJs, 'panel.js': panelJs, 'mod.json': `${JSON.stringify(modJson)}\n` }
 
 const writtenWhileRunning: readonly string[] = ['gpui-kit.d.ts', 'jsconfig.json', '.drawn']
 

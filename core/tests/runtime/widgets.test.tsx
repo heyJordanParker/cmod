@@ -607,5 +607,5 @@ test('a widget sends the cmod plugin only text, numbers, plain objects, and the 
 
   expect(elementData(Text({ children: 'main' }), numberOf)).toEqual({ $cmodElement: 'Text', props: { children: 'main' } })
   expect(() => elementData(new Map(), numberOf)).toThrow('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
-  expect(() => elementOf({ $cmodElement: 'Script', props: {} }, 'demo/branch:', () => {})).toThrow('a widget drew Script, which is not an element of ui/elements.js.')
+  expect(() => elementOf({ $cmodElement: 'Script', props: {} }, 'demo/branch:', () => {})).toThrow('a widget drew Script, which is not an element of ui/elements.js or ui/components.js.')
 })

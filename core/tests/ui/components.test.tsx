@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { Dialog, Help, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
-import { Box, Button, Text } from '../../src/ui/elements.js'
+import { Badge, Banner, Dialog, Help, List, ListItem, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
+import { Box, Button, drawWith, elementData, elementOf, Text } from '../../src/ui/elements.js'
 
 const tabs = [
   { key: 'controls', label: 'Controls' },
@@ -147,4 +147,96 @@ test('Dialog draws its title, body, and actions in order', async () => {
   expect(await tested.shown.pane.lines()).toEqual([' Delete feature/kit?', '', ' Its 3 commits are not on main.', '', ' [ Keep it ]  [ Delete ]'])
   await tested.shown.pane.press('Keep it')
   expect(tested.state.session.kept).toBe(1)
+})
+
+test('Tabs reaches every other app as one Tabs element whose tabs each carry their own press', () => {
+  const handlers: (() => unknown)[] = []
+  const picked: string[] = []
+
+  const data = elementData(Tabs({ tabs, selected: 'controls', onSelect: (tab) => void picked.push(tab) }), (run) => handlers.push(run) - 1)
+  handlers[1]?.()
+
+  expect(data).toEqual({
+    $cmodElement: 'Tabs',
+    props: {
+      key: '',
+      tabs: [
+        { key: 'controls', label: 'Controls', isSelected: true, onSelect: { $cmodHandler: 0 } },
+        { key: 'split', label: 'Split', isSelected: false, onSelect: { $cmodHandler: 1 } },
+      ],
+    },
+  })
+  expect(picked).toEqual(['split'])
+})
+
+test('a host component that arrives as data draws in the terminal as the mod drew it, with its keys under the part', async () => {
+  const drawn = () => (
+    <Box flexDirection="column">
+      <Tabs tabs={tabs} selected="controls" onSelect={() => undefined} />
+      <Toggle label="Show hidden files" checked onChange={() => undefined} />
+    </Box>
+  )
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      async setup(mod) {
+        await mod.panes.add({ id: 'direct', title: 'Direct', render: drawn }).open()
+      },
+    }),
+  )
+  const data = elementData(drawn(), () => 0)
+  const roundTrip = testMod(
+    defineMod({
+      name: 'demo',
+      async setup(mod) {
+        await mod.panes.add({ id: 'data', title: 'Data', render: () => elementOf(data, 'demo/data:', () => undefined) as JSX.Element }).open()
+      },
+    }),
+  )
+
+  expect(await roundTrip.shown.pane.lines()).toEqual(await tested.shown.pane.lines())
+  await roundTrip.shown.pane.press('demo/data:tab:split')
+})
+
+test('List, ListItem, Badge, and Banner draw a list of rows, a toned word, and a notice with its actions in the terminal', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      state: { session: { picked: '' } },
+      async setup(mod) {
+        await mod.panes
+          .add({
+            id: 'mods',
+            title: 'Mods',
+            render: ({ state: { session } }) => (
+              <Box flexDirection="column" gap={1}>
+                <List label="Mods">
+                  <ListItem key="mod:cmod" label="cmod" tone="neutral" isSelected />
+                  <ListItem key="mod:demo" label="demo" tone="warning" onPress={() => void (session.picked = 'demo')} />
+                  <ListItem key="mod:old" label="old" description="(off)" tone="off" onPress={() => void (session.picked = 'old')} />
+                </List>
+                <Box gap={1}>
+                  <Text>demo</Text>
+                  <Badge tone="warning">warning</Badge>
+                </Box>
+                <Banner tone="warning" actions={[<Button key="finish" label="Finish setup" onPress={() => undefined} />]}>
+                  Needs setup: Choose a branch
+                </Banner>
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.pane.lines()).toEqual([' ● cmod', ' ● demo', ' ○ old (off)', '', 'demo warning', '', 'Needs setup: Choose a branch', '[ Finish setup ]'])
+  await tested.shown.pane.press('mod:demo')
+  expect(tested.state.session.picked).toBe('demo')
+})
+
+test('drawWith lowers a host component with the table it draws with', () => {
+  const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
+
+  expect(drawWith(table, () => Badge({ tone: 'critical', children: 'failed' }))).toEqual({ type: 'Text', props: { color: 'error', children: 'failed' } } as never)
 })

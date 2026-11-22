@@ -348,9 +348,9 @@ test("Settings lists each set-up mod with its views in Settings, options, and ho
   await shown()
   await tested.settle()
   const page = await shown()
-  await tested.shown.pane.press('section:options')
+  await tested.shown.pane.press('tab:options')
   const options = await shown()
-  await tested.shown.pane.press('section:hotkeys')
+  await tested.shown.pane.press('tab:hotkeys')
   const hotkeys = await shown()
 
   expect(tested.shown.pane.id).toBe('sidebar')
@@ -371,7 +371,7 @@ test('Settings draws no permission row for a mod that declares permissions', asy
 
   const page = await shown()
 
-  expect(page).toContain('Options  Hotkeys')
+  expect(page).toContain('Options   Hotkeys')
   expect(page).not.toContain('Permissions')
   expect(page).not.toContain('api.github.com')
 })
@@ -433,7 +433,7 @@ test('an option saves through cmod options set, and a combo binds through cmod h
   await tested.settle()
 
   await tested.shown.pane.input('option:demo.branch', 'release')
-  await tested.shown.pane.press('section:hotkeys')
+  await tested.shown.pane.press('tab:hotkeys')
   await tested.shown.pane.input('hotkey:runs', 'ctrl+shift+r')
   await tested.settle()
 
@@ -445,7 +445,7 @@ test('Settings lists a hotkey without a default as unbound, and a combo binds it
   await tested.type('/mods demo')
   await tested.settle()
 
-  await tested.shown.pane.press('section:hotkeys')
+  await tested.shown.pane.press('tab:hotkeys')
   const hotkeys = await shown()
   await tested.shown.pane.input('hotkey:next', 'ctrl+shift+n')
   await tested.settle()
@@ -1065,7 +1065,7 @@ test('pressing a row of History scrolls the conversation to that message', async
   expect(scrolled).toEqual([{ to: { requestId: read.id }, block: 'start' }])
 })
 
-test('Find keeps the matching rows and opens the prompts and subagents that hold them, and the filter cycles through prompts, tools, and errors', async () => {
+test('Find keeps the matching rows and opens the prompts and subagents that hold them, and Show picks prompts, tools, or errors', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await conversationWithTask(tested)
   await tested.type('/history')
@@ -1074,21 +1074,19 @@ test('Find keeps the matching rows and opens the prompts and subagents that hold
   await tested.shown.pane.input('history:find', 'refreshtoken')
   const found = await historyLines(tested)
   await tested.shown.pane.input('history:find', '')
-  await tested.shown.pane.press('history:filter')
+  await tested.shown.pane.select('history:filter', 'prompts')
   const prompts = await historyLines(tested)
-  await tested.shown.pane.press('history:filter')
-  await tested.shown.pane.press('history:filter')
+  await tested.shown.pane.select('history:filter', 'errors')
   const errors = await historyLines(tested)
 
   expect(found).toContain('Explore find every caller of refreshToken')
   expect(found).toContain('Grep refreshToken')
   expect(found).not.toContain('set up the auth tests')
   expect(found).not.toContain('Read src/auth.ts')
-  expect(prompts).toContain('Show: Prompts')
+  expect(tested.state.session.history.filter).toBe('errors')
   expect(prompts).toContain('set up the auth tests')
   expect(prompts).toContain('fix the login bug')
   expect(prompts).not.toContain('Read src/auth.ts')
-  expect(errors).toContain('Show: Errors')
   expect(errors).toContain('Bash bun test')
   expect(errors).not.toContain('Read src/auth.ts')
   expect(errors).not.toContain('set up the auth tests')
@@ -1100,7 +1098,7 @@ test('the Timeline lists every row in the order it happened, with no nesting', a
   await tested.type('/history')
   await historyLines(tested)
 
-  await tested.shown.pane.press('history:layout')
+  await tested.shown.pane.select('history:layout', 'timeline')
   const rows = (await historyLines(tested)).split('\n').map((line) => line.replace(/^[\s│]+|[\s│]+$/g, ''))
 
   const order = ['set up the auth tests', 'Claude Set up.', 'fix the login bug', 'Read src/auth.ts', 'Bash bun test', 'Agent Find the callers', 'Explore find every caller', 'Grep refreshToken', 'Claude Fixed the expired']
@@ -1222,7 +1220,7 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
     '              │ Needs setup: Sign in to GitHub │',
     '              │ Finish setup                   │',
     '              │                                │',
-    '              │  Options  Hotkeys              │',
+    '              │ Options   Hotkeys              │',
     '              │                                │',
     '              │ Branch                         │',
     '              │ Value main                     │',
@@ -1243,6 +1241,18 @@ test('Settings lists a loaded mod that told its parts and has no install record'
   await tested.settle()
 
   expect(await shown()).toContain('│  ● notes  │')
+})
+
+test('Settings reads the mods when the session starts, so /mods draws them on its first frame with no loading line', async () => {
+  const { tested, shown } = testSettings()
+  await tested.start()
+  await tested.settle()
+
+  await tested.type('/mods')
+  const first = await shown()
+
+  expect(first).not.toContain('Reading your mods')
+  expect(first).toContain('│  ● demo  │')
 })
 
 test('Settings stacks the Mods panel above the mod panel when the Sidebar is too narrow for both side by side', async () => {
@@ -1638,7 +1648,7 @@ test('cmod:failed answers show for a mod run from the checkout this session work
 
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:log')
+  await tested.shown.pane.press('tab:log')
   const log = await shown()
   await tested.shown.pane.press('copy:other/session:onPrompt')
 
@@ -1682,7 +1692,7 @@ test('the Log keeps the failures of every session, and skips a session file that
 
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:log')
+  await tested.shown.pane.press('tab:log')
   const log = await shown()
 
   expect(log.indexOf("demo's onPrompt listener failed")).toBeLessThan(log.indexOf('The every 1000 ms timer failed'))
@@ -1704,7 +1714,7 @@ test('the Log keeps the failures of every session, and skips a session file that
   await tested.fakes.fs.write?.(`${store}/data/cmod/log/other-session.json`, '{}')
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:log')
+  await tested.shown.pane.press('tab:log')
   const skipped = await shown()
 
   expect(skipped).toContain("demo's onPrompt listener failed")
@@ -1723,7 +1733,7 @@ test('a warning lands in the Log as a warning with the versions it ran on, count
   const logged = (JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'demo')
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:log')
+  await tested.shown.pane.press('tab:log')
   const log = await shown()
 
   expect(answers).toEqual([{ value: { showsToast: false } }, { value: { showsToast: false } }])
@@ -1752,7 +1762,7 @@ test("another session's preference write reaches this session's Settings when st
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:preferences')
+  await tested.shown.pane.press('tab:preferences')
   const before = await shown()
 
   await writeStoreFile(tested, `${store}/preferences.json`, JSON.stringify({ showsInstalledModErrors: true }))
@@ -1767,9 +1777,9 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:preferences')
+  await tested.shown.pane.press('tab:preferences')
   const before = await shown()
-  await tested.shown.pane.press('preference:showsInstalledModErrors')
+  await tested.shown.pane.press('toggle:Show errors from installed mods')
   await tested.settle()
 
   expect(before).not.toContain('permission')
@@ -2510,10 +2520,15 @@ test('the offer counts four updates instead of naming them', async () => {
 test('an update whose install record lists what the update granted is offered by name and version, without reading the record', async () => {
   const record = `${store}/records/other.json`
   const granted = JSON.stringify({ name: 'other', version: '1.3.0', root: '/plugins/other', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: ['conversation'], grantedOnUpdate: ['conversation'] })
-  const { tested } = await updated({ 'other@market': '1.2.0' }, { 'other@market': '1.3.0' }, { [record]: granted })
+  const { tested, tick } = await startedWith({ 'other@market': '1.2.0' }, { [record]: granted })
+  const readsAtStart = tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record).length
+
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '1.3.0' }))
+  await tick()
+  await tick()
 
   expect(offerOf(tested)).toEqual(offering('other updated to 1.3.0. Reload to use them in this session.'))
-  expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toEqual([])
+  expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toHaveLength(readsAtStart)
 })
 
 test('a user settings change that turns a plugin on shows the offer once Claude Code loaded it', async () => {
@@ -2715,7 +2730,7 @@ test('the Widgets section of cmod in Settings moves the picked widget, and hides
   const saved = async () => JSON.parse((await tested.fakes.fs.read?.(`${store}/widgets.json`)) ?? '{}') as typeof layout
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('section:widgets')
+  await tested.shown.pane.press('tab:widgets')
   await tested.settle()
 
   expect((await tested.shown.pane.lines()).join('\n')).toContain('Branch (git)')

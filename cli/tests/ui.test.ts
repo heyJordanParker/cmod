@@ -148,12 +148,12 @@ test.concurrent('cmod ui follow prints the Redraw, Change, Open, and Close event
   expect([first.events, first.missed]).toEqual([[], true])
   expect([replayed.events, replayed.missed]).toEqual([[{ event: 'Redraw', session: 'worker', mod: 'demo', id: 'runs' }], false])
   expect([told.events, told.missed]).toEqual([[{ event: 'Change', session: 'worker', part: 'views' }], false])
-  expect(told.cursor.split(':').slice(1)).toEqual(['1', '1', '0', '0'])
+  expect(told.cursor.split(':').slice(1)).toEqual(['4', '1', '0', '0'])
   expect(opened.events).toEqual([
     { event: 'Open', session: 'worker', mod: 'demo', id: 'log' },
     { event: 'Close', session: 'worker', mod: 'demo', id: 'log' },
   ])
-  expect([opened.missed, opened.cursor.split(':').slice(1)]).toEqual([false, ['1', '1', '1', '1']])
+  expect([opened.missed, opened.cursor.split(':').slice(1)]).toEqual([false, ['4', '1', '1', '1']])
 }, 30_000)
 
 test.concurrent('cmod ui follow counts the events as missed once cmod serve started again since its cursor', async () => {
@@ -166,4 +166,76 @@ test.concurrent('cmod ui follow counts the events as missed once cmod serve star
   stop()
 
   expect([after.events, after.missed]).toEqual([[], true])
+}, 30_000)
+
+async function appConnection(home: string) {
+  const { url, token } = JSON.parse(await Bun.file(join(home, '.local/share/cmod/serve.json')).text()) as { readonly url: string; readonly token: string }
+  const socket = new WebSocket(`${url}?token=${token}`)
+  const answers = new Map<number, (message: { readonly result?: unknown; readonly error?: { readonly message: string } }) => void>()
+  const heard: unknown[] = []
+  let nextHeard: () => void = () => undefined
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data)) as { readonly id?: number; readonly method?: string; readonly params?: { readonly payload?: unknown }; readonly result?: unknown; readonly error?: { readonly message: string } }
+    if (message.method === '$/on') {
+      heard.push(message.params?.payload)
+      nextHeard()
+    } else if (message.id !== undefined) answers.get(message.id)?.(message)
+  })
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve)
+    socket.addEventListener('error', reject)
+  })
+  let id = 0
+  const request = (method: string, params: unknown) =>
+    new Promise<unknown>((resolve, reject) => {
+      id += 1
+      answers.set(id, (message) => (message.error === undefined ? resolve(message.result) : reject(new Error(message.error.message))))
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+    })
+  return { socket, request, heard, nextChange: () => new Promise<void>((resolve) => (nextHeard = resolve)) }
+}
+
+test.concurrent("an app reaches cmod/UI over the WebSocket serve.json names, with the token it gives, as cmod ui does over serve.sock", async () => {
+  const { home, asked, stop } = await servedSession({ views: () => [{ mod: 'demo', id: 'runs', title: 'Runs' }], draw: () => runsDrawing })
+  const app = await appConnection(home)
+
+  const listed = await app.request('cmod/UI.views', ['worker'])
+  const drawn = await app.request('cmod/UI.draw', ['worker', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'herdr' }])
+  const pressed = await app.request('cmod/UI.press', ['worker', 3, { surface: 'herdr', key: 'demo/runs:rerun' }])
+  const refused = await fetch(JSON.parse(await Bun.file(join(home, '.local/share/cmod/serve.json')).text()).url.replace('ws:', 'http:'), { headers: { upgrade: 'websocket', connection: 'upgrade' } })
+  app.socket.close()
+  stop()
+
+  expect([listed, drawn, pressed]).toEqual([[{ mod: 'demo', id: 'runs', title: 'Runs' }], runsDrawing, null])
+  expect(asked.at(-1)).toEqual(['press', 'worker', 3, { surface: 'herdr', key: 'demo/runs:rerun' }])
+  expect(refused.status).toBe(401)
+}, 30_000)
+
+test.concurrent("an app hears Change for a session's widgets, views, and pages when its cmod plugin holds the session again, as after /reload-plugins", async () => {
+  const { home, stop } = await servedSession({})
+  const app = await appConnection(home)
+  await app.request('$/listen', { id: 'ui Change', interface: 'cmod/UI', event: 'Change', kind: 'on' })
+  const socket = join(home, '.local/share/cmod/serve.sock')
+  const reloaded = connectRpc({
+    call: async (path, init) => {
+      const answer = await fetch(`http://localhost${path}`, { method: init.method, ...(init.body === undefined ? {} : { body: init.body, headers: { 'content-type': 'application/json' } }), unix: socket } as RequestInit)
+      return { status: answer.status, text: await answer.text() }
+    },
+    handle: async () => null,
+    wait: () => new Promise<void>(() => undefined),
+  })
+  clients.push(reloaded)
+
+  const told = app.nextChange()
+  await reloaded.request('$/hold', { session: 'worker', project: home, cwd: home })
+  await told
+  while (app.heard.length < 3) await app.nextChange()
+  app.socket.close()
+  stop()
+
+  expect(app.heard).toEqual([
+    { session: 'worker', part: 'widgets' },
+    { session: 'worker', part: 'views' },
+    { session: 'worker', part: 'pages' },
+  ])
 }, 30_000)

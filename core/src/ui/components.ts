@@ -1,63 +1,63 @@
-import { Box, Button, Text } from './elements.js'
+import { Box, Button, hostComponent, Text } from './elements.js'
 
 export type Tab = { readonly key: string; readonly label: string; readonly hotkey?: string }
 
-export function Tabs({ tabs, selected, onSelect, children }: { readonly tabs: readonly Tab[]; readonly selected: string; readonly onSelect: (key: string) => void; readonly children?: JSX.Children }): JSX.Element {
-  const row = tabs.map(({ key, label, hotkey }) =>
-    key === selected
-      ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
-      : Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => onSelect(key) }),
-  )
-  return Box({ flexDirection: 'column', gap: 1, children: [Box({ gap: 3, children: row }), children] })
+export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'critical'
+
+type Pressed = () => void
+
+const toneColors: Readonly<Record<Tone, string | undefined>> = { neutral: undefined, info: 'suggestion', success: 'success', warning: 'warning', critical: 'error' }
+
+const textOf = (tone: Tone) => {
+  const color = toneColors[tone]
+  return color === undefined ? { dimColor: true } : { color }
 }
 
-export function Split({ children }: { readonly children: readonly JSX.Element[] }): JSX.Element {
-  const width = `${Math.floor(100 / Math.max(children.length, 1))}%`
-  return Box({ gap: 1, children: children.map((child) => Box({ width, children: child })) })
-}
+export const Tabs = hostComponent(
+  'Tabs',
+  ({ tabs, selected, onSelect, children }: { readonly tabs: readonly Tab[]; readonly selected: string; readonly onSelect: (key: string) => void; readonly children?: JSX.Children }) => ({
+    key: '',
+    tabs: tabs.map(({ key, label, hotkey }) => ({ key, label, ...(hotkey === undefined ? {} : { hotkey }), isSelected: key === selected, onSelect: () => onSelect(key) })),
+    ...(children === undefined ? {} : { children }),
+  }),
+  ({ key: prefix, tabs, children }: { readonly key: string; readonly tabs: readonly (Tab & { readonly isSelected: boolean; readonly onSelect: Pressed })[]; readonly children?: JSX.Children }) => {
+    const row = tabs.map(({ key, label, hotkey, isSelected, onSelect }) =>
+      isSelected
+        ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
+        : Button({ plain: true, dimColor: true, key: `${prefix}tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: onSelect }),
+    )
+    return Box({ flexDirection: 'column', gap: 1, children: [Box({ gap: 3, children: row }), children] })
+  },
+)
 
-export function Panel({ title, children }: { readonly title: string; readonly children?: JSX.Children }): JSX.Element {
-  return Box({
-    flexDirection: 'column',
-    flexGrow: 1,
-    children: [
-      Box({ flexDirection: 'column', flexGrow: 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children }),
-      Box({ position: 'absolute', top: 0, left: 2, children: Text({ bold: true, wrap: 'truncate-end', children: ` ${title} ` }) }),
-    ],
-  })
-}
+export const Split = hostComponent(
+  'Split',
+  ({ children }: { readonly children: readonly JSX.Element[] }) => ({ children }),
+  ({ children }: { readonly children: readonly JSX.Element[] }) => {
+    const width = `${Math.floor(100 / Math.max(children.length, 1))}%`
+    return Box({ gap: 1, children: children.map((child) => Box({ width, children: child })) })
+  },
+)
 
-export function Toggle({ label, checked, onChange }: { readonly label: string; readonly checked: boolean; readonly onChange: (checked: boolean) => void }): JSX.Element {
-  return Button({ plain: true, key: `toggle:${label}`, label: `${checked ? '[x]' : '[ ]'} ${label}`, onPress: () => onChange(!checked) })
-}
+export const Panel = hostComponent(
+  'Panel',
+  ({ title, children }: { readonly title: string; readonly children?: JSX.Children }) => ({ title, ...(children === undefined ? {} : { children }) }),
+  ({ title, children }: { readonly title: string; readonly children?: JSX.Children }) =>
+    Box({
+      flexDirection: 'column',
+      flexGrow: 1,
+      children: [
+        Box({ flexDirection: 'column', flexGrow: 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children }),
+        Box({ position: 'absolute', top: 0, left: 2, children: Text({ bold: true, wrap: 'truncate-end', children: ` ${title} ` }) }),
+      ],
+    }),
+)
 
-export function Tooltip({ text, children }: { readonly text: string; readonly children?: JSX.Children }): JSX.Element {
-  return Box({ key: `tooltip:${text}`, children: [children, card(text, false)] })
-}
-
-export function Help({ text, isOpen, onOpenChange }: { readonly text: string; readonly isOpen: boolean; readonly onOpenChange: (isOpen: boolean) => void }): JSX.Element {
-  return Box({ key: `help:${text}`, children: [Button({ plain: true, key: `help-button:${text}`, label: '?', onPress: () => onOpenChange(!isOpen) }), card(text, isOpen)] })
-}
-
-export function Dialog({ title, children, actions }: { readonly title: string; readonly children?: JSX.Children; readonly actions: JSX.Children }): JSX.Element {
-  return Box({ flexDirection: 'column', gap: 1, paddingX: 1, children: [Text({ bold: true, children: title }), children, Box({ gap: 2, children: actions })] })
-}
-
-export function Pagination({ page, pages, onPage }: { readonly page: number; readonly pages: number; readonly onPage: (page: number) => void }): JSX.Element {
-  return Box({
-    gap: 2,
-    children: [
-      page > 1 ? Button({ plain: true, hotkey: 'p', label: 'Previous', onPress: () => onPage(page - 1) }) : Text({ dimColor: true, children: 'p: Previous' }),
-      Text({ dimColor: true, children: `${page} of ${pages}` }),
-      page < pages ? Button({ plain: true, hotkey: 'n', label: 'Next', onPress: () => onPage(page + 1) }) : Text({ dimColor: true, children: 'n: Next' }),
-    ],
-  })
-}
-
-export function Progress({ value, width = 24 }: { readonly value: number; readonly width?: number }): JSX.Element {
-  const filled = Math.round((Math.min(Math.max(value, 0), 100) / 100) * width)
-  return Text({ children: [Text({ color: 'claude', children: '█'.repeat(filled) }), Text({ color: 'subtle', children: '░'.repeat(width - filled) })] })
-}
+export const Toggle = hostComponent(
+  'Toggle',
+  ({ label, checked, onChange }: { readonly label: string; readonly checked: boolean; readonly onChange: (checked: boolean) => void }) => ({ key: '', label, checked, onToggle: () => onChange(!checked) }),
+  ({ key, label, checked, onToggle }: { readonly key: string; readonly label: string; readonly checked: boolean; readonly onToggle: Pressed }) => Button({ plain: true, key: `${key}toggle:${label}`, label: `${checked ? '[x]' : '[ ]'} ${label}`, onPress: onToggle }),
+)
 
 const cardColumns = 36
 
@@ -73,3 +73,96 @@ function card(text: string, isShown: boolean): JSX.Element {
     children: Text({ color: 'inverseText', wrap: 'wrap', children: text }),
   })
 }
+
+export const Tooltip = hostComponent(
+  'Tooltip',
+  ({ text, children }: { readonly text: string; readonly children?: JSX.Children }) => ({ key: '', text, ...(children === undefined ? {} : { children }) }),
+  ({ key, text, children }: { readonly key: string; readonly text: string; readonly children?: JSX.Children }) => Box({ key: `${key}tooltip:${text}`, children: [children, card(text, false)] }),
+)
+
+export const Help = hostComponent(
+  'Help',
+  ({ text, isOpen, onOpenChange }: { readonly text: string; readonly isOpen: boolean; readonly onOpenChange: (isOpen: boolean) => void }) => ({ key: '', text, isOpen, onToggle: () => onOpenChange(!isOpen) }),
+  ({ key, text, isOpen, onToggle }: { readonly key: string; readonly text: string; readonly isOpen: boolean; readonly onToggle: Pressed }) =>
+    Box({ key: `${key}help:${text}`, children: [Button({ plain: true, key: `${key}help-button:${text}`, label: '?', onPress: onToggle }), card(text, isOpen)] }),
+)
+
+export const Dialog = hostComponent(
+  'Dialog',
+  ({ title, children, actions }: { readonly title: string; readonly children?: JSX.Children; readonly actions: JSX.Children }) => ({ title, actions, ...(children === undefined ? {} : { children }) }),
+  ({ title, children, actions }: { readonly title: string; readonly children?: JSX.Children; readonly actions: JSX.Children }) =>
+    Box({ flexDirection: 'column', gap: 1, paddingX: 1, children: [Text({ bold: true, children: title }), children, Box({ gap: 2, children: actions })] }),
+)
+
+export const Pagination = hostComponent(
+  'Pagination',
+  ({ page, pages, onPage }: { readonly page: number; readonly pages: number; readonly onPage: (page: number) => void }) => ({
+    page,
+    pages,
+    ...(page > 1 ? { onPrevious: () => onPage(page - 1) } : {}),
+    ...(page < pages ? { onNext: () => onPage(page + 1) } : {}),
+  }),
+  ({ page, pages, onPrevious, onNext }: { readonly page: number; readonly pages: number; readonly onPrevious?: Pressed; readonly onNext?: Pressed }) =>
+    Box({
+      gap: 2,
+      children: [
+        onPrevious === undefined ? Text({ dimColor: true, children: 'p: Previous' }) : Button({ plain: true, hotkey: 'p', label: 'Previous', onPress: onPrevious }),
+        Text({ dimColor: true, children: `${page} of ${pages}` }),
+        onNext === undefined ? Text({ dimColor: true, children: 'n: Next' }) : Button({ plain: true, hotkey: 'n', label: 'Next', onPress: onNext }),
+      ],
+    }),
+)
+
+export const Progress = hostComponent(
+  'Progress',
+  ({ value, width = 24, label }: { readonly value: number; readonly width?: number; readonly label?: string }) => ({ value: Math.min(Math.max(value, 0), 100), width, ...(label === undefined ? {} : { label }) }),
+  ({ value, width }: { readonly value: number; readonly width: number; readonly label?: string }) => {
+    const filled = Math.round((value / 100) * width)
+    return Text({ children: [Text({ color: 'claude', children: '█'.repeat(filled) }), Text({ color: 'subtle', children: '░'.repeat(width - filled) })] })
+  },
+)
+
+export const List = hostComponent(
+  'List',
+  ({ label, children }: { readonly label: string; readonly children?: JSX.Children }) => ({ label, ...(children === undefined ? {} : { children }) }),
+  ({ children }: { readonly label: string; readonly children?: JSX.Children }) => Box({ flexDirection: 'column', children }),
+)
+
+type ListItemProps = { readonly key: string; readonly label: string; readonly description?: string; readonly tone?: Tone | 'off'; readonly isSelected?: boolean; readonly onPress?: Pressed }
+
+const statusOf = (tone: ListItemProps['tone']) => (tone === undefined ? [] : [tone === 'off' ? Text({ dimColor: true, children: '○ ' }) : Text({ ...textOf(tone), children: '● ' })])
+
+export const ListItem = hostComponent(
+  'ListItem',
+  (props: ListItemProps) => props,
+  ({ key, label, description, tone, isSelected, onPress }: ListItemProps) => {
+    const shown = [...statusOf(tone), label, ...(description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })])]
+    if (isSelected === true || onPress === undefined) return Box({ ...(isSelected === true ? { backgroundColor: 'userMessageBackground' } : {}), paddingX: 1, children: Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: shown }) })
+    return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) })
+  },
+)
+
+export const Badge = hostComponent(
+  'Badge',
+  ({ tone = 'neutral', children }: { readonly tone?: Tone; readonly children: JSX.Children }) => ({ tone, children }),
+  ({ tone, children }: { readonly tone: Tone; readonly children: JSX.Children }) => Text({ ...textOf(tone), children }),
+)
+
+const wordsOf = (children: JSX.Children): string | undefined => {
+  const all = [children].flat(Infinity as 1).filter((each) => each !== null && each !== undefined && typeof each !== 'boolean')
+  return all.every((each) => typeof each === 'string' || typeof each === 'number') ? all.join('') : undefined
+}
+
+export const Banner = hostComponent(
+  'Banner',
+  ({ tone = 'info', title, children, actions }: { readonly tone?: Tone; readonly title?: string; readonly children?: JSX.Children; readonly actions?: JSX.Children }) => ({ tone, ...(title === undefined ? {} : { title }), ...(children === undefined ? {} : { children }), ...(actions === undefined ? {} : { actions }) }),
+  ({ tone, title, children, actions }: { readonly tone: Tone; readonly title?: string; readonly children?: JSX.Children; readonly actions?: JSX.Children }) =>
+    Box({
+      flexDirection: 'column',
+      children: [
+        ...(title === undefined ? [] : [Text({ ...textOf(tone), bold: true, wrap: 'wrap', children: title })]),
+        ...(children === undefined ? [] : [wordsOf(children) === undefined ? children : Text({ ...(title === undefined ? textOf(tone) : {}), wrap: 'wrap', children: wordsOf(children) })]),
+        ...(actions === undefined ? [] : [Box({ gap: 2, flexShrink: 0, children: actions })]),
+      ],
+    }),
+)

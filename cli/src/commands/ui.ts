@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { isObject, serveSocketPath, storeFolder } from '@cmodjs/core/src/records.js'
-import { listenMethod, methodName, onMethod, uiEvents, uiInterface, type Heard, type Listening } from '@cmodjs/core/src/runtime/interfaces.js'
+import { listenMethod, methodName, onMethod, uiEvents, uiInterface, uiParts, type Heard, type Listening } from '@cmodjs/core/src/runtime/interfaces.js'
 import { connectServe } from '@cmodjs/core/src/runtime/bun.js'
 import { RpcError, rpcCodes, RpcUnreached, type RpcClient, type RpcHandler } from '@cmodjs/core/src/runtime/rpc.js'
 import { surfaces, type Surface } from '@cmodjs/core/src/session/session.js'
@@ -66,8 +66,6 @@ again misses no event. missed is true when the events before the cursor are
 unknown: on a run without --after, once cmod serve started again, or once more
 events passed than cmod serve keeps. Then read every list and drawing again.`
 
-const parts = ['widgets', 'views', 'pages'] as const
-
 const followMs = 8000
 
 export async function run(argv: string[]): Promise<number> {
@@ -80,7 +78,7 @@ export async function run(argv: string[]): Promise<number> {
 
 function asked(command: string | undefined, named: readonly string[], values: { readonly columns?: string | undefined; readonly surface?: string | undefined; readonly area?: string | undefined; readonly after?: string | undefined; readonly host?: boolean | undefined }): Promise<unknown> {
   const [session, mod, id] = named
-  if (command === 'list' && named.length === 2 && (parts as readonly unknown[]).includes(named[0])) return calledOnServe(named[0] as string, [named[1]])
+  if (command === 'list' && named.length === 2 && (uiParts as readonly unknown[]).includes(named[0])) return calledOnServe(named[0] as string, [named[1]])
   if (command === 'draw' && named.length === 3) return calledOnServe('draw', [session, { mod, id }, { columns: columnsOf(values.columns), surface: surfaceOf(values.surface), ...areaOf(values.area) }])
   if (command === 'press' && (named.length === 2 || named.length === 3)) return calledOnServe('press', [session, handlerOf(named[1] as string), pressOf(named[2])])
   if ((command === 'open' || command === 'close') && named.length === 3) return calledOnServe(command, [session, { mod, id }])

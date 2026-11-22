@@ -1,18 +1,14 @@
 import { View, div, image } from "gpui-kit";
-import { v_flex, h_flex, Button, Tabs, Tab, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
+import { v_flex, h_flex, Button, Tabs, Tab, Switch, Progress, ProgressTrack, ProgressIndicator, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
 import { exec, checking, terminals, focused, readTextFile, theme, run, props, appHome, settings, notify, panes, layout } from "herdr";
+import { WebSocket } from "websocket";
 import { writeFile, readFile, mkdir, exists, readdir, unlink } from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { deflateSync } from "zlib";
+import { init, update, screen, entryOf, keyOf, QUIET_LOADING_MS } from "./panel.js";
 
-const CMOD = 'exec "${XDG_DATA_HOME:-$HOME/.local/share}/cmod/programs/cmod" "$@"';
-const CLAUDE_HOME = 'printf %s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"';
-const SURFACE = "herdr";
-const DASHBOARD = "dashboard";
-const CALL_MS = 30_000;
-const FOLLOW_MS = 20_000;
-const RETRY_MS = 30_000;
+const HOMES = 'printf "%s\\n%s" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${XDG_DATA_HOME:-$HOME/.local/share}/cmod"';
 const RESIZE_MS = 250;
 const SHOW_MS = 5_000;
 const CELL_PX = 8;
@@ -25,8 +21,7 @@ const RADIUS = { chip: 5, control: 7, card: 10 };
 const HEADER_PX = 42;
 const CONTROL_PX = 28;
 const FIELD_PX = 32;
-const CARD_INSET_PX = 12;
-const BODY_INSET_PX = 12;
+const INSET_PX = 12;
 const TAB_MAX_PX = 168;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DRAWN = "mods/cmod/.drawn";
@@ -38,12 +33,10 @@ const THEMED = {
   success: "ansi2", error: "ansi1", warning: "ansi3", merged: "ansi5", promptBorder: "border", bashBorder: "ansi5",
   diffAdded: "ansi2", diffRemoved: "ansi1", diffAddedDimmed: "ansi2", diffRemovedDimmed: "ansi1", diffAddedWord: "ansi10", diffRemovedWord: "ansi9",
 };
-const NEUTRAL_SURFACES = { userMessageBackground: "selected", inactive: "selected", subtle: "raised", secondaryText: "raised", promptBorder: "raised", gray: "raised", grey: "raised" };
-const NEUTRAL_BORDERS = new Set(["subtle", "inactive", "secondaryText", "promptBorder", "userMessageBackground", "text", "gray", "grey"]);
-const ACCENTS = new Set(["claude", "suggestion"]);
-const CELL_ART = /[\u2500-\u259f\ue0a0-\ue0d4]| {2,}/;
-const GLYPHS = { "\ue0b4": "\u25d7", "\ue0b6": "\u25d6", "\ue0b0": "\u25b6", "\ue0b2": "\u25c0" };
-const drawable = (words) => words.replace(/[\ue0b4\ue0b6\ue0b0\ue0b2]/g, (glyph) => GLYPHS[glyph]);
+const SURFACES = { userMessageBackground: "selected", inactive: "selected", subtle: "raised", secondaryText: "raised", promptBorder: "raised", gray: "raised", grey: "raised" };
+const BORDERS = new Set(["subtle", "inactive", "secondaryText", "promptBorder", "userMessageBackground", "text", "gray", "grey"]);
+const TONES = { info: "ansi4", success: "ansi2", warning: "ansi3", critical: "ansi1" };
+const CELL_TEXT = /[─-▟-]| {2,}/;
 const FIELDS = new Set(["Input", "Select"]);
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
@@ -53,9 +46,10 @@ const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
 });
 
 const messageOf = (error) => String(error?.message ?? error);
-const keyOf = ({ mod, id }) => `${mod}/${id}`;
-
+const handlerOf = (value) => (typeof value?.$cmodHandler === "number" ? value.$cmodHandler : undefined);
+const shownProblem = (problem) => problem.replace(/^cmod ui: /, "");
 const cmodTabs = () => new Set(panes().filter((pane) => pane.mod === "cmod").map((pane) => pane.tab));
+const terminalFont = () => settings().font_family ?? "JetBrains Mono";
 
 const pathTo = (node, isWanted) => {
   if (node === null || typeof node !== "object") return null;
@@ -65,28 +59,6 @@ const pathTo = (node, isWanted) => {
     if (path !== null) return [node, ...path];
   }
   return null;
-};
-
-const reveal = (path) => {
-  path.forEach((node, index) => {
-    const child = path[index + 1];
-    if (node.type === "stack" && child !== undefined && node.active !== child.id) run("layout.select", { stack: node.id, child: child.id });
-    if (node.hidden === true) run("layout.show", { id: node.id });
-  });
-};
-const handlerOf = (value) => (typeof value?.$cmodHandler === "number" ? value.$cmodHandler : undefined);
-
-const cmod = async (args, timeout = CALL_MS) => {
-  const answer = await exec("sh", ["-c", CMOD, "cmod", ...args], { timeout });
-  if (answer.code !== 0) throw new Error((answer.stderr || answer.stdout).trim() || `cmod ${args.slice(0, 2).join(" ")} exited with ${answer.code}`);
-  return JSON.parse(answer.stdout);
-};
-
-const following = new Map();
-const followed = (after) => {
-  const key = after ?? "";
-  if (!following.has(key)) following.set(key, cmod(["ui", "follow", ...(after === undefined ? [] : ["--after", after])], FOLLOW_MS).finally(() => following.delete(key)));
-  return following.get(key);
 };
 
 const textOf = (children) => {
@@ -101,8 +73,8 @@ const spaceOf = (value) => (typeof value === "number" ? value : SPACES[value]);
 const colorOf = (value, t, role = "text") => {
   if (typeof value !== "string") return undefined;
   if (/^#[0-9a-f]{3,8}$/i.test(value)) return value;
-  if (role === "surface" && NEUTRAL_SURFACES[value] !== undefined) return t[NEUTRAL_SURFACES[value]];
-  if (role === "border" && NEUTRAL_BORDERS.has(value)) return t.border;
+  if (role === "surface" && SURFACES[value] !== undefined) return t[SURFACES[value]];
+  if (role === "border" && BORDERS.has(value)) return t.border;
   const bright = value.endsWith("Bright");
   const ansi = ANSI.indexOf(bright ? value.slice(0, -"Bright".length) : value);
   if (ansi >= 0) return t[`ansi${ansi + (bright ? 8 : 0)}`];
@@ -110,26 +82,14 @@ const colorOf = (value, t, role = "text") => {
   return t[THEMED[value] ?? value];
 };
 
-const inkOn = (surface, t) => (ACCENTS.has(surface) ? t.accent_foreground : NEUTRAL_SURFACES[surface] !== undefined ? t.foreground : t.background);
-
-const wordsIn = (node) => {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(wordsIn).join("");
-  if (node === null || typeof node !== "object" || typeof node.$cmodElement !== "string") return "";
-  return wordsIn(node.props?.children ?? (typeof node.props?.label === "string" ? node.props.label : ""));
-};
-
-const isLegend = (node) => node?.$cmodElement === "Box" && node.props?.position === "absolute" && (node.props.top ?? 0) === 0 && node.props.bottom === undefined;
-const isCard = (node) => node?.$cmodElement === "Box" && typeof node.props?.borderStyle === "string";
-const isLoneNote = (tree) => tree?.$cmodElement === "Text" && textOf(tree.props?.children) !== undefined;
-const shownProblem = (problem) => problem.replace(/^cmod ui: /, "");
+const toneOf = (tone, t) => (TONES[tone] === undefined ? t.muted : t[TONES[tone]]);
 
 const walk = (node, path, visit) => {
   if (Array.isArray(node)) return node.forEach((each, index) => walk(each, `${path}.${index}`, visit));
   if (node === null || typeof node !== "object" || typeof node.$cmodElement !== "string") return;
-  const props = node.props ?? {};
-  visit(node.$cmodElement, props, path);
-  walk(props.children, `${path}.c`, visit);
+  const given = node.props ?? {};
+  visit(node.$cmodElement, given, path);
+  for (const [name, value] of Object.entries(given)) if (name === "children" || name === "actions") walk(value, `${path}.${name}`, visit);
 };
 
 const crc32 = (bytes) => {
@@ -185,9 +145,9 @@ const drawnFile = async (bytes, extension, uses) => {
   return `${DRAWN}/${name}`;
 };
 
-const imageFileOf = async (name, props, uses) => {
-  if (name === "Svg") return typeof props.source === "string" ? drawnFile(new Uint8Array(Buffer.from(props.source, "utf8")), "svg", uses) : null;
-  const source = props.source ?? {};
+const imageFileOf = async (name, given, uses) => {
+  if (name === "Svg") return typeof given.source === "string" ? drawnFile(new Uint8Array(Buffer.from(given.source, "utf8")), "svg", uses) : null;
+  const source = given.source ?? {};
   if (typeof source.png === "string") return drawnFile(new Uint8Array(Buffer.from(source.png, "base64")), "png", uses);
   if (typeof source.rgba === "string" && Number.isInteger(source.width) && Number.isInteger(source.height)) return drawnFile(pngOf(new Uint8Array(Buffer.from(source.rgba, "base64")), source.width, source.height), "png", uses);
   if (typeof source.file === "string") return drawnFile(await readFile(source.file), typeof source.format === "string" ? source.format : "png", uses);
@@ -217,53 +177,122 @@ const rasterRows = (cells, columns) => {
   return rows;
 };
 
-class Unit extends View {
-  init(given) {
-    this.owner = given.owner;
-    this.key = given.key;
-  }
-
-  render(cx) {
-    return this.owner.renderUnit(this.key, cx);
-  }
-}
-
 export default class Cmod extends View {
   init(_props, cx) {
     const given = props() ?? {};
-    this.show = given.show ?? "views";
-    this.area = given.area ?? DASHBOARD;
-    this.page = given.show === "page" ? { mod: given.mod, id: given.id, title: given.title ?? given.id } : null;
-    this.session = given.show === "page" ? given.session ?? null : null;
-    this.isHost = this.show === "views";
-    this.isWindow = given.overlay !== undefined;
+    const show = given.show ?? "views";
+    this.model = init({
+      show,
+      area: given.area,
+      page: show === "page" ? { mod: given.mod, id: given.id, title: given.title ?? given.id } : null,
+      session: show === "page" ? given.session ?? null : null,
+      client: `herdr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      isWindow: given.overlay !== undefined,
+      now: Date.now(),
+    });
+    this.socket = null;
+    this.calls = new Map();
+    this.lastCall = 0;
+    this.drawnParts = new Map();
     this.retired = [];
     this.located = null;
-    this.lists = { widgets: [], views: [], pages: [] };
-    this.tab = null;
     this.pageTabs = new Map();
     this.openingTabs = [];
-    this.units = new Map();
-    this.columns = 40;
-    this.error = null;
-    this.followError = null;
     this.resizing = 0;
-    this.client = `herdr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    this.told = { session: null, parts: [], hosts: [] };
-    this.sending = Promise.resolve(null);
+    this.isTicking = false;
     if (checking()) return;
     if (swept === null) {
       swept = deleteEveryDrawn();
-      this.deleting(cx, swept);
+      cx.spawn(async () => swept.catch((error) => notify({ title: "cmod kept old drawings", body: messageOf(error), level: "warning" })));
     }
-    this.claudeHome = exec("sh", ["-c", CLAUDE_HOME]).then((answer) => answer.stdout);
-    if (this.show !== "widgets") cx.timer.every(SHOW_MS, (cx) => this.tellShown(cx, true));
-    this.follow(cx);
-    if (this.session !== null) this.refresh(cx);
+    this.homes = exec("sh", ["-c", HOMES]).then((answer) => {
+      const [claude, store] = answer.stdout.split("\n");
+      return { claude, store };
+    });
+    cx.timer.every(SHOW_MS, (cx) => this.dispatch({ type: "renew" }, cx));
+    this.dispatch({ type: "connect" }, cx);
+  }
+
+  dispatch(message, cx) {
+    const [model, effects] = update(this.model, { ...message, now: Date.now() });
+    this.model = model;
+    for (const effect of effects) this.perform(effect, cx);
+    this.prepareShown(cx);
+    cx.notify();
+  }
+
+  perform(effect, cx) {
+    if (effect.type === "connect") return cx.spawn((cx) => this.connect(cx));
+    if (effect.type === "connectAfter") return cx.timer.after(effect.ms, (cx) => this.dispatch({ type: "connect" }, cx));
+    if (effect.type === "call") return this.call(effect, cx);
+    if (effect.type === "openPage") return this.openPage(effect.session, effect.page);
+    if (effect.type === "closePage") return this.closePage(effect.key);
+    if (effect.type === "reveal") return this.revealSelf();
+    throw new Error(`The cmod panel performs no ${effect.type}.`);
+  }
+
+  async connect(cx) {
+    try {
+      const { store } = await this.homes;
+      const text = await readTextFile(`${store}/serve.json`);
+      if (text === null) throw new Error(`cmod serve is not running: ${store}/serve.json does not exist. A Claude Code session with the cmod plugin starts it.`);
+      const { url, token } = JSON.parse(text);
+      const socket = await WebSocket.connect(`${url}?token=${encodeURIComponent(token)}`);
+      this.socket = socket;
+      this.dispatch({ type: "connected" }, cx);
+      await this.read(socket, cx);
+    } catch (error) {
+      this.socket = null;
+      this.failCalls(messageOf(error), cx);
+      this.dispatch({ type: "disconnected", error: messageOf(error) }, cx);
+    }
+  }
+
+  async read(socket, cx) {
+    for (;;) {
+      const data = await socket.read();
+      const message = JSON.parse(typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+      if (typeof message.method === "string") {
+        if (message.method === "$/on") this.dispatch({ type: "heard", event: message.params?.id, payload: message.params?.payload }, cx);
+        else if (message.id !== undefined) await socket.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `The cmod Herdr panel answers no ${message.method}.` } }));
+        continue;
+      }
+      const effect = this.calls.get(message.id);
+      this.calls.delete(message.id);
+      if (effect === undefined) continue;
+      if (message.error !== undefined) {
+        if (effect.failed !== null) this.dispatch({ ...effect.failed, error: messageOf(message.error.message) }, cx);
+      } else if (effect.ok !== null) this.dispatch({ ...effect.ok, result: message.result }, cx);
+    }
+  }
+
+  call(effect, cx) {
+    if (this.socket === null) {
+      if (effect.failed !== null) cx.spawn(async (cx) => this.dispatch({ ...effect.failed, error: "cmod serve is not connected." }, cx));
+      return;
+    }
+    this.lastCall += 1;
+    const id = this.lastCall;
+    this.calls.set(id, effect);
+    const socket = this.socket;
+    cx.spawn(async () => socket.write(JSON.stringify({ jsonrpc: "2.0", id, method: effect.method, params: effect.params })));
+  }
+
+  failCalls(error, cx) {
+    const waiting = [...this.calls.values()];
+    this.calls.clear();
+    for (const effect of waiting) if (effect.failed !== null) this.dispatch({ ...effect.failed, error }, cx);
+  }
+
+  async close() {
+    const told = this.model.told;
+    if (this.socket !== null && told.session !== null) await this.socket.write(JSON.stringify({ jsonrpc: "2.0", method: "cmod/UI.show", params: [told.session, this.model.client, []] }));
+    await this.socket?.close();
+    await deleteDrawn([...this.drawnParts.values()].flatMap((drawn) => [...drawn.files]));
   }
 
   target() {
-    if (this.show === "page") return null;
+    if (this.model.show === "page") return null;
     const address = props()?.terminal ?? focused()?.terminal ?? null;
     if (address === null) return null;
     const terminal = terminals().find((each) => each.address === address);
@@ -274,239 +303,71 @@ export default class Cmod extends View {
     const target = this.target();
     if (target === null) return;
     const located = `${target.address}:${target.pid}`;
+    if (located === this.located) return;
     this.located = located;
     cx.spawn(async (cx) => {
       const session = await this.sessionOf(target);
-      if (this.located !== located || session === this.session || (session === null && this.isHost)) return;
-      this.session = session;
-      this.tab = null;
-      this.lists = { widgets: [], views: [], pages: [] };
-      this.place(cx);
-      cx.notify();
-      if (session !== null) await this.refresh(cx);
+      if (this.located === located) this.dispatch({ type: "focused", session }, cx);
     });
   }
 
   async sessionOf({ address, pid }) {
     if (pid === null || address.includes("/")) return null;
-    const record = await readTextFile(`${await this.claudeHome}/sessions/${pid}.json`);
+    const record = await readTextFile(`${(await this.homes).claude}/sessions/${pid}.json`);
     return record === null ? null : JSON.parse(record).sessionId ?? null;
   }
 
-  follow(cx) {
-    cx.spawn(async (cx) => {
-      let after;
-      let retryMs = 1000;
-      for (;;) {
-        try {
-          const { cursor, events, missed } = await followed(after);
-          after = cursor;
-          retryMs = 1000;
-          if (this.followError !== null) {
-            this.followError = null;
-            cx.notify();
-          }
-          if (missed) await this.refresh(cx);
-          else for (const event of events) await this.take(event, cx);
-          this.locate(cx);
-        } catch (error) {
-          after = undefined;
-          this.followError = messageOf(error);
-          cx.notify();
-          await cx.sleep(retryMs);
-          retryMs = Math.min(retryMs * 2, RETRY_MS);
-        }
-      }
-    });
-  }
-
-  async take(event, cx) {
-    if (event.session !== this.session) return;
-    if (event.event === "Redraw") {
-      const unit = this.units.get(keyOf(event));
-      if (unit) await this.draw(unit, cx);
-      return;
+  prepareShown(cx) {
+    const now = screen(this.model);
+    const session = this.model.target;
+    const wanted = new Set();
+    for (const part of now.parts ?? []) {
+      const key = `${session}\n${part.key}`;
+      wanted.add(key);
+      const tree = part.drawn?.tree ?? null;
+      const known = this.drawnParts.get(key);
+      if (known?.tree === tree) continue;
+      const drawn = known ?? { session, key: part.key, tree: null, fields: new Map(), prepared: new Map(), files: new Set() };
+      drawn.tree = tree;
+      this.drawnParts.set(key, drawn);
+      cx.spawn(async (cx) => {
+        await this.prepare(drawn);
+        if (drawn.tree === tree) cx.notify();
+      });
     }
-    if (event.event === "Open" || event.event === "Close") return this.opened(event, cx);
-    await this.list(event.part);
-    await this.settle(cx);
-  }
-
-  async opened(event, cx) {
-    if (this.show !== "views") return;
-    const key = keyOf(event);
-    const shown = this.shownView();
-    if (event.event === "Close" && shown !== undefined && keyOf(shown) === key) {
-      this.tab = null;
-      return this.settle(cx);
-    }
-    if (event.event === "Close") return this.closePage(key);
-    const page = this.lists.pages.find((each) => keyOf(each) === key);
-    if (page !== undefined) return this.openPage(page);
-    if (!this.lists.views.some((view) => keyOf(view) === key)) return;
-    this.tab = key;
-    if (event.isAsked === true && this.isHost && !this.isWindow) this.revealSelf();
-    await this.settle(cx);
-  }
-
-  revealSelf() {
-    const own = JSON.stringify(props() ?? {});
-    const isCmodViews = (node) => node.type === "block" && node.content?.mod === "cmod" && (node.content.props?.show ?? "views") === "views";
-    const path = pathTo(layout(), (node) => isCmodViews(node) && JSON.stringify(node.content.props ?? {}) === own) ?? pathTo(layout(), isCmodViews);
-    if (path !== null) reveal(path);
-  }
-
-  async settle(cx, isEveryUnit = false) {
-    if (this.tab !== null && !this.lists.views.some((view) => keyOf(view) === this.tab)) this.tab = null;
-    this.place(cx);
-    cx.notify();
-    await Promise.all([...this.units.values()].filter((unit) => isEveryUnit || unit.tree === null).map((unit) => this.draw(unit, cx)));
-  }
-
-  wantedLists() {
-    if (this.show === "views") return ["views", "pages"];
-    if (this.show === "widgets") return ["widgets"];
-    return [];
-  }
-
-  async list(part) {
-    const session = this.session;
-    if (session === null || !this.wantedLists().includes(part)) return;
-    const listed = await cmod(["ui", "list", part, session]);
-    if (this.session === session) this.lists = { ...this.lists, [part]: listed };
-  }
-
-  async refresh(cx) {
-    try {
-      for (const part of this.wantedLists()) await this.list(part);
-      this.error = null;
-      await this.settle(cx, true);
-    } catch (error) {
-      this.error = messageOf(error);
-      cx.notify();
+    for (const [key, drawn] of this.drawnParts) {
+      if (wanted.has(key) || drawn.session === session) continue;
+      this.retired.push(...[...drawn.fields.values()].map((field) => field.state));
+      this.drawnParts.delete(key);
+      cx.spawn(async () => deleteDrawn([...drawn.files].filter((name) => ![...this.drawnParts.values()].some((each) => each.files.has(name)))));
     }
   }
 
-  retry(cx) {
-    this.error = null;
-    cx.notify();
-    cx.spawn((cx) => this.refresh(cx));
-  }
-
-  shownParts() {
-    if (this.session === null) return [];
-    if (this.show === "page") return this.page === null ? [] : [this.page];
-    if (this.show === "widgets") return this.lists.widgets.filter((widget) => widget.areas.includes(this.area));
-    const view = this.shownView();
-    return view === undefined ? [] : [view];
-  }
-
-  shownView() {
-    return this.lists.views.find((view) => keyOf(view) === this.tab) ?? this.lists.views[0];
-  }
-
-  place(cx) {
-    const wanted = new Map(this.shownParts().map((part) => [keyOf(part), part]));
-    for (const [key, unit] of this.units) {
-      if (wanted.has(key)) continue;
-      this.retired.push(unit.entity, ...[...unit.fields.values()].map((field) => field.state));
-      this.units.delete(key);
-      this.deleting(cx, this.deleteUnshown(unit.drawn));
-    }
-    for (const [key, part] of wanted) {
-      if (this.units.has(key)) continue;
-      const area = part.areas === undefined ? undefined : this.area;
-      this.units.set(key, { mod: part.mod, id: part.id, area, key, tree: null, error: null, fields: new Map(), prepared: new Map(), drawn: new Set(), entity: cx.new(Unit, { owner: this, key }) });
-    }
-    this.tellShown(cx);
-  }
-
-  tellShown(cx, isRenewal = false) {
-    if (this.show === "widgets") return;
-    const told = this.told;
-    const parts = this.shownParts().map(keyOf);
-    const hosts = this.isHost ? ["--host"] : [];
-    const toldHere = told.session === this.session ? [...told.parts, ...told.hosts] : [];
-    this.told = { session: this.session, parts, hosts };
-    const shown = [...parts, ...hosts];
-    const sends = [
-      ...(told.session !== null && told.session !== this.session && told.parts.length + told.hosts.length > 0 ? [[told.session, []]] : []),
-      ...(this.session !== null && (shown.join(" ") !== toldHere.join(" ") || (isRenewal && shown.length > 0)) ? [[this.session, shown]] : []),
-    ];
-    if (sends.length === 0) return;
-    const sent = this.sending.then(async () => {
-      for (const [session, sent] of sends) await cmod(["ui", "show", session, this.client, ...sent]);
-      return null;
-    }).then((failure) => failure, (error) => messageOf(error));
-    this.sending = sent;
-    cx.spawn(async (cx) => {
-      const failure = await sent;
-      if (failure === null) return;
-      this.error = failure;
-      cx.notify();
-    });
-  }
-
-  async close() {
-    const { session, parts, hosts } = this.told;
-    this.told = { session: null, parts: [], hosts: [] };
-    await Promise.all([
-      ...(session !== null && parts.length + hosts.length > 0 ? [cmod(["ui", "show", session, this.client])] : []),
-      deleteDrawn([...this.units.values()].flatMap((unit) => [...unit.drawn])),
-    ]);
-  }
-
-  deleteUnshown(names) {
-    return deleteDrawn([...names].filter((name) => ![...this.units.values()].some((unit) => unit.drawn.has(name))));
-  }
-
-  deleting(cx, deleted) {
-    cx.spawn(async (cx) => {
-      try {
-        await deleted;
-      } catch (error) {
-        this.error = messageOf(error);
-        cx.notify();
-      }
-    });
-  }
-
-  async draw(unit, cx) {
-    try {
-      unit.tree = await cmod(["ui", "draw", this.session, unit.mod, unit.id, "--columns", String(this.columns), "--surface", SURFACE, ...(unit.area === undefined ? [] : ["--area", unit.area])]);
-      unit.error = null;
-      await this.prepare(unit);
-    } catch (error) {
-      unit.error = messageOf(error);
-    }
-    if (this.units.get(unit.key) === unit) cx.notify(unit.entity);
-  }
-
-  async prepare(unit) {
+  async prepare(drawn) {
     const kept = new Set();
     const files = [];
     const uses = new Set();
-    walk(unit.tree, unit.key, (name, given, path) => {
-      if (name === "Input") kept.add(this.prepareField(unit, given));
-      if (name === "Code") kept.add(this.prepareCode(unit, given, path));
-      if (name === "Raster") unit.prepared.set(path, rasterRows(typeof given.cells === "string" ? given.cells : "", typeof given.columns === "number" ? given.columns : 1));
-      if (name === "Image" || name === "Svg") files.push(imageFileOf(name, given, uses).then((file) => void unit.prepared.set(path, file)));
+    walk(drawn.tree, drawn.key, (name, given, path) => {
+      if (name === "Input") kept.add(this.prepareField(drawn, given));
+      if (name === "Code") kept.add(this.prepareCode(drawn, given, path));
+      if (name === "Raster") drawn.prepared.set(path, rasterRows(typeof given.cells === "string" ? given.cells : "", typeof given.columns === "number" ? given.columns : 1));
+      if (name === "Image" || name === "Svg") files.push(imageFileOf(name, given, uses).then((file) => void drawn.prepared.set(path, file)));
     });
     await Promise.all(files);
-    const replaced = unit.drawn;
-    unit.drawn = uses;
-    await this.deleteUnshown(replaced);
-    for (const [key, field] of unit.fields) {
+    const replaced = drawn.files;
+    drawn.files = uses;
+    await deleteDrawn([...replaced].filter((name) => ![...this.drawnParts.values()].some((each) => each.files.has(name))));
+    for (const [key, field] of drawn.fields) {
       if (kept.has(key)) continue;
       this.retired.push(field.state);
-      unit.fields.delete(key);
+      drawn.fields.delete(key);
     }
   }
 
-  prepareField(unit, given) {
+  prepareField(drawn, given) {
     const key = `input:${given.key}`;
     const value = typeof given.value === "string" ? given.value : "";
-    const known = unit.fields.get(key);
+    const known = drawn.fields.get(key);
     if (known) {
       if (known.value !== value && known.state.value() !== value) known.state.set_value(value);
       Object.assign(known, { value, onInput: handlerOf(given.onInput), onSubmit: handlerOf(given.onSubmit) });
@@ -516,16 +377,16 @@ export default class Cmod extends View {
     const options = { value, ...(typeof given.placeholder === "string" ? { placeholder: given.placeholder } : {}) };
     const state = rows > 1 ? TextareaState.new({ ...options, rows }) : InputState.new(options);
     const field = { state, rows, value, onInput: handlerOf(given.onInput), onSubmit: handlerOf(given.onSubmit) };
-    state.on("change", (_event, cx) => this.press(unit, field.onInput, { key: given.key, kind: "change", value: state.value() }, cx));
-    state.on("submit", (_event, cx) => this.press(unit, field.onSubmit, { key: given.key, kind: "submit", value: state.value() }, cx));
-    unit.fields.set(key, field);
+    state.on("change", (_event, cx) => this.press(drawn, field.onInput, { key: given.key, kind: "change", value: state.value() }, cx));
+    state.on("submit", (_event, cx) => this.press(drawn, field.onSubmit, { key: given.key, kind: "submit", value: state.value() }, cx));
+    drawn.fields.set(key, field);
     return key;
   }
 
-  prepareCode(unit, given, path) {
+  prepareCode(drawn, given, path) {
     const key = `code:${given.key ?? path}`;
     const source = typeof given.source === "string" ? given.source : "";
-    const known = unit.fields.get(key);
+    const known = drawn.fields.get(key);
     if (known) {
       if (known.value !== source) known.state.set_value(source);
       known.value = source;
@@ -535,23 +396,15 @@ export default class Cmod extends View {
     const language = given.language ?? (typeof given.path === "string" && given.path.includes(".") ? given.path.split(".").pop() : given.format === "diff" ? "diff" : "text");
     const state = EditorState.new({
       language, value: source, readonly: true, line_numbers: typeof given.startLine === "number", soft_wrap: given.wrap !== "truncate-end",
-      font_family: settings().font_family, syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 },
+      font_family: terminalFont(), syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 },
     });
-    unit.fields.set(key, { state, value: source });
+    drawn.fields.set(key, { state, value: source });
     return key;
   }
 
-  press(unit, handler, input, cx) {
-    if (handler === undefined || this.session === null) return;
-    const session = this.session;
-    cx.spawn(async (cx) => {
-      try {
-        await cmod(["ui", "press", session, String(handler), JSON.stringify({ surface: SURFACE, ...input })]);
-      } catch (error) {
-        unit.error = messageOf(error);
-        cx.notify(unit.entity);
-      }
-    });
+  press(drawn, handler, input, cx) {
+    if (handler === undefined) return;
+    this.dispatch({ type: "press", session: drawn.session, key: drawn.key, handler, input }, cx);
   }
 
   openLink(href, cx) {
@@ -560,12 +413,24 @@ export default class Cmod extends View {
     notify({ title: "Copied the link", body: "Paste it where you open it.", level: "info" });
   }
 
-  openPage(page) {
+  revealSelf() {
+    const own = JSON.stringify(props() ?? {});
+    const isCmodViews = (node) => node.type === "block" && node.content?.mod === "cmod" && (node.content.props?.show ?? "views") === "views";
+    const path = pathTo(layout(), (node) => isCmodViews(node) && JSON.stringify(node.content.props ?? {}) === own) ?? pathTo(layout(), isCmodViews);
+    if (path === null) return;
+    path.forEach((node, index) => {
+      const child = path[index + 1];
+      if (node.type === "stack" && child !== undefined && node.active !== child.id) run("layout.select", { stack: node.id, child: child.id });
+      if (node.hidden === true) run("layout.show", { id: node.id });
+    });
+  }
+
+  openPage(session, page) {
     const key = keyOf(page);
     const tab = this.pageTabs.get(key);
     if (tab !== undefined && cmodTabs().has(tab)) return run("tab.select", { id: tab });
     this.openingTabs.push({ key, before: cmodTabs() });
-    run("tab.new", { name: page.title, mod: "cmod", props: { show: "page", session: this.session, mod: page.mod, id: page.id, title: page.title } });
+    run("tab.new", { name: page.title, mod: "cmod", props: { show: "page", session, mod: page.mod, id: page.id, title: page.title } });
   }
 
   closePage(key) {
@@ -588,80 +453,14 @@ export default class Cmod extends View {
   }
 
   resized(size, cx) {
-    const inset = this.show === "widgets" ? 0 : BODY_INSET_PX * 2;
+    const inset = this.model.show === "widgets" ? 0 : INSET_PX * 2;
     const columns = Math.max(MIN_COLUMNS, Math.floor((size.width / (Number(settings().zoom) || 1) - inset) / CELL_PX));
-    if (columns === this.columns) return;
-    this.columns = columns;
+    if (columns === this.model.columns) return;
+    this.dispatch({ type: "resized", columns }, cx);
     const resizing = (this.resizing += 1);
     cx.timer.after(RESIZE_MS, (cx) => {
-      if (this.resizing !== resizing) return;
-      cx.spawn(async (cx) => {
-        await Promise.all([...this.units.values()].map((unit) => this.draw(unit, cx)));
-      });
+      if (this.resizing === resizing) this.dispatch({ type: "redrawShown" }, cx);
     });
-  }
-
-  render(cx) {
-    const target = this.target();
-    if (!checking() && target !== null && `${target.address}:${target.pid}` !== this.located) this.locate(cx);
-    this.notePageTabs();
-    this.releaseRetired(cx);
-    const t = theme();
-    const units = [...this.units.values()];
-    const problem = this.error ?? this.followError;
-    if (this.show === "widgets") {
-      return h_flex().id("cmod-root").size_full().min_w(0).gap(SPACE_PX * 1.5).items_center().text_size(TYPE.body).text_color(t.foreground)
-        .on_size_change((size, cx) => this.resized(size, cx))
-        .children(units.map((unit) => unit.entity))
-        .when(problem !== null, (el) => el.child(div().text_size(TYPE.caption).text_color(t.blocked).truncate().role("alert").accessibility_label(shownProblem(problem ?? "")).child(shownProblem(problem ?? ""))));
-    }
-    const isCard = this.show === "views" && !this.isWindow;
-    return v_flex().id("cmod-root").size_full().min_h(0).min_w(0).text_size(TYPE.body).text_color(t.foreground)
-      .when(isCard, (el) => el.rounded(RADIUS.card).overflow_hidden().bg(t.background).border_1().border_color(t.border))
-      .on_size_change((size, cx) => this.resized(size, cx))
-      .when(this.show === "views" && this.lists.views.length + this.lists.pages.length > 0, (el) => el.child(this.header(t)))
-      .child(this.body(units, problem, t))
-      .when(problem !== null && units.length > 0, (el) => el.child(this.problemBar(problem ?? "", t)));
-  }
-
-  body(units, problem, t) {
-    if (this.session === null) {
-      return this.page === null
-        ? this.emptyState("No session yet", "Focus a Claude Code session to see its Dashboard, History, Settings, and its mods' views.", t)
-        : this.emptyState("This page has no session", "Open it again from its session's views.", t);
-    }
-    if (units.length === 0 && problem !== null) return this.emptyState("This session can't show its views here", shownProblem(problem), t, { label: "Try again", run: (cx) => this.retry(cx) });
-    if (units.length === 0) return this.loadingState(t);
-    if (units.length === 1 && isLoneNote(units[0].tree)) return v_flex().id("cmod-units").flex_1().min_h(0).items_center().justify_center().p(BODY_INSET_PX * 2).child(units[0].entity);
-    return v_flex().id("cmod-units").flex_1().min_h(0).min_w(0).p(BODY_INSET_PX).gap(BODY_INSET_PX).overflow_y_scrollbar().children(units.map((unit) => unit.entity));
-  }
-
-  emptyState(title, text, t, action) {
-    return v_flex().id("cmod-empty").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX * 0.75).p(BODY_INSET_PX * 2)
-      .child(div().role("heading").accessibility_label(title).text_size(TYPE.heading).font_semibold().text_center().child(title))
-      .child(div().role("label").accessibility_label(text).max_w(320).text_color(t.muted).text_center().child(text))
-      .when(action !== undefined, (el) => el.child(div().pt(SPACE_PX).child(this.control(Button.new("cmod-empty-action"), "outline", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
-  }
-
-  loadingState(t) {
-    return h_flex().id("cmod-loading").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX).text_color(t.muted).role("status").accessibility_label("Loading this session's views")
-      .child(div().font_family(settings().font_family ?? "JetBrains Mono").frames(SPINNER, 80).child(SPINNER[0]))
-      .child("Loading views");
-  }
-
-  problemBar(problem, t) {
-    return h_flex().id("cmod-problem").flex_none().gap(SPACE_PX).items_center().px(BODY_INSET_PX).py(SPACE_PX).border_t(1).border_color(t.border).text_size(TYPE.caption)
-      .child(div().flex_1().min_w(0).text_color(t.blocked).role("alert").accessibility_label(shownProblem(problem)).child(shownProblem(problem)))
-      .child(Button.new("cmod-problem-retry").accessibility_label("Try again").flex_none().px(SPACE_PX).h(24).flex().items_center().rounded(RADIUS.chip).cursor_pointer().text_color(t.muted).hover((el) => el.bg(t.hover).text_color(t.foreground))
-        .on_click((_event, cx) => this.retry(cx)).child("Try again"));
-  }
-
-  control(el, kind, t) {
-    el = el.flex().flex_none().items_center().justify_center().gap(SPACE_PX * 0.75).rounded(RADIUS.control).border_1().cursor_pointer().max_w_full();
-    el = kind === "ghost" ? el.py(2) : el.h(CONTROL_PX).px(SPACE_PX * 1.5);
-    if (kind === "primary") return el.bg(t.solid).border_color(t.solid).text_color(t.solid_foreground).font_medium().hover((h) => h.opacity(0.9)).focus((f) => f.border_color(t.accent));
-    if (kind === "outline") return el.bg(t.raised).border_color(t.border).font_medium().hover((h) => h.bg(t.hover)).focus((f) => f.border_color(t.accent));
-    return el.border_color("#00000000").hover((h) => h.text_color(t.foreground)).focus((f) => f.border_color(t.accent));
   }
 
   releaseRetired(cx) {
@@ -673,25 +472,93 @@ export default class Cmod extends View {
     });
   }
 
-  header(t) {
-    const views = this.lists.views;
-    const pages = this.lists.pages;
-    const shown = this.shownView();
+  render(cx) {
+    if (!checking()) this.locate(cx);
+    this.notePageTabs();
+    this.releaseRetired(cx);
+    const t = theme();
+    const now = screen({ ...this.model, now: Date.now() });
+    if (now.kind === "loading" && now.isQuiet && !this.isTicking) {
+      this.isTicking = true;
+      cx.timer.after(QUIET_LOADING_MS, (cx) => {
+        this.isTicking = false;
+        this.dispatch({ type: "tick" }, cx);
+      });
+    }
+    if (this.model.show === "widgets") {
+      return h_flex().id("cmod-root").size_full().min_w(0).gap(SPACE_PX * 1.5).items_center().text_size(TYPE.body).text_color(t.foreground)
+        .on_size_change((size, cx) => this.resized(size, cx))
+        .children((now.parts ?? []).map((part) => this.part(part, t)))
+        .when(now.problem != null, (el) => el.child(div().text_size(TYPE.caption).text_color(t.blocked).truncate().role("alert").accessibility_label(shownProblem(now.problem ?? "")).child(shownProblem(now.problem ?? ""))));
+    }
+    const isCard = this.model.show === "views" && !this.model.isWindow;
+    return v_flex().id("cmod-root").size_full().min_h(0).min_w(0).text_size(TYPE.body).text_color(t.foreground)
+      .when(isCard, (el) => el.rounded(RADIUS.card).overflow_hidden().bg(t.background).border_1().border_color(t.border))
+      .on_size_change((size, cx) => this.resized(size, cx))
+      .when(now.kind === "ready" && this.model.show === "views" && now.views.length + now.pages.length > 0, (el) => el.child(this.header(now, t)))
+      .child(this.body(now, t))
+      .when(now.kind === "ready" && now.problem != null, (el) => el.child(this.problemBar(now.problem ?? "", t)));
+  }
+
+  body(now, t) {
+    if (now.kind === "noSession") return this.emptyState("No session yet", "Focus a terminal running Claude Code to see its Dashboard, History, Settings, and its mods' views.", t);
+    if (now.kind === "noPage") return this.emptyState("This page has no session", "Open it again from its session's views.", t);
+    if (now.kind === "unreached") return this.emptyState("cmod serve isn't reachable", shownProblem(now.message ?? ""), t, { label: "Try again", run: (cx) => this.dispatch({ type: "connect" }, cx) });
+    if (now.kind === "refused") return this.emptyState("This session can't show its views here", shownProblem(now.message ?? ""), t, { label: "Try again", run: (cx) => this.dispatch({ type: "retry" }, cx) });
+    if (now.kind === "loading") return now.isQuiet ? v_flex().id("cmod-body").flex_1() : this.loadingState(t);
+    if (now.parts.length === 1 && this.isLoneNote(now.parts[0])) return v_flex().id("cmod-body").flex_1().min_h(0).items_center().justify_center().p(INSET_PX * 2).child(this.part(now.parts[0], t));
+    return v_flex().id("cmod-body").flex_1().min_h(0).min_w(0).p(INSET_PX).gap(INSET_PX).overflow_y_scrollbar().children(now.parts.map((part) => this.part(part, t)));
+  }
+
+  isLoneNote(part) {
+    const tree = part.drawn?.tree;
+    return tree?.$cmodElement === "Text" && textOf(tree.props?.children) !== undefined;
+  }
+
+  emptyState(title, text, t, action) {
+    return v_flex().id("cmod-empty").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX * 0.75).p(INSET_PX * 2)
+      .child(div().role("heading").accessibility_label(title).text_size(TYPE.heading).font_semibold().text_center().child(title))
+      .child(div().role("label").accessibility_label(text).max_w(320).text_color(t.muted).text_center().child(text))
+      .when(action !== undefined, (el) => el.child(div().pt(SPACE_PX).child(this.control(Button.new("cmod-empty-action"), "outline", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
+  }
+
+  loadingState(t) {
+    return h_flex().id("cmod-loading").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX).text_color(t.muted).role("status").accessibility_label("Loading this session's views")
+      .child(div().font_family(terminalFont()).frames(SPINNER, 80).child(SPINNER[0]))
+      .child("Loading views");
+  }
+
+  problemBar(problem, t) {
+    const isConnection = this.model.connection.status !== "open";
+    return h_flex().id("cmod-problem").flex_none().gap(SPACE_PX).items_center().px(INSET_PX).py(SPACE_PX).border_t(1).border_color(t.border).text_size(TYPE.caption)
+      .child(div().flex_1().min_w(0).text_color(t.blocked).role("alert").accessibility_label(shownProblem(problem)).child(isConnection ? `Reconnecting to cmod serve: ${shownProblem(problem)}` : shownProblem(problem)))
+      .child(Button.new("cmod-problem-retry").accessibility_label("Try again").flex_none().px(SPACE_PX).h(24).flex().items_center().rounded(RADIUS.chip).cursor_pointer().text_color(t.muted).hover((el) => el.bg(t.hover).text_color(t.foreground))
+        .on_click((_event, cx) => this.dispatch({ type: isConnection ? "connect" : "retry" }, cx)).child("Try again"));
+  }
+
+  control(el, kind, t) {
+    el = el.flex().flex_none().items_center().justify_center().gap(SPACE_PX * 0.75).rounded(RADIUS.control).border_1().cursor_pointer().max_w_full();
+    el = kind === "ghost" ? el.py(2) : el.h(CONTROL_PX).px(SPACE_PX * 1.5);
+    if (kind === "primary") return el.bg(t.solid).border_color(t.solid).text_color(t.solid_foreground).font_medium().hover((h) => h.opacity(0.9)).focus((f) => f.border_color(t.accent));
+    if (kind === "outline") return el.bg(t.raised).border_color(t.border).font_medium().hover((h) => h.bg(t.hover)).focus((f) => f.border_color(t.accent));
+    return el.border_color("#00000000").hover((h) => h.text_color(t.foreground)).focus((f) => f.border_color(t.accent));
+  }
+
+  header(now, t) {
+    const shown = now.shown;
     const tab = (el, isSelected) => el.flex_none().max_w(TAB_MAX_PX).h(CONTROL_PX).px(SPACE_PX * 1.25).flex().items_center().rounded(RADIUS.control).truncate().cursor_pointer()
       .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.bg(t.selected)).hover((el) => el.bg(t.hover).text_color(t.foreground));
-    const viewTabs = views.map((view, index) => {
+    const viewTabs = now.views.map((view, index) => {
       const key = keyOf(view);
       const isSelected = shown !== undefined && key === keyOf(shown);
-      return tab(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, views.length).tooltip(view.title), isSelected)
-        .on_click((_event, cx) => {
-          this.tab = key;
-          cx.spawn((cx) => this.settle(cx));
-        })
+      return tab(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, now.views.length).tooltip(view.title), isSelected)
+        .on_click((_event, cx) => this.dispatch({ type: "select", key }, cx))
         .child(view.title);
     });
-    const pageTabs = pages.map((page) =>
+    const session = this.model.target;
+    const pageTabs = now.pages.map((page) =>
       tab(Button.new(`cmod-page-${keyOf(page)}`).role("link").accessibility_label(`${page.title}, opens in its own tab`).tooltip(`Open ${page.title} in its own tab`).gap(SPACE_PX / 2), false)
-        .on_click(() => this.openPage(page))
+        .on_click(() => this.openPage(session, page))
         .child(div().truncate().child(page.title))
         .child(div().flex_none().text_color(t.dim).child("↗")),
     );
@@ -702,50 +569,40 @@ export default class Cmod extends View {
     );
   }
 
-  renderUnit(key) {
-    const unit = this.units.get(key);
-    const t = theme();
-    if (!unit) return div();
-    if (unit.error !== null && unit.tree === null) return div().text_color(t.blocked).text_size(TYPE.caption).role("alert").accessibility_label(unit.error).child(unit.error);
-    if (isLoneNote(unit.tree)) return div().max_w(320).text_center().text_color(t.muted).role("label").accessibility_label(wordsIn(unit.tree)).child(wordsIn(unit.tree));
-    return v_flex().id(`unit-${key}`).min_w(0).gap(SPACE_PX)
-      .children(this.nodes(unit.tree, unit, unit.key, t))
-      .when(unit.error !== null, (el) => el.child(div().text_color(t.blocked).text_size(TYPE.caption).role("alert").accessibility_label(unit.error ?? "").child(unit.error ?? "")));
+  part(part, t) {
+    const drawn = this.drawnParts.get(`${this.model.target}\n${part.key}`);
+    const tree = part.drawn?.tree ?? null;
+    const error = part.drawn?.error ?? null;
+    const alert = (text) => div().text_color(t.blocked).text_size(TYPE.caption).role("alert").accessibility_label(text).child(text);
+    if (tree === null) return error === null ? div().id(`part-${part.key}`) : alert(error);
+    if (drawn === undefined) return div().id(`part-${part.key}`);
+    if (this.isLoneNote(part)) return div().max_w(320).text_center().text_color(t.muted).role("label").accessibility_label(textOf(tree.props?.children)).child(textOf(tree.props?.children));
+    return v_flex().id(`part-${part.key}`).min_w(0).gap(SPACE_PX)
+      .children(this.nodes(tree, drawn, drawn.key, t))
+      .when(error !== null, (el) => el.child(alert(error ?? "")));
   }
 
-  nodes(value, unit, path, t, inColumn = true) {
-    if (Array.isArray(value)) return value.flatMap((each, index) => this.nodes(each, unit, `${path}.${index}`, t, inColumn));
+  nodes(value, drawn, path, t, inColumn = true) {
+    if (Array.isArray(value)) return value.flatMap((each, index) => this.nodes(each, drawn, `${path}.${index}`, t, inColumn));
     if (value === null || value === undefined || typeof value === "boolean") return [];
     if (typeof value === "string" || typeof value === "number") return [div().child(String(value))];
     const draw = this.elements[value.$cmodElement];
     if (draw === undefined) return [div().text_color(t.muted).child(`Herdr draws no ${value.$cmodElement}.`)];
-    const drawn = draw.call(this, value.props ?? {}, unit, path, t, inColumn);
-    return drawn === null ? [] : [drawn];
+    const element = draw.call(this, value.props ?? {}, drawn, path, t, inColumn);
+    return element === null ? [] : [element];
   }
 
   get elements() {
-    return { Box: this.box, Text: this.text, Button: this.button, Link: this.link, Code: this.code, Markdown: this.markdown, Input: this.input, Select: this.select, Image: this.picture, Svg: this.picture, Raster: this.raster };
+    return {
+      Box: this.box, Text: this.text, Button: this.button, Link: this.link, Code: this.code, Markdown: this.markdown, Input: this.input, Select: this.select, Image: this.picture, Svg: this.picture, Raster: this.raster,
+      Tabs: this.tabs, Split: this.split, Panel: this.panel, Toggle: this.toggle, Tooltip: this.tooltip, Help: this.help, Dialog: this.dialog, Pagination: this.pagination, Progress: this.progress,
+      List: this.list, ListItem: this.listItem, Badge: this.badge, Banner: this.banner,
+    };
   }
 
-  box(given, unit, path, t) {
+  box(given, drawn, path, t) {
     if (given.display === "none" && given.hover?.display !== "flex") return null;
-    const children = Array.isArray(given.children) ? given.children : [given.children];
-    const legend = Array.isArray(given.children) && children.some(isCard) ? children.find(isLegend) : undefined;
-    if (legend !== undefined) {
-      const title = wordsIn(legend).trim();
-      const rest = children.flatMap((child, index) => (child === legend ? [] : this.nodes(child, unit, `${path}.c.${index}`, t, true)));
-      return this.boxed(given, unit, t).flex_col().gap(SPACE_PX * 0.75)
-        .child(div().flex_none().px(2).text_size(TYPE.heading).font_semibold().truncate().role("heading").accessibility_label(title).child(title))
-        .children(rest);
-    }
-    return this.boxed(given, unit, t)
-      .when(children.some((child) => child?.props?.position === "absolute"), (el) => el.relative())
-      .children(this.nodes(given.children, unit, `${path}.c`, t, given.flexDirection === "column" || given.flexDirection === "column-reverse"));
-  }
-
-  boxed(given, unit, t) {
     const isColumn = given.flexDirection === "column" || given.flexDirection === "column-reverse";
-    const isCardBox = typeof given.borderStyle === "string";
     let el = div().flex().min_w(0);
     el = isColumn ? el.flex_col() : el.flex_row();
     if (given.flexWrap === "wrap") el = el.flex_wrap();
@@ -760,10 +617,11 @@ export default class Cmod extends View {
     const gapY = spaceOf(given.rowGap ?? given.gap) ?? (given.flexWrap === "wrap" && !isColumn ? 1 : undefined);
     if (gapX !== undefined) el = el.gap_x(gapX * SPACE_PX);
     if (gapY !== undefined) el = el.gap_y(gapY * SPACE_PX);
+    const isBordered = typeof given.borderStyle === "string";
     for (const [side, axis, method] of [["Top", "Y", "t"], ["Right", "X", "r"], ["Bottom", "Y", "b"], ["Left", "X", "l"]]) {
       const padding = spaceOf(given[`padding${side}`] ?? given[`padding${axis}`] ?? given.padding);
       const margin = spaceOf(given[`margin${side}`] ?? given[`margin${axis}`] ?? given.margin);
-      const inset = (padding ?? 0) * SPACE_PX + (isCardBox ? CARD_INSET_PX : 0);
+      const inset = (padding ?? 0) * SPACE_PX + (isBordered ? INSET_PX : 0);
       if (inset > 0) el = el[`p${method}`](inset);
       if (margin !== undefined && margin !== 0) el = el[`m${method}`](margin * SPACE_PX);
     }
@@ -779,31 +637,27 @@ export default class Cmod extends View {
       }
     }
     const background = colorOf(given.backgroundColor, t, "surface");
-    if (isCardBox) {
+    if (isBordered) {
       el = el.border_1().border_color(colorOf(given.borderColor, t, "border") ?? t.border).rounded(given.borderStyle === "round" ? RADIUS.card : RADIUS.control);
       if (given.borderStyle === "dashed" || given.borderStyle === "classic") el = el.border_dashed();
-    } else if (background !== undefined) {
-      el = el.rounded(RADIUS.control);
-      if (given.paddingY === undefined && given.padding === undefined && given.paddingTop === undefined && given.paddingBottom === undefined) el = el.py(2);
-    }
+    } else if (background !== undefined) el = el.rounded(RADIUS.control);
     if (background !== undefined) el = el.bg(background);
-    if (given.overflow === "hidden" || isCardBox) el = el.overflow_hidden();
+    if (given.overflow === "hidden" || isBordered) el = el.overflow_hidden();
     const hoverBackground = colorOf(given.hover?.backgroundColor, t, "surface");
-    if (typeof given.key === "string") el = el.id(`${unit.key}:${given.key}`).when(hoverBackground !== undefined, (e) => e.hover((h) => h.bg(hoverBackground)));
-    return el;
+    if (typeof given.key === "string") el = el.id(`${drawn.key}:${given.key}`).when(hoverBackground !== undefined, (e) => e.hover((h) => h.bg(hoverBackground)));
+    return el.when(children.some((child) => child?.props?.position === "absolute"), (e) => e.relative()).children(this.nodes(given.children, drawn, `${path}.children`, t, isColumn));
   }
 
   styled(el, given, t) {
     const background = colorOf(given.backgroundColor, t, "surface");
-    const ink = given.color === "inverseText" && background !== undefined ? inkOn(given.backgroundColor, t) : colorOf(given.color, t);
+    const ink = given.color === "inverseText" && background !== undefined ? t.foreground : colorOf(given.color, t);
     if (given.inverse === true) el = el.bg(colorOf(given.color ?? "text", t, "surface") ?? t.foreground).text_color(background ?? t.background);
     else {
       if (ink !== undefined && given.dimColor !== true) el = el.text_color(ink);
       else if (given.dimColor === true) el = el.text_color(t.muted);
       if (background !== undefined) el = el.bg(background);
     }
-    if (given.bold === true || given.weight === "bold") el = el.font_semibold();
-    else if (given.weight === "semibold") el = el.font_semibold();
+    if (given.bold === true || given.weight === "bold" || given.weight === "semibold") el = el.font_semibold();
     else if (given.weight === "medium") el = el.font_medium();
     if (given.italic === true) el = el.italic();
     if (given.underline === true) el = el.underline();
@@ -815,19 +669,15 @@ export default class Cmod extends View {
     return el;
   }
 
-  text(given, unit, path, t) {
+  text(given, drawn, path, t) {
     const words = textOf(given.children);
-    if (words === undefined) return this.styled(h_flex().flex_wrap().min_w(0), given, t).children(this.nodes(given.children, unit, `${path}.c`, t, false));
-    const isCellArt = CELL_ART.test(words);
-    const isChip = !isCellArt && (given.inverse === true || colorOf(given.backgroundColor, t, "surface") !== undefined);
-    const shown = isChip ? words.trim() : drawable(words);
-    let el = this.styled(div().role("label").accessibility_label(shown.trim()), given, t).child(shown);
-    if (isChip) el = el.flex_none().px(SPACE_PX * 0.75).py(1).rounded(RADIUS.chip).text_size(TYPE.caption).font_medium();
-    if (isCellArt) el = el.font_family(settings().font_family ?? "JetBrains Mono").whitespace_nowrap();
+    if (words === undefined) return this.styled(h_flex().flex_wrap().min_w(0), given, t).children(this.nodes(given.children, drawn, `${path}.children`, t, false));
+    let el = this.styled(div().role("label").accessibility_label(words.trim()), given, t).child(words);
+    if (CELL_TEXT.test(words)) el = el.font_family(terminalFont()).whitespace_nowrap();
     return el;
   }
 
-  button(given, unit, path, t, inColumn) {
+  button(given, drawn, path, t, inColumn) {
     const handler = handlerOf(given.onPress);
     const label = typeof given.label === "string" ? given.label : undefined;
     const words = textOf(given.children);
@@ -835,36 +685,36 @@ export default class Cmod extends View {
     const name = (label ?? words ?? key).trim();
     const hotkey = typeof given.hotkey === "string" ? given.hotkey : undefined;
     const kind = given.variant === "primary" ? "primary" : given.plain === true && given.variant === undefined && given.dimColor === true ? "ghost" : "outline";
-    let el = this.control(Button.new(`${unit.key}:${key}`).accessibility_label(name), kind, t);
+    let el = this.control(Button.new(`${drawn.key}:${key}`).accessibility_label(name), kind, t);
     if (inColumn) el = el.self_start();
     if (kind === "ghost") el = el.text_color(t.muted).justify_start();
-    el = el.on_click((_event, cx) => (handler !== undefined ? this.press(unit, handler, { key }, cx) : typeof given.href === "string" ? this.openLink(given.href, cx) : undefined));
-    if (label === undefined && words === undefined && given.children !== undefined && !(Array.isArray(given.children) && given.children.length === 0)) return el.child(h_flex().min_w(0).gap(SPACE_PX / 2).children(this.nodes(given.children, unit, `${path}.c`, t, false)));
+    el = el.on_click((_event, cx) => (handler !== undefined ? this.press(drawn, handler, { key }, cx) : typeof given.href === "string" ? this.openLink(given.href, cx) : undefined));
+    if (label === undefined && words === undefined && given.children !== undefined && !(Array.isArray(given.children) && given.children.length === 0)) return el.child(h_flex().min_w(0).gap(SPACE_PX / 2).children(this.nodes(given.children, drawn, `${path}.children`, t, false)));
     return el.child(div().min_w(0).truncate().child(name))
       .when(hotkey !== undefined && label !== undefined, (e) => e.child(div().flex_none().px(SPACE_PX / 2).rounded(RADIUS.chip).bg(t.raised).text_size(TYPE.caption).text_color(t.muted).child((hotkey ?? "").toUpperCase())));
   }
 
-  link(given, unit, _path, t) {
+  link(given, drawn, _path, t) {
     const href = typeof given.href === "string" ? given.href : "";
     const shown = textOf(given.children) || (typeof given.label === "string" ? given.label : href);
-    return Button.new(`${unit.key}:link:${href}`).accessibility_label(shown).role("link").cursor_pointer().rounded(RADIUS.chip).text_color(t.accent).hover((h) => h.underline()).focus((f) => f.underline())
+    return Button.new(`${drawn.key}:link:${href}`).accessibility_label(shown).role("link").cursor_pointer().rounded(RADIUS.chip).text_color(t.accent).hover((h) => h.underline()).focus((f) => f.underline())
       .on_click((_event, cx) => this.openLink(href, cx)).child(shown);
   }
 
-  code(given, unit, path, t) {
-    const field = unit.fields.get(`code:${given.key ?? path}`);
+  code(given, drawn, path, t) {
+    const field = drawn.fields.get(`code:${given.key ?? path}`);
     const source = typeof given.source === "string" ? given.source : "";
     const rows = Math.min(Math.max(source.split("\n").length, 1), CODE_ROWS);
-    if (!field) return div().font_family(settings().font_family ?? "JetBrains Mono").text_size(TYPE.caption).text_color(t.muted).child(source);
-    return div().id(`${unit.key}:code:${given.key ?? path}`).h(rows * ROW_PX + SPACE_PX * 2).rounded(RADIUS.control).border_1().border_color(t.border).bg(t.background).overflow_hidden().child(Editor.new(field.state).size_full());
+    if (!field) return div().font_family(terminalFont()).text_size(TYPE.caption).text_color(t.muted).child(source);
+    return div().id(`${drawn.key}:code:${given.key ?? path}`).h(rows * ROW_PX + SPACE_PX * 2).rounded(RADIUS.control).border_1().border_color(t.border).bg(t.background).overflow_hidden().child(Editor.new(field.state).size_full());
   }
 
-  markdown(given, unit, path, t) {
+  markdown(given, drawn, path, t) {
     const handler = handlerOf(given.onLinkPress);
     const pressable = Array.isArray(given.pressableLinks) ? given.pressableLinks : undefined;
     const key = typeof given.key === "string" ? given.key : path;
-    let el = TextView.markdown(`${unit.key}:markdown:${key}`, typeof given.text === "string" ? given.text : "").selectable(true)
-      .on_link_click((url, cx) => (handler !== undefined && (pressable === undefined || pressable.includes(url)) ? this.press(unit, handler, { key, link: { href: url } }, cx) : this.openLink(url, cx)));
+    let el = TextView.markdown(`${drawn.key}:markdown:${key}`, typeof given.text === "string" ? given.text : "").selectable(true)
+      .on_link_click((url, cx) => (handler !== undefined && (pressable === undefined || pressable.includes(url)) ? this.press(drawn, handler, { key, link: { href: url } }, cx) : this.openLink(url, cx)));
     if (given.dimColor === true) el = el.text_color(t.muted);
     return el;
   }
@@ -873,41 +723,41 @@ export default class Cmod extends View {
     return div().text_size(TYPE.caption).font_medium().text_color(t.muted).child(label);
   }
 
-  input(given, unit, _path, t) {
-    const field = unit.fields.get(`input:${given.key}`);
+  input(given, drawn, _path, t) {
+    const field = drawn.fields.get(`input:${given.key}`);
     const label = typeof given.label === "string" ? given.label : undefined;
     const name = label ?? (typeof given.placeholder === "string" ? given.placeholder : given.key);
     const rows = field?.rows ?? 1;
     return v_flex().min_w(180).max_w_full().gap(SPACE_PX / 2)
       .when(label !== undefined, (el) => el.child(this.fieldLabel(label ?? "", t)))
       .child(field
-        ? div().id(`${unit.key}:field:${given.key}`).min_h(rows > 1 ? rows * ROW_PX + SPACE_PX * 2 : FIELD_PX).px(SPACE_PX * 1.25).py(SPACE_PX / 2).flex().items_center().rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_text()
+        ? div().id(`${drawn.key}:field:${given.key}`).min_h(rows > 1 ? rows * ROW_PX + SPACE_PX * 2 : FIELD_PX).px(SPACE_PX * 1.25).py(SPACE_PX / 2).flex().items_center().rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_text()
           .child((rows > 1 ? Textarea : Input).new(field.state).accessibility_label(name).size_full())
         : div().text_color(t.muted).child(typeof given.value === "string" ? given.value : ""));
   }
 
-  select(given, unit, _path, t) {
+  select(given, drawn, _path, t) {
     const handler = handlerOf(given.onSelect);
     const options = Array.isArray(given.options) ? given.options.filter((option) => typeof option?.value === "string") : [];
     const label = typeof given.label === "string" ? given.label : given.key;
     return v_flex().min_w(0).gap(SPACE_PX / 2)
       .when(typeof given.label === "string", (el) => el.child(this.fieldLabel(given.label, t)))
-      .child(h_flex().id(`${unit.key}:select:${given.key}`).role("radio_group").accessibility_label(label).flex_wrap().gap(2).p(2).rounded(RADIUS.control + 2).bg(t.raised).border_1().border_color(t.border).children(
+      .child(h_flex().id(`${drawn.key}:select:${given.key}`).role("radio_group").accessibility_label(label).flex_wrap().gap(2).p(2).rounded(RADIUS.control + 2).bg(t.raised).border_1().border_color(t.border).children(
         options.map((option, index) => {
           const isSelected = option.value === given.value;
           const shown = typeof option.label === "string" ? option.label : option.value;
-          return Button.new(`${unit.key}:${given.key}:${option.value}`).role("radio_button").selected(isSelected).set_position(index + 1, options.length).accessibility_label(shown)
+          return Button.new(`${drawn.key}:${given.key}:${option.value}`).role("radio_button").selected(isSelected).set_position(index + 1, options.length).accessibility_label(shown)
             .h(CONTROL_PX - 6).px(SPACE_PX * 1.25).flex().items_center().rounded(RADIUS.control - 2).border_1().border_color(isSelected ? t.border : "#00000000").cursor_pointer()
             .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.bg(t.background).font_medium()).hover((el) => el.text_color(t.foreground)).focus((el) => el.border_color(t.accent))
-            .on_click((_event, cx) => this.press(unit, handler, { key: given.key, value: option.value }, cx))
+            .on_click((_event, cx) => this.press(drawn, handler, { key: given.key, value: option.value }, cx))
             .child(shown);
         }),
       ));
   }
 
-  picture(given, unit, path, t) {
+  picture(given, drawn, path, t) {
     const label = typeof given.label === "string" ? given.label : typeof given.alt === "string" ? given.alt : "";
-    const file = unit.prepared.get(path);
+    const file = drawn.prepared.get(path);
     const frame = div().role("image").accessibility_label(label);
     if (!file) return frame.text_color(t.dim).child(label);
     const width = typeof given.columns === "number" ? given.columns * CELL_PX : given.width;
@@ -918,16 +768,129 @@ export default class Cmod extends View {
     return frame.child(picture);
   }
 
-  raster(given, unit, path) {
-    const rows = unit.prepared.get(path) ?? [];
+  raster(given, drawn, path) {
+    const rows = drawn.prepared.get(path) ?? [];
     const label = typeof given.label === "string" ? given.label : "";
-    return v_flex().role("image").accessibility_label(label).font_family(settings().font_family ?? "JetBrains Mono").line_height(ROW_PX).children(
-      rows.map((row) => h_flex().children(row.map((run) => {
-        let el = div().whitespace_nowrap().child(run.text);
-        if (run.fg !== null) el = el.text_color(run.fg);
-        if (run.bg !== null) el = el.bg(run.bg);
+    return v_flex().role("image").accessibility_label(label).font_family(terminalFont()).line_height(ROW_PX).children(
+      rows.map((row) => h_flex().children(row.map((cells) => {
+        let el = div().whitespace_nowrap().child(cells.text);
+        if (cells.fg !== null) el = el.text_color(cells.fg);
+        if (cells.bg !== null) el = el.bg(cells.bg);
         return el;
       }))),
     );
+  }
+
+  tabs(given, drawn, path, t) {
+    const tabs = Array.isArray(given.tabs) ? given.tabs : [];
+    const strip = Tabs.new(`${drawn.key}:${given.key ?? ""}tabs`).accessibility_label("Sections").h_flex().min_w(0).gap(SPACE_PX * 2).border_b(1).border_color(t.border).overflow_x_scroll().children(
+      tabs.map((each, index) => {
+        const isSelected = each.isSelected === true;
+        return Tab.new(`${drawn.key}:${given.key ?? ""}tab:${each.key}`).selected(isSelected).set_position(index + 1, tabs.length).accessibility_label(each.label)
+          .flex_none().py(SPACE_PX * 0.75).border_b(2).border_color(isSelected ? t.accent : "#00000000").cursor_pointer()
+          .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.font_medium()).hover((el) => el.text_color(t.foreground))
+          .on_click((_event, cx) => this.press(drawn, handlerOf(each.onSelect), { key: `${given.key ?? ""}tab:${each.key}` }, cx))
+          .child(each.label);
+      }),
+    );
+    return v_flex().min_w(0).gap(INSET_PX).child(strip).children(this.nodes(given.children, drawn, `${path}.children`, t));
+  }
+
+  split(given, drawn, path, t) {
+    const children = Array.isArray(given.children) ? given.children : [given.children];
+    return h_flex().min_w(0).gap(INSET_PX).items_start().children(children.map((child, index) => v_flex().flex_1().min_w(0).children(this.nodes(child, drawn, `${path}.children.${index}`, t))));
+  }
+
+  panel(given, drawn, path, t) {
+    const title = typeof given.title === "string" ? given.title : "";
+    return v_flex().flex_grow(1).min_w(0).gap(SPACE_PX)
+      .child(div().px(2).text_size(TYPE.caption).font_semibold().text_color(t.muted).truncate().role("heading").accessibility_label(title).child(title))
+      .child(v_flex().min_w(0).gap(SPACE_PX).p(INSET_PX).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.surface ?? t.background).children(this.nodes(given.children, drawn, `${path}.children`, t)));
+  }
+
+  toggle(given, drawn, _path, t) {
+    const label = typeof given.label === "string" ? given.label : "";
+    const checked = given.checked === true;
+    const track = div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center().bg(checked ? t.accent : t.border).when(checked, (el) => el.justify_end())
+      .child(div().w(12).h(12).rounded(6).bg(checked ? t.accent_foreground : t.foreground));
+    return Switch.new(`${drawn.key}:${given.key ?? ""}toggle:${label}`).checked(checked).accessibility_label(label).self_start().flex().items_center().gap(SPACE_PX).cursor_pointer()
+      .on_change((_checked, cx) => this.press(drawn, handlerOf(given.onToggle), { key: `${given.key ?? ""}toggle:${label}` }, cx))
+      .child(track).child(div().child(label));
+  }
+
+  tooltip(given, drawn, path, t) {
+    return h_flex().min_w(0).tooltip(typeof given.text === "string" ? given.text : "").children(this.nodes(given.children, drawn, `${path}.children`, t, false));
+  }
+
+  help(given, drawn, _path, t) {
+    const text = typeof given.text === "string" ? given.text : "";
+    const isOpen = given.isOpen === true;
+    return v_flex().min_w(0).gap(SPACE_PX / 2)
+      .child(Button.new(`${drawn.key}:${given.key ?? ""}help:${text}`).accessibility_label("Help").tooltip(text).flex_none().w(20).h(20).flex().items_center().justify_center().rounded(10).border_1().border_color(t.border).text_color(t.muted).cursor_pointer().hover((el) => el.text_color(t.foreground))
+        .on_click((_event, cx) => this.press(drawn, handlerOf(given.onToggle), { key: `${given.key ?? ""}help-button:${text}` }, cx)).child("?"))
+      .when(isOpen, (el) => el.child(div().max_w(320).p(SPACE_PX).rounded(RADIUS.control).bg(t.raised).border_1().border_color(t.border).text_size(TYPE.caption).role("note").accessibility_label(text).child(text)));
+  }
+
+  dialog(given, drawn, path, t) {
+    const title = typeof given.title === "string" ? given.title : "";
+    return v_flex().min_w(0).gap(INSET_PX).p(INSET_PX).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover ?? t.background).role("dialog").accessibility_label(title)
+      .child(div().text_size(TYPE.heading).font_semibold().role("heading").accessibility_label(title).child(title))
+      .child(v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)))
+      .child(h_flex().flex_wrap().gap(SPACE_PX).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false)));
+  }
+
+  pagination(given, drawn, _path, t) {
+    const step = (handler, label, hotkey) => {
+      const isOff = handlerOf(handler) === undefined;
+      return this.control(Button.new(`${drawn.key}:page:${label}`), "outline", t).accessibility_label(label).disabled(isOff).when(isOff, (el) => el.opacity(0.45).cursor_default())
+        .on_click((_event, cx) => this.press(drawn, handlerOf(handler), { key: label }, cx)).child(label).child(div().flex_none().px(SPACE_PX / 2).rounded(RADIUS.chip).bg(t.background).text_size(TYPE.caption).text_color(t.muted).child(hotkey.toUpperCase()));
+    };
+    return h_flex().role("navigation").accessibility_label("Pages").gap(SPACE_PX).items_center()
+      .child(step(given.onPrevious, "Previous", "p"))
+      .child(div().text_color(t.muted).child(`${given.page ?? 1} of ${given.pages ?? 1}`))
+      .child(step(given.onNext, "Next", "n"));
+  }
+
+  progress(given, drawn, _path, t) {
+    const value = typeof given.value === "number" ? Math.min(Math.max(given.value, 0), 100) : 0;
+    const label = typeof given.label === "string" ? given.label : `${Math.round(value)}%`;
+    const width = typeof given.width === "number" ? given.width * CELL_PX : undefined;
+    return Progress.new(`${drawn.key}:progress:${label}`).value(value).accessibility_label(label).flex().items_center().min_w(0).when(width === undefined, (el) => el.flex_1()).when(width !== undefined, (el) => el.w(width ?? 0))
+      .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.border).overflow_hidden().child(ProgressIndicator.new().h_full().w(`${value}%`).rounded(3).bg(t.accent)));
+  }
+
+  list(given, drawn, path, t) {
+    return v_flex().min_w(0).gap(2).role("list").accessibility_label(typeof given.label === "string" ? given.label : "").children(this.nodes(given.children, drawn, `${path}.children`, t));
+  }
+
+  listItem(given, drawn, _path, t) {
+    const label = typeof given.label === "string" ? given.label : "";
+    const isSelected = given.isSelected === true;
+    const handler = handlerOf(given.onPress);
+    const dot = given.tone === undefined ? null : given.tone === "off" ? div().flex_none().w(8).h(8).rounded(4).border_1().border_color(t.muted) : div().flex_none().w(8).h(8).rounded(4).bg(toneOf(given.tone, t));
+    const description = typeof given.description === "string" ? div().flex_none().text_color(t.muted).child(given.description) : null;
+    const row = (el) => el.h(CONTROL_PX).px(SPACE_PX * 1.25).flex().items_center().gap(SPACE_PX).rounded(RADIUS.control).min_w(0)
+      .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (e) => e.bg(t.selected).font_medium())
+      .when(dot !== null, (e) => e.child(dot)).child(div().flex_1().min_w(0).truncate().child(label)).when(description !== null, (e) => e.child(description));
+    if (handler === undefined) return row(div().role("list_item").accessibility_label(label).aria_selected(isSelected));
+    return row(Button.new(`${drawn.key}:${given.key ?? label}`).selected(isSelected).accessibility_label(label).cursor_pointer().hover((el) => el.bg(t.hover).text_color(t.foreground)))
+      .on_click((_event, cx) => this.press(drawn, handler, { key: given.key ?? label }, cx));
+  }
+
+  badge(given, drawn, path, t) {
+    const color = toneOf(given.tone, t);
+    const words = textOf(given.children);
+    return div().flex_none().px(SPACE_PX * 0.75).py(1).rounded(RADIUS.chip).text_size(TYPE.caption).font_medium().text_color(given.tone === "neutral" || TONES[given.tone] === undefined ? t.muted : color).bg(t.raised)
+      .role("label").accessibility_label(words ?? "").children(words === undefined ? this.nodes(given.children, drawn, `${path}.children`, t, false) : [words]);
+  }
+
+  banner(given, drawn, path, t) {
+    const color = toneOf(given.tone, t);
+    const title = typeof given.title === "string" ? given.title : undefined;
+    const words = textOf(given.children);
+    return v_flex().min_w(0).gap(SPACE_PX).p(INSET_PX).rounded(RADIUS.control).border_1().border_color(color).bg(t.raised).role("status").accessibility_label(title ?? words ?? "")
+      .when(title !== undefined, (el) => el.child(div().font_semibold().text_color(color).child(title ?? "")))
+      .when(given.children !== undefined, (el) => el.child(words === undefined ? v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)) : div().text_color(title === undefined ? color : t.foreground).child(words)))
+      .when(given.actions !== undefined, (el) => el.child(h_flex().flex_wrap().gap(SPACE_PX).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false))));
   }
 }
