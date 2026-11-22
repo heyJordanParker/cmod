@@ -4,6 +4,20 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-11-22
+
+### Added
+- `List`, `ListItem`, `Badge`, and `Banner` in `ui/components.js`: a list of rows with a status dot, a short status in a tone's color, and a notice with its actions. `Progress` takes a `label` for screen readers.
+
+### Changed
+- Every component of `ui/components.js` reaches each app by its name and props, so each app draws it as its own control. The browser draws `Tabs` as a tab list, `Toggle` as a switch, `Progress` as a progress bar, and each other component as semantic HTML with its ARIA role. Herdr draws each as its native tabs, switch, progress bar, list, or card. Claude Code's terminal draws them as before.
+- The Herdr panel stays connected to `cmod serve` over one WebSocket for as long as Herdr runs, in place of running `cmod ui` for each call. A session it showed before shows at once while it draws again, a new session shows no loading state for its first 400 ms, the selected tab stays selected across sessions, and a lost connection keeps the last drawing and connects again.
+- Settings reads the mods when the session starts and again when a mod changes, so `/mods` and the Settings tab show them at once in place of `Reading your mods…`. Its sections are `Tabs`, its mods a `List`, its preferences `Toggle`s, and its notices `Banner`s. History's Show and As are choices in place of buttons that cycle.
+
+### Fixed
+- The Herdr panel never shows one session's error over another. Before, a refusal an older session's request brought back after you moved on hid the session you moved to.
+- The Herdr panel and the browser show a session's views again on their own once its cmod plugin reconnects, as after `/reload-plugins`, with no press on Try again.
+
 ## [8.4.2] - 2026-11-22
 
 ### Fixed

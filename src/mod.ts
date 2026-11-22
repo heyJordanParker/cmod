@@ -269,6 +269,7 @@ export const cmodPlugin = defineMod({
         })
         .catch((error: unknown) => report({ id: reloadToast, message: 'Could not read which plugins this session loaded', error }))
     })
+    parts?.onDeclare(() => void shown.refreshSettings())
     const reloaded = (state: typeof loadedState) => {
       loadedState = state
       loading = keepLoaded()
@@ -420,7 +421,7 @@ export const cmodPlugin = defineMod({
       checkPlugins({ isForced: false })
       if (path === pluginsFile) return checkChanges()
       void followBuildFailures()
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod)])
+      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod), shown.refreshSettings()])
     })
     settings.onChange({ source: 'user' }, () => checkChanges())
     sessions.current.onPrompt(() => checkChanges())

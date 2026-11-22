@@ -45,6 +45,7 @@ export const sidebarSession: SidebarState['session'] = { tabs: [], shown: dashbo
 
 export type SettingsView = {
   draw(columns: number, isFocused: boolean, surface: Surface): JSX.Element
+  refresh(): Promise<void>
   show(mod: string, section?: SettingsTab | 'widgets' | `view:${string}`, params?: unknown): Promise<void>
   shownView(): Pick<OpenTab, 'mod' | 'id'> | undefined
   closeView(mod: string, view: string): boolean
@@ -276,6 +277,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
 
   return {
     pane,
+    refreshSettings: () => view.refresh(),
     async toggle() {
       await pane.toggle({ focus: true })
       tell()

@@ -1,6 +1,6 @@
 import { AttachedFile, InstructionFile, Note, Prompt, Reply, Skill, ToolCall, ToolResult, messageOf, sessions, type Message, type Mod, type Session, type Task, type Turn } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
-import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { Box, Button, Input, Select, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
 export type HistoryFilter = 'all' | 'prompts' | 'tools' | 'errors'
 
@@ -270,14 +270,13 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
     const { history: entries, historyError } = mod.state.memory
     const { find, filter, layout } = mod.state.session.history
     if (entries === null && historyError === null && loading === undefined) refresh()
-    const nextFilter = filters[(filters.indexOf(filter) + 1) % filters.length] ?? 'all'
     const controls = Box({
       columnGap: 2,
       flexWrap: 'wrap',
       children: [
         Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'text in a row', submitLabel: 'find', onInput: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
-        Button({ plain: true, key: 'history:filter', label: `Show: ${filterLabels[filter]}`, onPress: () => void (mod.state.session.history = { ...mod.state.session.history, filter: nextFilter }) }),
-        Button({ plain: true, key: 'history:layout', label: layout === 'tasks' ? 'Tasks · timeline' : 'Timeline · tasks', onPress: () => void (mod.state.session.history = { ...mod.state.session.history, layout: layout === 'tasks' ? 'timeline' : 'tasks' }) }),
+        Select({ key: 'history:filter', label: 'Show', value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked as HistoryFilter }) }),
+        Select({ key: 'history:layout', label: 'As', value: layout, options: [{ value: 'tasks', label: 'Tasks' }, { value: 'timeline', label: 'Timeline' }], onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === 'timeline' ? 'timeline' : 'tasks' }) }),
       ],
     })
     const body = (): JSX.Element => {

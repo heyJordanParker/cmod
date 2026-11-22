@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.4.2";
+var coreVersion = "8.5.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -4121,6 +4121,7 @@ var beforeMethod = "$/before";
 var sessionsInterface = "cmod/Sessions";
 var styleInterface = "cmod/Style";
 var uiInterface = "cmod/UI";
+var uiParts = ["widgets", "views", "pages"];
 var sessionActs = {
   hold: "$/hold",
   act: "$/act",
@@ -7995,6 +7996,14 @@ function createModFiles({ name, claude, places, report }) {
 // node_modules/@cmodjs/core/ui/elements.js
 var unbuilt = Symbol("an element built outside a render");
 var drawing;
+var lowerings = new Map;
+function hostComponent(name, canonical, lower) {
+  lowerings.set(name, lower);
+  return (props) => elementNamed(name, canonical(props));
+}
+function elementNamed(name, props) {
+  return drawing === undefined ? { [unbuilt]: { name, props } } : build(drawing, name, props);
+}
 function drawWith(table, draw, markdown) {
   const outer = drawing;
   const current = { table, markdown };
@@ -8006,10 +8015,12 @@ function drawWith(table, draw, markdown) {
   }
 }
 function element(name) {
-  const construct = (props) => drawing === undefined ? { [unbuilt]: { name, props } } : build(drawing, name, props);
-  return construct;
+  return (props) => elementNamed(name, props);
 }
 function build(current, name, props) {
+  const lower = lowerings.get(name);
+  if (lower !== undefined)
+    return lower(props);
   const ready = "children" in props ? { ...props, children: built(current, props.children) } : props;
   if (name === "Markdown" && current.markdown !== undefined)
     return current.markdown(ready);
@@ -8073,10 +8084,11 @@ function elementOf(data, keyPrefix, press) {
   const name = fields[elementKey];
   if (name === undefined)
     return Object.fromEntries(Object.entries(fields).map(([key, each]) => [key, elementOf(each, keyPrefix, press)]));
-  if (typeof name !== "string" || !Object.hasOwn(constructors, name))
-    throw new Error(`a widget drew ${String(name)}, which is not an element of ui/elements.js.`);
+  if (typeof name !== "string" || !(Object.hasOwn(constructors, name) || lowerings.has(name)))
+    throw new Error(`a widget drew ${String(name)}, which is not an element of ui/elements.js or ui/components.js.`);
   const props = elementOf(fields["props"], keyPrefix, press);
-  return constructors[name](typeof props["key"] === "string" ? { ...props, key: `${keyPrefix}${props["key"]}` } : props);
+  const keyed = typeof props["key"] === "string" ? { ...props, key: `${keyPrefix}${props["key"]}` } : props;
+  return Object.hasOwn(constructors, name) ? constructors[name](keyed) : elementNamed(name, keyed);
 }
 var focusable = new Set(["Button", "Input", "Select"]);
 function drawsFocusable(data, key) {
@@ -10093,6 +10105,9 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
   let started = () => {
     return;
   };
+  let declaredChanged = () => {
+    return;
+  };
   const run = (mod, requests) => applyTo(mod, requests).catch((error) => report(`pages:${mod}`, `Could not show the view or page ${mod} asked for`, error));
   const takeWaiting = async () => {
     const taken = waiting;
@@ -10123,9 +10138,11 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
     const before = declared.get(mod);
     const after = partsOf(mod, listing);
     declared.set(mod, after);
-    for (const part of ["widgets", "views", "pages"])
-      if (JSON.stringify(before?.[part] ?? []) !== JSON.stringify(after[part]))
-        tellUi("Change", { part });
+    const changedParts = uiParts.filter((part) => JSON.stringify(before?.[part] ?? []) !== JSON.stringify(after[part]));
+    for (const part of changedParts)
+      tellUi("Change", { part });
+    if (before === undefined || changedParts.length > 0)
+      declaredChanged(mod);
   };
   const ask = (mod) => {
     const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((listing) => declare(mod, listing), (error) => {
@@ -10356,6 +10373,9 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
     onStart(listener) {
       started = listener;
     },
+    onDeclare(listener) {
+      declaredChanged = listener;
+    },
     turnClosed(turn) {
       closedTurn = turn;
       for (const { mod, widgets: listed } of declared.values())
@@ -10455,20 +10475,86 @@ function createWatches(claude, report) {
 }
 
 // node_modules/@cmodjs/core/ui/components.js
-function Panel({ title, children }) {
+var toneColors = { neutral: undefined, info: "suggestion", success: "success", warning: "warning", critical: "error" };
+var textOf2 = (tone) => {
+  const color = toneColors[tone];
+  return color === undefined ? { dimColor: true } : { color };
+};
+var Tabs = hostComponent("Tabs", ({ tabs, selected, onSelect, children }) => ({
+  key: "",
+  tabs: tabs.map(({ key, label, hotkey }) => ({ key, label, ...hotkey === undefined ? {} : { hotkey }, isSelected: key === selected, onSelect: () => onSelect(key) })),
+  ...children === undefined ? {} : { children }
+}), ({ key: prefix, tabs, children }) => {
+  const row = tabs.map(({ key, label, hotkey, isSelected, onSelect }) => isSelected ? Text({ children: [...hotkey === undefined ? [] : [Text({ color: "claude", children: hotkey }), ": "], Text({ bold: true, underline: true, children: label })] }) : Button({ plain: true, dimColor: true, key: `${prefix}tab:${key}`, ...hotkey === undefined ? {} : { hotkey }, label, onPress: onSelect }));
+  return Box({ flexDirection: "column", gap: 1, children: [Box({ gap: 3, children: row }), children] });
+});
+var Split = hostComponent("Split", ({ children }) => ({ children }), ({ children }) => {
+  const width = `${Math.floor(100 / Math.max(children.length, 1))}%`;
+  return Box({ gap: 1, children: children.map((child) => Box({ width, children: child })) });
+});
+var Panel = hostComponent("Panel", ({ title, children }) => ({ title, ...children === undefined ? {} : { children } }), ({ title, children }) => Box({
+  flexDirection: "column",
+  flexGrow: 1,
+  children: [
+    Box({ flexDirection: "column", flexGrow: 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: "subtle", paddingX: 1, children }),
+    Box({ position: "absolute", top: 0, left: 2, children: Text({ bold: true, wrap: "truncate-end", children: ` ${title} ` }) })
+  ]
+}));
+var Toggle = hostComponent("Toggle", ({ label, checked, onChange }) => ({ key: "", label, checked, onToggle: () => onChange(!checked) }), ({ key, label, checked, onToggle }) => Button({ plain: true, key: `${key}toggle:${label}`, label: `${checked ? "[x]" : "[ ]"} ${label}`, onPress: onToggle }));
+var cardColumns = 36;
+function card(text, isShown) {
   return Box({
-    flexDirection: "column",
-    flexGrow: 1,
-    children: [
-      Box({ flexDirection: "column", flexGrow: 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: "subtle", paddingX: 1, children }),
-      Box({ position: "absolute", top: 0, left: 2, children: Text({ bold: true, wrap: "truncate-end", children: ` ${title} ` }) })
-    ]
+    position: "absolute",
+    bottom: 1,
+    left: 0,
+    width: Math.min(text.length + 2, cardColumns),
+    ...isShown ? {} : { display: "none", hover: { display: "flex" } },
+    backgroundColor: "text",
+    paddingX: 1,
+    children: Text({ color: "inverseText", wrap: "wrap", children: text })
   });
 }
-function Progress({ value, width = 24 }) {
-  const filled = Math.round(Math.min(Math.max(value, 0), 100) / 100 * width);
+var Tooltip = hostComponent("Tooltip", ({ text, children }) => ({ key: "", text, ...children === undefined ? {} : { children } }), ({ key, text, children }) => Box({ key: `${key}tooltip:${text}`, children: [children, card(text, false)] }));
+var Help = hostComponent("Help", ({ text, isOpen, onOpenChange }) => ({ key: "", text, isOpen, onToggle: () => onOpenChange(!isOpen) }), ({ key, text, isOpen, onToggle }) => Box({ key: `${key}help:${text}`, children: [Button({ plain: true, key: `${key}help-button:${text}`, label: "?", onPress: onToggle }), card(text, isOpen)] }));
+var Dialog = hostComponent("Dialog", ({ title, children, actions }) => ({ title, actions, ...children === undefined ? {} : { children } }), ({ title, children, actions }) => Box({ flexDirection: "column", gap: 1, paddingX: 1, children: [Text({ bold: true, children: title }), children, Box({ gap: 2, children: actions })] }));
+var Pagination = hostComponent("Pagination", ({ page, pages, onPage }) => ({
+  page,
+  pages,
+  ...page > 1 ? { onPrevious: () => onPage(page - 1) } : {},
+  ...page < pages ? { onNext: () => onPage(page + 1) } : {}
+}), ({ page, pages, onPrevious, onNext }) => Box({
+  gap: 2,
+  children: [
+    onPrevious === undefined ? Text({ dimColor: true, children: "p: Previous" }) : Button({ plain: true, hotkey: "p", label: "Previous", onPress: onPrevious }),
+    Text({ dimColor: true, children: `${page} of ${pages}` }),
+    onNext === undefined ? Text({ dimColor: true, children: "n: Next" }) : Button({ plain: true, hotkey: "n", label: "Next", onPress: onNext })
+  ]
+}));
+var Progress = hostComponent("Progress", ({ value, width = 24, label }) => ({ value: Math.min(Math.max(value, 0), 100), width, ...label === undefined ? {} : { label } }), ({ value, width }) => {
+  const filled = Math.round(value / 100 * width);
   return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) })] });
-}
+});
+var List = hostComponent("List", ({ label, children }) => ({ label, ...children === undefined ? {} : { children } }), ({ children }) => Box({ flexDirection: "column", children }));
+var statusOf = (tone) => tone === undefined ? [] : [tone === "off" ? Text({ dimColor: true, children: "○ " }) : Text({ ...textOf2(tone), children: "● " })];
+var ListItem = hostComponent("ListItem", (props) => props, ({ key, label, description, tone, isSelected, onPress }) => {
+  const shown = [...statusOf(tone), label, ...description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })]];
+  if (isSelected === true || onPress === undefined)
+    return Box({ ...isSelected === true ? { backgroundColor: "userMessageBackground" } : {}, paddingX: 1, children: Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: shown }) });
+  return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) });
+});
+var Badge = hostComponent("Badge", ({ tone = "neutral", children }) => ({ tone, children }), ({ tone, children }) => Text({ ...textOf2(tone), children }));
+var wordsOf = (children) => {
+  const all = [children].flat(Infinity).filter((each) => each !== null && each !== undefined && typeof each !== "boolean");
+  return all.every((each) => typeof each === "string" || typeof each === "number") ? all.join("") : undefined;
+};
+var Banner = hostComponent("Banner", ({ tone = "info", title, children, actions }) => ({ tone, ...title === undefined ? {} : { title }, ...children === undefined ? {} : { children }, ...actions === undefined ? {} : { actions } }), ({ tone, title, children, actions }) => Box({
+  flexDirection: "column",
+  children: [
+    ...title === undefined ? [] : [Text({ ...textOf2(tone), bold: true, wrap: "wrap", children: title })],
+    ...children === undefined ? [] : [wordsOf(children) === undefined ? children : Text({ ...title === undefined ? textOf2(tone) : {}, wrap: "wrap", children: wordsOf(children) })],
+    ...actions === undefined ? [] : [Box({ gap: 2, flexShrink: 0, children: actions })]
+  ]
+}));
 
 // node_modules/@cmodjs/core/runtime/lifecycle.js
 var listenMethods = [conversationMethods.subscribe, conversationMethods.watchBefore];
@@ -12121,7 +12207,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12143,7 +12229,6 @@ var preferenceTitles = {
   servesTailnet: "Open web apps from your other devices, through Tailscale"
 };
 var viewSection = "view:";
-var selectedColor = "userMessageBackground";
 var statusColumns = 2;
 var rowPadding = 2;
 var panelColumns = 4;
@@ -12337,14 +12422,13 @@ function settings2(mod) {
       const views = await Promise.all(loaded.map(({ name, root, version }) => viewOf(store, name, root, version, !turnedOff.includes(name), rows, combos)));
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))];
     };
-    let hasLoaded = false;
     const refresh = async () => {
-      hasLoaded = true;
       const failed = (what) => (error) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`);
       await load().then((views) => void (mod.state.memory.views = views), failed("The mods"));
       await readLog(mod).then((log) => void (mod.state.memory.log = log), failed("The Log"));
       await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed("The preferences"));
     };
+    refresh();
     const act = (task) => void task().then((notice) => {
       mod.state.session.notice = notice ?? null;
       return refresh();
@@ -12415,7 +12499,7 @@ function settings2(mod) {
                 wrap: "truncate-end",
                 children: [
                   Text({ bold: true, children: entry.mod }),
-                  ...entry.level === "warning" ? [Text({ color: "warning", children: " warning" })] : [],
+                  ...entry.level === "warning" ? [" ", Badge({ tone: "warning", children: "warning" })] : [],
                   Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
                 ]
               }),
@@ -12437,13 +12521,14 @@ function settings2(mod) {
       if (section === "preferences") {
         return Box({
           flexDirection: "column",
+          gap: 1,
           children: Object.entries(preferenceTitles).map(([key, title]) => {
             const isOn = mod.state.memory.preferences[key];
             const turn = async () => {
               await writePreference(mod, key, !isOn);
               return;
             };
-            return Button({ plain: true, key: `preference:${key}`, label: `${isOn ? "[x]" : "[ ]"} ${title}`, onPress: () => act(turn) });
+            return Toggle({ label: title, checked: isOn, onChange: () => act(turn) });
           })
         });
       }
@@ -12492,36 +12577,32 @@ function settings2(mod) {
     };
     return {
       draw(columns, isFocused, surface) {
-        if (!hasLoaded)
-          refresh();
         const { removing, views } = mod.state.memory;
         const { notice } = mod.state.session;
         const { view, section: shownSection } = shownOf();
         if (view === undefined)
           return Text({ dimColor: true, children: notice ?? "Reading your mods…" });
         const sections = sectionsOf(view);
-        const status = (each) => !each.isOn ? Text({ dimColor: true, children: "○ " }) : each.pendingSteps.length > 0 ? Text({ color: "warning", children: "● " }) : Text({ dimColor: true, children: "● " });
+        const toneOf = (each) => !each.isOn ? "off" : each.pendingSteps.length > 0 ? "warning" : "neutral";
         const rowLabel = (each) => `${each.name}${each.isOn ? "" : " (off)"}`;
         const listColumns = Math.max(...views.map((each) => rowLabel(each).length)) + statusColumns + rowPadding + panelColumns;
         const isWide = columns - listColumns - 1 >= detailMinColumns;
         const mods = Panel({
           title: "Mods",
-          children: Box({
-            flexDirection: "column",
-            children: views.map((each) => each === view ? Box({ backgroundColor: selectedColor, paddingX: 1, children: Text({ wrap: "truncate-end", children: [status(each), Text({ bold: true, children: rowLabel(each) })] }) }) : Box({
-              paddingX: 1,
-              children: Button({
-                plain: true,
-                dimColor: true,
-                key: `mod:${each.name}`,
-                onPress: () => {
-                  mod.state.session.selected = each.name;
-                  mod.state.session.viewParams = null;
-                  mod.state.memory.removing = null;
-                  changed();
-                },
-                children: [status(each), rowLabel(each)]
-              })
+          children: List({
+            label: "Mods",
+            children: views.map((each) => ListItem({
+              key: `mod:${each.name}`,
+              label: each.name,
+              ...each.isOn ? {} : { description: "(off)" },
+              tone: toneOf(each),
+              isSelected: each === view,
+              onPress: () => {
+                mod.state.session.selected = each.name;
+                mod.state.session.viewParams = null;
+                mod.state.memory.removing = null;
+                changed();
+              }
             }))
           })
         });
@@ -12542,12 +12623,10 @@ function settings2(mod) {
           ]
         });
         const removal = removing === view.name ? [
-          Box({
-            flexDirection: "column",
-            children: [
-              Text({ color: "warning", wrap: "wrap", children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
-              Box({ gap: 2, flexShrink: 0, children: [filledButton({ key: "keep", variant: "primary", label: "Keep", onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: "remove-confirmed", label: "Remove", onPress: () => remove(view.name) })] })
-            ]
+          Banner({
+            tone: "warning",
+            children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.`,
+            actions: [filledButton({ key: "keep", variant: "primary", label: "Keep", onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: "remove-confirmed", label: "Remove", onPress: () => remove(view.name) })]
           })
         ] : [];
         const finishSetup = () => act(async () => {
@@ -12557,38 +12636,31 @@ function settings2(mod) {
           return;
         });
         const attention = [
-          ...view.isOn ? [] : [Text({ color: "warning", wrap: "wrap", children: "Off: Claude Code does not load it." })],
-          ...view.pendingSteps.length === 0 ? [] : [Box({ flexDirection: "column", children: [Text({ color: "warning", wrap: "wrap", children: `Needs setup: ${view.pendingSteps.join(", ")}` }), filledButton({ key: "finish", variant: "primary", label: "Finish setup", onPress: finishSetup })] })]
+          ...view.isOn ? [] : [Banner({ tone: "warning", children: "Off: Claude Code does not load it." })],
+          ...view.pendingSteps.length === 0 ? [] : [Banner({ tone: "warning", children: `Needs setup: ${view.pendingSteps.join(", ")}`, actions: [filledButton({ key: "finish", variant: "primary", label: "Finish setup", onPress: finishSetup })] })]
         ];
-        const row = Box({
-          flexWrap: "wrap",
-          children: sections.map(({ key, label }) => key === shownSection ? Text({ backgroundColor: selectedColor, bold: true, wrap: "truncate-end", children: ` ${label} ` }) : Box({
-            paddingX: 1,
-            flexShrink: 0,
-            children: Button({
-              plain: true,
-              dimColor: true,
-              key: `section:${key}`,
-              label,
-              onPress: () => {
-                mod.state.session.section = key;
-                mod.state.session.viewParams = null;
-                changed();
-              }
-            })
-          }))
-        });
         const detailColumns = (isWide ? columns - listColumns - 1 : columns) - panelColumns;
+        const tabs = Tabs({
+          tabs: sections,
+          selected: shownSection,
+          onSelect: (key) => {
+            mod.state.session.section = key;
+            mod.state.session.viewParams = null;
+            changed();
+          },
+          children: drawSection(view, shownSection, detailColumns, isFocused, surface)
+        });
         const details = Panel({
           title: view.name,
           children: Box({
             flexDirection: "column",
             gap: 1,
-            children: [header, ...removal, ...attention, row, drawSection(view, shownSection, detailColumns, isFocused, surface), ...notice === null ? [] : [Text({ dimColor: true, wrap: "wrap", children: notice })]]
+            children: [header, ...removal, ...attention, tabs, ...notice === null ? [] : [Text({ dimColor: true, wrap: "wrap", children: notice })]]
           })
         });
         return isWide ? Box({ flexGrow: 1, columnGap: 1, children: [Box({ width: listColumns, flexShrink: 0, children: mods }), details] }) : Box({ flexDirection: "column", flexGrow: 1, gap: 1, children: [Box({ flexDirection: "column", flexShrink: 0, children: mods }), details] });
       },
+      refresh,
       shownView() {
         const { view, section } = shownOf();
         return view !== undefined && section.startsWith(viewSection) ? { mod: view.name, id: section.slice(viewSection.length) } : undefined;
@@ -12619,7 +12691,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12844,14 +12916,13 @@ function history(mod, isShown) {
     const { find, filter, layout } = mod.state.session.history;
     if (entries === null && historyError === null && loading === undefined)
       refresh();
-    const nextFilter = filters[(filters.indexOf(filter) + 1) % filters.length] ?? "all";
     const controls = Box({
       columnGap: 2,
       flexWrap: "wrap",
       children: [
         Input({ key: "history:find", label: "Find", value: find, placeholder: "text in a row", submitLabel: "find", onInput: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
-        Button({ plain: true, key: "history:filter", label: `Show: ${filterLabels[filter]}`, onPress: () => void (mod.state.session.history = { ...mod.state.session.history, filter: nextFilter }) }),
-        Button({ plain: true, key: "history:layout", label: layout === "tasks" ? "Tasks · timeline" : "Timeline · tasks", onPress: () => void (mod.state.session.history = { ...mod.state.session.history, layout: layout === "tasks" ? "timeline" : "tasks" }) })
+        Select({ key: "history:filter", label: "Show", value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked }) }),
+        Select({ key: "history:layout", label: "As", value: layout, options: [{ value: "tasks", label: "Tasks" }, { value: "timeline", label: "Timeline" }], onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === "timeline" ? "timeline" : "tasks" }) })
       ]
     });
     const body = () => {
@@ -12871,7 +12942,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13110,6 +13181,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
   return {
     pane,
+    refreshSettings: () => view.refresh(),
     async toggle() {
       await pane.toggle({ focus: true });
       tell();
@@ -13193,7 +13265,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13425,7 +13497,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13455,7 +13527,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13669,6 +13741,7 @@ var cmodPlugin = defineMod({
         return checkChanges();
       }).catch((error) => report({ id: reloadToast, message: "Could not read which plugins this session loaded", error }));
     });
+    parts?.onDeclare(() => void shown.refreshSettings());
     const reloaded = (state) => {
       loadedState = state;
       loading = keepLoaded();
@@ -13839,7 +13912,7 @@ var cmodPlugin = defineMod({
       if (path === pluginsFile)
         return checkChanges();
       followBuildFailures();
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod)]);
+      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod), shown.refreshSettings()]);
     });
     settings.onChange({ source: "user" }, () => checkChanges());
     sessions.current.onPrompt(() => checkChanges());
@@ -13957,7 +14030,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-WcYc88/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
