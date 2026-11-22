@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.4.0";
+var coreVersion = "8.4.1";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -3826,6 +3826,15 @@ class RpcError extends Error {
   }
 }
 var cancelMethod = "$/cancelRequest";
+var partMethod = "$/part";
+var pollChars = 1e6;
+function partOf(message) {
+  if (typeof message !== "object" || message === null)
+    return;
+  const fields = message;
+  const params = fields["params"];
+  return fields["method"] === partMethod && typeof params === "object" && params !== null ? params : undefined;
+}
 function createPeer({ send, handle }) {
   const closing = new AbortController;
   const waiting = new Map;
@@ -3991,12 +4000,24 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
   };
   const pollLoop = async (link) => {
     while (current === link && !isClosed) {
-      const answer = await call(`${rpcPath}/${link.id}`, { method: "GET" }).catch((error) => ({ status: 0, text: String(error) }));
+      const answer = await call(`${rpcPath}/${link.id}?chars=${pollChars}`, { method: "GET" }).catch((error) => ({ status: 0, text: String(error) }));
       if (current !== link)
         return;
       if (answer.status !== 200)
         return lose(link, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`));
-      link.peer.receive(JSON.parse(answer.text));
+      for (const message of [JSON.parse(answer.text)].flat()) {
+        const part = partOf(message);
+        if (part === undefined) {
+          link.peer.receive(message);
+          continue;
+        }
+        link.part += String(part["text"]);
+        if (part["isLast"] !== true)
+          continue;
+        const whole = link.part;
+        link.part = "";
+        link.peer.receive(JSON.parse(whole));
+      }
     }
   };
   let hasConnected = false;
@@ -4030,7 +4051,8 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
           handle
         }),
         lastAsked: undefined,
-        undelivered: new Set
+        undelivered: new Set,
+        part: ""
       };
       current = link;
       hasConnected = true;
@@ -8104,6 +8126,7 @@ function filledButton({ key, label, hotkey, variant = "secondary", onPress }) {
     plain: true,
     key,
     label,
+    variant,
     ...hotkey === undefined ? {} : { hotkey },
     onPress,
     children: Text({ backgroundColor: isPrimary ? "claude" : "userMessageBackground", color: isPrimary ? "inverseText" : "text", bold: isPrimary, children: ` ${label} ` })
@@ -12098,7 +12121,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12596,7 +12619,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12645,6 +12668,8 @@ function matchesFind(entry, find) {
 function history(mod, isShown) {
   const { claude, report } = engineOf(mod);
   const messages = new Map;
+  const closedTasks = new Map;
+  let read;
   let loading;
   let isStale = false;
   const entryOf = (message, results, children) => {
@@ -12675,7 +12700,7 @@ function history(mod, isShown) {
     return entries;
   };
   const taskEntryOf = async (task) => {
-    const [own, handedOn] = await Promise.all([task.messages(), task.tasks()]);
+    const [own, handedOn] = await Promise.all([messagesOfTask(task), task.tasks()]);
     const opened = new Set(own.flatMap((message) => message.type === ToolCall ? [message.callId] : []));
     const children = await entriesOf(own.filter((message) => message.type !== Prompt), handedOn);
     const loose = await Promise.all(handedOn.filter((each) => !opened.has(each.openedBy)).map(taskEntryOf));
@@ -12686,9 +12711,28 @@ function history(mod, isShown) {
     const children = await entriesOf(own.filter((message) => message.turn === turn.prompt.id && message.id !== turn.prompt.id), tasks);
     return { key: turn.prompt.id, message: turn.prompt.id, kind: "prompt", name: timeOf2(turn.openedAt), text: firstLine2(turn.prompt.text), at: turn.openedAt, isError: false, isRunning: turn.closedAt === undefined, children };
   };
+  const messagesOfTask = async (task) => {
+    const kept = closedTasks.get(task.id);
+    if (kept !== undefined)
+      return kept;
+    const list = await task.messages();
+    if (task.closedAt !== undefined)
+      closedTasks.set(task.id, list);
+    return list;
+  };
+  const messagesOf = async (current) => {
+    if (read?.session !== current.id) {
+      read = { session: current.id, list: [] };
+      closedTasks.clear();
+    }
+    const known = read;
+    const last = known.list.at(-1)?.id;
+    known.list.push(...await current.messages(last === undefined ? {} : { after: last }));
+    return known.list;
+  };
   const load = async () => {
     const current = sessions.current;
-    const [turns, all, tasks] = await Promise.all([current.turns(), current.messages(), current.goal.tasks()]);
+    const [turns, all, tasks] = await Promise.all([current.turns(), messagesOf(current), current.goal.tasks()]);
     const own = all.filter((message) => message.task === undefined);
     messages.clear();
     const prompts = await Promise.all(turns.map((turn) => promptEntryOf(turn, own, tasks)));
@@ -12827,7 +12871,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13149,7 +13193,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13381,7 +13425,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13411,7 +13455,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13913,7 +13957,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-cZHfmH/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-CbTVO1/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
