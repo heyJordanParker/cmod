@@ -4,6 +4,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.6.0] - 2026-11-23
+
 ### Added
 - `ListItem` draws a row of a tree: give it a `depth`, and `isOpen` with `onOpenChange` for its `▸` and `▾`. It also takes `leading` text before its label and `trailing` elements, such as a `Badge`, after it.
 
