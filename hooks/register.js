@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.5.0";
+var coreVersion = "8.6.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -10536,8 +10536,19 @@ var Progress = hostComponent("Progress", ({ value, width = 24, label }) => ({ va
 });
 var List = hostComponent("List", ({ label, children }) => ({ label, ...children === undefined ? {} : { children } }), ({ children }) => Box({ flexDirection: "column", children }));
 var statusOf = (tone) => tone === undefined ? [] : [tone === "off" ? Text({ dimColor: true, children: "○ " }) : Text({ ...textOf2(tone), children: "● " })];
-var ListItem = hostComponent("ListItem", (props) => props, ({ key, label, description, tone, isSelected, onPress }) => {
-  const shown = [...statusOf(tone), label, ...description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })]];
+function treeRow({ key, label, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }) {
+  const opener = isOpen !== undefined && onToggle !== undefined ? Button({ plain: true, key: `${key}:toggle`, onPress: onToggle, children: Text({ dimColor: true, children: isOpen ? "▾" : "▸" }) }) : Text({ children: " " });
+  const shown = Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: [...statusOf(tone), ...leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })], label] });
+  const row = Box({ columnGap: 1, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] });
+  if (trailing === undefined)
+    return Box({ paddingLeft: depth * 2, children: row });
+  return Box({ width: "100%", paddingLeft: depth * 2, columnGap: 1, justifyContent: "space-between", children: [row, Box({ flexShrink: 0, children: trailing })] });
+}
+var ListItem = hostComponent("ListItem", ({ onOpenChange, ...props }) => ({ ...props, ...onOpenChange === undefined || props.isOpen === undefined ? {} : { onToggle: () => onOpenChange(props.isOpen !== true) } }), (props) => {
+  const { key, label, description, leading, trailing, tone, isSelected, depth, onPress } = props;
+  if (depth !== undefined)
+    return treeRow(props);
+  const shown = [...statusOf(tone), ...leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })], label, ...description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })], ...trailing === undefined ? [] : [" ", trailing]];
   if (isSelected === true || onPress === undefined)
     return Box({ ...isSelected === true ? { backgroundColor: "userMessageBackground" } : {}, paddingX: 1, children: Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: shown }) });
   return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) });
@@ -12207,7 +12218,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12691,7 +12702,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/history.ts
 var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
 var historyMemory = { history: null, historyError: null };
 var filters = ["all", "prompts", "tools", "errors"];
@@ -12888,30 +12899,23 @@ function history(mod, isShown) {
     walk(entries);
     return all.filter((entry) => matchesFilter(entry, filter) && matchesFind(entry, lowered)).toSorted((one, other) => one.at.localeCompare(other.at)).map((entry) => ({ entry, depth: 0, isOpen: false }));
   };
-  const row = ({ entry, depth, isOpen }, columns) => {
+  const row = ({ entry, depth, isOpen }) => {
     const { tools, failures } = counted(entry);
     const counts = entry.kind === "prompt" || entry.kind === "task" ? [tools > 0 ? `${tools} ${tools === 1 ? "tool" : "tools"}` : "", failures > 0 ? `${failures} failed` : ""].filter((part) => part !== "").join(" · ") : "";
-    const status = entry.isRunning && entry.kind === "task" ? "running" : entry.isError ? "failed" : counts;
-    const hasChildren = entry.children.length > 0 && mod.state.session.history.layout === "tasks" && mod.state.session.history.filter !== "prompts";
-    const opener = hasChildren ? Button({ plain: true, key: `history:toggle:${entry.key}`, onPress: () => toggle(entry.key), children: Text({ dimColor: true, children: isOpen ? "▾" : "▸" }) }) : Text({ children: " " });
-    return Box({
-      key: `history:row:${entry.key}`,
-      paddingLeft: depth * 2,
-      columnGap: 1,
-      width: columns,
-      children: [
-        opener,
-        Button({
-          plain: true,
-          key: `history:${entry.key}`,
-          onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null),
-          children: Text({ wrap: "truncate-end", ...entry.kind === "prompt" ? { bold: true } : {}, children: [Text({ dimColor: entry.kind !== "prompt", children: entry.name }), ` ${entry.text}`] })
-        }),
-        ...status === "" ? [] : [Box({ flexGrow: 1 }), Text({ ...entry.isError || failures > 0 ? { color: "error" } : { dimColor: true }, children: status })]
-      ]
+    const isRunning = entry.isRunning && entry.kind === "task";
+    const status = isRunning ? "running" : entry.isError ? "failed" : counts;
+    const isTree = mod.state.session.history.layout === "tasks" && mod.state.session.history.filter !== "prompts";
+    return ListItem({
+      key: `history:${entry.key}`,
+      leading: entry.name,
+      label: entry.text,
+      ...status === "" ? {} : { trailing: Badge({ tone: entry.isError || failures > 0 ? "critical" : isRunning ? "info" : "neutral", children: status }) },
+      ...isTree ? { depth } : {},
+      ...isTree && entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {},
+      onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null)
     });
   };
-  const draw = (columns) => {
+  const draw = () => {
     const { history: entries, historyError } = mod.state.memory;
     const { find, filter, layout } = mod.state.session.history;
     if (entries === null && historyError === null && loading === undefined)
@@ -12920,7 +12924,7 @@ function history(mod, isShown) {
       columnGap: 2,
       flexWrap: "wrap",
       children: [
-        Input({ key: "history:find", label: "Find", value: find, placeholder: "text in a row", submitLabel: "find", onInput: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
+        Input({ key: "history:find", label: "Find", value: find, placeholder: "Find in the history", submitLabel: "find", onInput: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
         Select({ key: "history:filter", label: "Show", value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked }) }),
         Select({ key: "history:layout", label: "As", value: layout, options: [{ value: "tasks", label: "Tasks" }, { value: "timeline", label: "Timeline" }], onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === "timeline" ? "timeline" : "tasks" }) })
       ]
@@ -12935,14 +12939,14 @@ function history(mod, isShown) {
       const rows = layout === "tasks" ? visible(entries) : timeline(entries);
       if (rows.length === 0)
         return Text({ dimColor: true, children: "No row matches." });
-      return Box({ flexDirection: "column", children: rows.map((shown) => row(shown, columns)) });
+      return List({ label: "History", children: rows.map(row) });
     };
     return Box({ flexDirection: "column", gap: 1, children: [controls, body()] });
   };
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13057,7 +13061,7 @@ function sidebar(mod, settings, history, openInBrowser) {
     const rows = widgets.rows(Dashboard, { columns: columns - panelColumns2, surface });
     return Panel({ title: "Widgets", children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: "column", children: rows }) });
   };
-  const drawHistory = (columns) => Panel({ title: historyView.title, children: historyView.draw(columns - panelColumns2) });
+  const drawHistory = () => Panel({ title: historyView.title, children: historyView.draw() });
   const bodyOf = (tab, columns, isFocused, surface) => {
     if (tab === settingsTab)
       return view.draw(columns, isFocused, surface);
@@ -13065,7 +13069,7 @@ function sidebar(mod, settings, history, openInBrowser) {
     if (open === undefined)
       return drawDashboard(columns, surface);
     if (isHistory(open))
-      return drawHistory(columns);
+      return drawHistory();
     const drawing = `Drawing ${titleOf(open)}…`;
     if (isPage(open))
       return parts.element(open.mod, open.id, open.params, columns, isFocused, surface) ?? Text({ dimColor: true, children: drawing });
@@ -13118,7 +13122,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   });
   const view = settings(pane, () => tell());
   mod.views.add({ id: dashboardTab, title: "Dashboard", render: (_current, { columns, surface }) => drawDashboard(columns, surface) });
-  const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: (_current, { columns }) => drawHistory(columns) });
+  const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() });
   mod.views.add({ id: settingsTab, title: "Settings", render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) });
   const isFixedTab = (name, id) => name === mod.name && (id === dashboardTab || id === settingsTab);
   const placeOf = (name, id) => declaredOf(name)?.views.find((each) => each.id === id)?.place;
@@ -13265,7 +13269,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13497,7 +13501,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13527,7 +13531,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -14030,7 +14034,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-cfmuFE/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
