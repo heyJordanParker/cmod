@@ -105,7 +105,9 @@ test('cmod check writes the options defineMod declares into plugin.json userConf
   expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n    package.json "cmod.hotkeys" holds the hotkey defineMod declares: runs\n')
 })
 
-const cmodAt = (version: string, id = 'cmod@cmod', scope = 'user') => ({ id, version, scope, enabled: true, installPath: '/cmod' })
+const cmodAt = (version: string, id = 'cmod@cmod', scope = 'user', installPath = '/cmod') => ({ id, version, scope, enabled: true, installPath })
+
+const bootstrapOf = (version: string) => `#!/bin/sh\necho "progress 2 2 cmod ${version} is installed"\n`
 
 test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod installed when that core names no oldest cmod, keeping the rest of the entry', async () => {
   const home = await temporaryHome()
@@ -220,15 +222,16 @@ test('cmod check updates each older cmod plugin through Claude Code before it wr
   const root = join(home, 'demo')
   const linkedMarketplaceCopy = 'cmod@Developer-linked'
   await writeFiles(home, {
-    'bin/claude': claudeAnswering([cmodAt('4.3.2'), cmodAt('4.3.2', linkedMarketplaceCopy)], 'exit 1', [cmodAt('4.3.3'), cmodAt('4.3.3', linkedMarketplaceCopy)]),
+    'bin/claude': claudeAnswering([cmodAt('4.3.2'), cmodAt('4.3.2', linkedMarketplaceCopy)], 'exit 1', [cmodAt('4.3.3', 'cmod@cmod', 'user', join(home, 'cmod')), cmodAt('4.3.3', linkedMarketplaceCopy, 'user', join(home, 'cmod'))]),
     '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n',
+    'cmod/setup/bootstrap.sh': bootstrapOf('4.3.3'),
   })
   await writeFiles(root, newerCoreMod)
 
   const result = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain(
-    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nUpdating cmod@Developer-linked…\n✔ Updated cmod@Developer-linked through Claude Code\n✔ Updated cmod to 4.3.3 through Claude Code, so it runs the @cmodjs/core this mod bundles\n    Wrote the cmod dependency ">=4.3.3", the oldest cmod the @cmodjs/core 4.3.3 this mod bundles runs on, so every newer cmod runs it\n',
+    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nUpdating cmod@Developer-linked…\n✔ Updated cmod@Developer-linked through Claude Code\nDownloading the cmod program…\n✔ cmod 4.3.3 is installed\n✔ Updated cmod to 4.3.3 through Claude Code, so it runs the @cmodjs/core this mod bundles\n    Wrote the cmod dependency ">=4.3.3", the oldest cmod the @cmodjs/core 4.3.3 this mod bundles runs on, so every newer cmod runs it\n',
   )
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toStartWith('plugin list --json\nplugin list --json\nplugin update cmod@cmod --json\nplugin update cmod@Developer-linked --json\nplugin list --json\nplugin list --json\nplugin validate ')
   expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
@@ -237,13 +240,13 @@ test('cmod check updates each older cmod plugin through Claude Code before it wr
 test('cmod check fails and keeps the cmod dependency when Claude Code can install no cmod as new as the @cmodjs/core the mod bundles', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
-  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.3.2')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.3.2', 'cmod@cmod', 'user', join(home, 'cmod'))]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n', 'cmod/setup/bootstrap.sh': bootstrapOf('4.3.2') })
   await writeFiles(root, newerCoreMod)
 
   const result = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain(
-    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\n✘ @cmodjs/core 4.3.3 needs cmod 4.3.3, and the newest cmod Claude Code can install here is 4.3.2\n    fix: Install @cmodjs/core 4.3.2 with bun add @cmodjs/core@4.3.2, then run cmod check again.\n',
+    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nDownloading the cmod program…\n✔ cmod 4.3.2 is installed\n✘ @cmodjs/core 4.3.3 needs cmod 4.3.3, and the newest cmod Claude Code can install here is 4.3.2\n    fix: Install @cmodjs/core 4.3.2 with bun add @cmodjs/core@4.3.2, then run cmod check again.\n',
   )
   expect(result.exitCode).toBe(1)
   expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.2' }])
