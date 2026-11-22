@@ -4,6 +4,15 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Added
+- `ListItem` draws a row of a tree: give it a `depth`, and `isOpen` with `onOpenChange` for its `▸` and `▾`. It also takes `leading` text before its label and `trailing` elements, such as a `Badge`, after it.
+
+### Changed
+- The Herdr panel draws cmod's views as Herdr's own sidebar does. History is a tree of rows with their counts as badges, in place of a column of outlined buttons. A `Panel` is a titled section in place of a card inside the panel's card. A `Select` is a menu button in place of a row of segments under its label. A field shows its label inside it. A `Badge` or `Banner` is tinted in its tone's color.
+
+### Fixed
+- The Herdr panel no longer shows `WebSocket connection is closed` under a view after it connects to `cmod serve` again. A lost connection shows only in the bar at the bottom while the panel connects again.
+
 ## [8.5.0] - 2026-11-22
 
 ### Added

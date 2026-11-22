@@ -154,13 +154,13 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
   }
 
-  const drawHistory = (columns: number) => Panel({ title: historyView.title, children: historyView.draw(columns - panelColumns) })
+  const drawHistory = () => Panel({ title: historyView.title, children: historyView.draw() })
 
   const bodyOf = (tab: string, columns: number, isFocused: boolean, surface: Surface): JSX.Element => {
     if (tab === settingsTab) return view.draw(columns, isFocused, surface)
     const open = openTabOf(tab)
     if (open === undefined) return drawDashboard(columns, surface)
-    if (isHistory(open)) return drawHistory(columns)
+    if (isHistory(open)) return drawHistory()
     const drawing = `Drawing ${titleOf(open)}…`
     if (isPage(open)) return parts.element(open.mod, open.id, open.params, columns, isFocused, surface) ?? Text({ dimColor: true, children: drawing })
     return Panel({ title: open.mod, children: parts.element(open.mod, open.id, open.params, columns - panelColumns, isFocused, surface) ?? Text({ dimColor: true, children: drawing }) })
@@ -216,7 +216,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
   const view = settings(pane, () => tell())
 
   mod.views.add({ id: dashboardTab, title: 'Dashboard', render: (_current, { columns, surface }) => drawDashboard(columns, surface) })
-  const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: (_current, { columns }) => drawHistory(columns) })
+  const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() })
   mod.views.add({ id: settingsTab, title: 'Settings', render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) })
   const isFixedTab = (name: string, id: string) => name === mod.name && (id === dashboardTab || id === settingsTab)
 

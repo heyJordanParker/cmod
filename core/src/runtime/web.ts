@@ -173,13 +173,24 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
     return `<progress class="progress" max="100" value="${numberOr(props['value'], 0)}"${attribute('aria-label', label)}${attribute('style', `width:${across(numberOr(props['width'], 24))}`)}></progress>`
   },
   List: (props, drawing) => `<ul class="list"${attribute('aria-label', textOr(props['label'], ''))}>${nodeHtml(props['children'], drawing)}</ul>`,
-  ListItem: (props) => {
+  ListItem: (props, drawing) => {
     const dot = props['tone'] === undefined ? '' : `<span class="dot tone-${toneOf(props['tone'])}" aria-hidden="true"></span>`
+    const leading = typeof props['leading'] === 'string' ? `<span class="leading">${escaped(props['leading'])}</span>` : ''
     const description = typeof props['description'] === 'string' ? `<span class="description">${escaped(props['description'])}</span>` : ''
-    const inner = `${dot}<span class="item-label">${escaped(textOr(props['label'], ''))}</span>${description}`
+    const trailing = props['trailing'] === undefined ? '' : `<span class="trailing">${nodeHtml(props['trailing'], drawing)}</span>`
+    const inner = `${dot}${leading}<span class="item-label">${escaped(textOr(props['label'], ''))}</span>${description}${trailing}`
     const isSelected = props['isSelected'] === true
-    if (handlerOf(props['onPress']) === undefined) return `<li class="list-item${isSelected ? ' selected' : ''}"${isSelected ? ' aria-current="true"' : ''}>${inner}</li>`
-    return `<li><button type="button" class="list-item${isSelected ? ' selected' : ''}"${isSelected ? ' aria-current="true"' : ''}${attribute('data-key', keyOf(props))}${handlerAttribute('data-press', props['onPress'])}>${inner}</button></li>`
+    const depth = typeof props['depth'] === 'number' ? props['depth'] : undefined
+    const isOpen = typeof props['isOpen'] === 'boolean' ? props['isOpen'] : undefined
+    const opener =
+      depth === undefined
+        ? ''
+        : isOpen === undefined || handlerOf(props['onToggle']) === undefined
+          ? '<span class="opener" aria-hidden="true"></span>'
+          : `<button type="button" class="opener" aria-label="${isOpen ? 'Close' : 'Open'}" aria-expanded="${isOpen}"${attribute('data-key', `${textOr(props['key'], '')}:toggle`)}${handlerAttribute('data-press', props['onToggle'])}></button>`
+    const level = depth === undefined ? '' : ` style="--depth:${depth}" aria-level="${depth + 1}"`
+    const row = handlerOf(props['onPress']) === undefined ? `<span class="list-item${isSelected ? ' selected' : ''}">${inner}</span>` : `<button type="button" class="list-item${isSelected ? ' selected' : ''}"${attribute('data-key', keyOf(props))}${handlerAttribute('data-press', props['onPress'])}>${inner}</button>`
+    return `<li class="list-row${depth === undefined ? '' : ' tree-row'}"${isSelected ? ' aria-current="true"' : ''}${level}>${opener}${row}</li>`
   },
   Badge: (props, drawing) => `<span class="badge tone-${toneOf(props['tone'])}">${nodeHtml(props['children'], drawing)}</span>`,
   Banner: (props, drawing) => {

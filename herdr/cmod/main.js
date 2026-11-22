@@ -1,5 +1,5 @@
 import { View, div, image } from "gpui-kit";
-import { v_flex, h_flex, Button, Tabs, Tab, Switch, Progress, ProgressTrack, ProgressIndicator, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
+import { v_flex, h_flex, Button, Tabs, Tab, Switch, Progress, ProgressTrack, ProgressIndicator, Popover, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
 import { exec, checking, terminals, focused, readTextFile, theme, run, props, appHome, settings, notify, panes, layout } from "herdr";
 import { WebSocket } from "websocket";
 import { writeFile, readFile, mkdir, exists, readdir, unlink } from "fs/promises";
@@ -20,9 +20,12 @@ const TYPE = { caption: 12, body: 13, heading: 14, title: 16 };
 const RADIUS = { chip: 5, control: 7, card: 10 };
 const HEADER_PX = 42;
 const CONTROL_PX = 28;
-const FIELD_PX = 32;
+const ITEM_PX = 28;
+const INDENT_PX = 16;
 const INSET_PX = 12;
 const TAB_MAX_PX = 168;
+const TEXT_FIELD_MAX_PX = 360;
+const MENU_MIN_PX = 160;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DRAWN = "mods/cmod/.drawn";
 const SPACES = { xs: 0.25, sm: 0.5, md: 1, lg: 1.5, xl: 2 };
@@ -35,7 +38,7 @@ const THEMED = {
 };
 const SURFACES = { userMessageBackground: "selected", inactive: "selected", subtle: "raised", secondaryText: "raised", promptBorder: "raised", gray: "raised", grey: "raised" };
 const BORDERS = new Set(["subtle", "inactive", "secondaryText", "promptBorder", "userMessageBackground", "text", "gray", "grey"]);
-const TONES = { info: "ansi4", success: "ansi2", warning: "ansi3", critical: "ansi1" };
+const TONES = { info: "working", success: "done", warning: "ansi3", critical: "blocked" };
 const CELL_TEXT = /[─-▟-]| {2,}/;
 const FIELDS = new Set(["Input", "Select"]);
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
@@ -83,13 +86,14 @@ const colorOf = (value, t, role = "text") => {
 };
 
 const toneOf = (tone, t) => (TONES[tone] === undefined ? t.muted : t[TONES[tone]]);
+const tint = (color, alpha) => (/^#[0-9a-f]{6}$/i.test(color ?? "") ? `${color}${alpha}` : undefined);
 
 const walk = (node, path, visit) => {
   if (Array.isArray(node)) return node.forEach((each, index) => walk(each, `${path}.${index}`, visit));
   if (node === null || typeof node !== "object" || typeof node.$cmodElement !== "string") return;
   const given = node.props ?? {};
   visit(node.$cmodElement, given, path);
-  for (const [name, value] of Object.entries(given)) if (name === "children" || name === "actions") walk(value, `${path}.${name}`, visit);
+  for (const [name, value] of Object.entries(given)) if (name === "children" || name === "actions" || name === "trailing") walk(value, `${path}.${name}`, visit);
 };
 
 const crc32 = (bytes) => {
@@ -196,6 +200,7 @@ export default class Cmod extends View {
     this.drawnParts = new Map();
     this.retired = [];
     this.located = null;
+    this.openMenu = null;
     this.pageTabs = new Map();
     this.openingTabs = [];
     this.resizing = 0;
@@ -243,7 +248,7 @@ export default class Cmod extends View {
       await this.read(socket, cx);
     } catch (error) {
       this.socket = null;
-      this.failCalls(messageOf(error), cx);
+      this.calls.clear();
       this.dispatch({ type: "disconnected", error: messageOf(error) }, cx);
     }
   }
@@ -267,21 +272,12 @@ export default class Cmod extends View {
   }
 
   call(effect, cx) {
-    if (this.socket === null) {
-      if (effect.failed !== null) cx.spawn(async (cx) => this.dispatch({ ...effect.failed, error: "cmod serve is not connected." }, cx));
-      return;
-    }
+    if (this.socket === null) return;
     this.lastCall += 1;
     const id = this.lastCall;
     this.calls.set(id, effect);
     const socket = this.socket;
     cx.spawn(async () => socket.write(JSON.stringify({ jsonrpc: "2.0", id, method: effect.method, params: effect.params })));
-  }
-
-  failCalls(error, cx) {
-    const waiting = [...this.calls.values()];
-    this.calls.clear();
-    for (const effect of waiting) if (effect.failed !== null) this.dispatch({ ...effect.failed, error }, cx);
   }
 
   async close() {
@@ -551,7 +547,7 @@ export default class Cmod extends View {
     const viewTabs = now.views.map((view, index) => {
       const key = keyOf(view);
       const isSelected = shown !== undefined && key === keyOf(shown);
-      return tab(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, now.views.length).tooltip(view.title), isSelected)
+      return tab(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, now.views.length).accessibility_label(view.title), isSelected)
         .on_click((_event, cx) => this.dispatch({ type: "select", key }, cx))
         .child(view.title);
     });
@@ -607,7 +603,7 @@ export default class Cmod extends View {
     el = isColumn ? el.flex_col() : el.flex_row();
     if (given.flexWrap === "wrap") el = el.flex_wrap();
     const children = [given.children].flat(Infinity);
-    const align = given.alignItems ?? (isColumn ? undefined : children.some((child) => FIELDS.has(child?.$cmodElement)) ? "flex-end" : "flex-start");
+    const align = given.alignItems ?? (isColumn ? undefined : children.some((child) => FIELDS.has(child?.$cmodElement)) ? "center" : "flex-start");
     el = { "flex-start": (e) => e.items_start(), center: (e) => e.items_center(), "flex-end": (e) => e.items_end(), stretch: (e) => e.items_stretch() }[align]?.(el) ?? el;
     el = { "flex-start": (e) => e.self_start(), center: (e) => e.self_center(), "flex-end": (e) => e.self_end() }[given.alignSelf]?.(el) ?? el;
     el = { "flex-start": (e) => e.justify_start(), center: (e) => e.justify_center(), "flex-end": (e) => e.justify_end(), "space-between": (e) => e.justify_between(), "space-around": (e) => e.justify_around(), "space-evenly": (e) => e.justify_evenly() }[given.justifyContent]?.(el) ?? el;
@@ -720,7 +716,7 @@ export default class Cmod extends View {
   }
 
   fieldLabel(label, t) {
-    return div().text_size(TYPE.caption).font_medium().text_color(t.muted).child(label);
+    return div().flex_none().text_color(t.muted).child(label);
   }
 
   input(given, drawn, _path, t) {
@@ -728,31 +724,45 @@ export default class Cmod extends View {
     const label = typeof given.label === "string" ? given.label : undefined;
     const name = label ?? (typeof given.placeholder === "string" ? given.placeholder : given.key);
     const rows = field?.rows ?? 1;
-    return v_flex().min_w(180).max_w_full().gap(SPACE_PX / 2)
+    if (!field) return div().text_color(t.muted).child(typeof given.value === "string" ? given.value : "");
+    return h_flex().id(`${drawn.key}:field:${given.key}`).flex_1().min_w(160).max_w(TEXT_FIELD_MAX_PX).gap(SPACE_PX).px(SPACE_PX * 1.25).rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_text()
+      .when(rows > 1, (el) => el.items_start().py(SPACE_PX * 0.75).min_h(rows * ROW_PX + SPACE_PX * 2)).when(rows === 1, (el) => el.items_center().h(CONTROL_PX))
       .when(label !== undefined, (el) => el.child(this.fieldLabel(label ?? "", t)))
-      .child(field
-        ? div().id(`${drawn.key}:field:${given.key}`).min_h(rows > 1 ? rows * ROW_PX + SPACE_PX * 2 : FIELD_PX).px(SPACE_PX * 1.25).py(SPACE_PX / 2).flex().items_center().rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_text()
-          .child((rows > 1 ? Textarea : Input).new(field.state).accessibility_label(name).size_full())
-        : div().text_color(t.muted).child(typeof given.value === "string" ? given.value : ""));
+      .child((rows > 1 ? Textarea : Input).new(field.state).accessibility_label(name).flex_1().min_w(0));
   }
 
   select(given, drawn, _path, t) {
     const handler = handlerOf(given.onSelect);
     const options = Array.isArray(given.options) ? given.options.filter((option) => typeof option?.value === "string") : [];
     const label = typeof given.label === "string" ? given.label : given.key;
-    return v_flex().min_w(0).gap(SPACE_PX / 2)
-      .when(typeof given.label === "string", (el) => el.child(this.fieldLabel(given.label, t)))
-      .child(h_flex().id(`${drawn.key}:select:${given.key}`).role("radio_group").accessibility_label(label).flex_wrap().gap(2).p(2).rounded(RADIUS.control + 2).bg(t.raised).border_1().border_color(t.border).children(
-        options.map((option, index) => {
-          const isSelected = option.value === given.value;
-          const shown = typeof option.label === "string" ? option.label : option.value;
-          return Button.new(`${drawn.key}:${given.key}:${option.value}`).role("radio_button").selected(isSelected).set_position(index + 1, options.length).accessibility_label(shown)
-            .h(CONTROL_PX - 6).px(SPACE_PX * 1.25).flex().items_center().rounded(RADIUS.control - 2).border_1().border_color(isSelected ? t.border : "#00000000").cursor_pointer()
-            .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.bg(t.background).font_medium()).hover((el) => el.text_color(t.foreground)).focus((el) => el.border_color(t.accent))
-            .on_click((_event, cx) => this.press(drawn, handler, { key: given.key, value: option.value }, cx))
-            .child(shown);
-        }),
-      ));
+    const id = `${drawn.key}:select:${given.key}`;
+    const isOpen = this.openMenu === id;
+    const chosen = options.find((option) => option.value === given.value);
+    const shownOf = (option) => (typeof option.label === "string" ? option.label : option.value);
+    const trigger = div().id(`${id}:trigger`).role("button").accessibility_label(`${label}: ${chosen === undefined ? "none" : shownOf(chosen)}`)
+      .flex().flex_none().items_center().gap(SPACE_PX * 0.75).h(CONTROL_PX).px(SPACE_PX * 1.25).max_w_full().rounded(RADIUS.control).border_1().border_color(t.border).cursor_pointer()
+      .bg(isOpen ? t.hover : t.raised).hover((el) => el.bg(t.hover))
+      .when(typeof given.label === "string", (el) => el.child(div().flex_none().text_color(t.muted).child(given.label)))
+      .child(div().min_w(0).truncate().child(chosen === undefined ? "" : shownOf(chosen)))
+      .child(div().flex_none().text_size(TYPE.caption).text_color(t.dim).child("▾"));
+    const menu = v_flex().id(`${id}:menu`).role("menu").accessibility_label(label).min_w(MENU_MIN_PX).p(SPACE_PX / 2).gap(1).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover).shadow_lg().children(
+      options.map((option) => {
+        const isSelected = option.value === given.value;
+        return Button.new(`${id}:${option.value}`).role("menu_item_radio").selected(isSelected).accessibility_label(shownOf(option))
+          .h(CONTROL_PX).px(SPACE_PX).flex().items_center().gap(SPACE_PX).rounded(RADIUS.chip).cursor_pointer().text_color(t.foreground).hover((el) => el.bg(t.hover))
+          .on_click((_event, cx) => {
+            this.openMenu = null;
+            this.press(drawn, handler, { key: given.key, value: option.value }, cx);
+            cx.notify();
+          })
+          .child(div().flex_none().w(12).text_color(t.accent).child(isSelected ? "✓" : ""))
+          .child(div().min_w(0).truncate().child(shownOf(option)));
+      }),
+    );
+    return Popover.new(id).open(isOpen).on_open_change((open, cx) => {
+      this.openMenu = open ? id : null;
+      cx.notify();
+    }).trigger(trigger).content(menu);
   }
 
   picture(given, drawn, path, t) {
@@ -803,9 +813,11 @@ export default class Cmod extends View {
 
   panel(given, drawn, path, t) {
     const title = typeof given.title === "string" ? given.title : "";
-    return v_flex().flex_grow(1).min_w(0).gap(SPACE_PX)
-      .child(div().px(2).text_size(TYPE.caption).font_semibold().text_color(t.muted).truncate().role("heading").accessibility_label(title).child(title))
-      .child(v_flex().min_w(0).gap(SPACE_PX).p(INSET_PX).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.surface ?? t.background).children(this.nodes(given.children, drawn, `${path}.children`, t)));
+    const body = this.nodes(given.children, drawn, `${path}.children`, t);
+    if (path === drawn.key) return v_flex().flex_grow(1).min_w(0).gap(INSET_PX).role("region").accessibility_label(title).children(body);
+    return v_flex().flex_grow(1).min_w(0).gap(SPACE_PX).role("region").accessibility_label(title)
+      .child(div().text_size(TYPE.caption).font_medium().text_color(t.muted).truncate().role("heading").accessibility_label(title).child(title))
+      .child(v_flex().min_w(0).gap(SPACE_PX).children(body));
   }
 
   toggle(given, drawn, _path, t) {
@@ -860,27 +872,46 @@ export default class Cmod extends View {
   }
 
   list(given, drawn, path, t) {
-    return v_flex().min_w(0).gap(2).role("list").accessibility_label(typeof given.label === "string" ? given.label : "").children(this.nodes(given.children, drawn, `${path}.children`, t));
+    return v_flex().min_w(0).gap(1).role("list").accessibility_label(typeof given.label === "string" ? given.label : "").children(this.nodes(given.children, drawn, `${path}.children`, t));
   }
 
-  listItem(given, drawn, _path, t) {
+  listItem(given, drawn, path, t) {
     const label = typeof given.label === "string" ? given.label : "";
+    const key = given.key ?? label;
     const isSelected = given.isSelected === true;
     const handler = handlerOf(given.onPress);
-    const dot = given.tone === undefined ? null : given.tone === "off" ? div().flex_none().w(8).h(8).rounded(4).border_1().border_color(t.muted) : div().flex_none().w(8).h(8).rounded(4).bg(toneOf(given.tone, t));
-    const description = typeof given.description === "string" ? div().flex_none().text_color(t.muted).child(given.description) : null;
-    const row = (el) => el.h(CONTROL_PX).px(SPACE_PX * 1.25).flex().items_center().gap(SPACE_PX).rounded(RADIUS.control).min_w(0)
-      .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (e) => e.bg(t.selected).font_medium())
-      .when(dot !== null, (e) => e.child(dot)).child(div().flex_1().min_w(0).truncate().child(label)).when(description !== null, (e) => e.child(description));
-    if (handler === undefined) return row(div().role("list_item").accessibility_label(label).aria_selected(isSelected));
-    return row(Button.new(`${drawn.key}:${given.key ?? label}`).selected(isSelected).accessibility_label(label).cursor_pointer().hover((el) => el.bg(t.hover).text_color(t.foreground)))
-      .on_click((_event, cx) => this.press(drawn, handler, { key: given.key ?? label }, cx));
+    const toggle = handlerOf(given.onToggle);
+    const isTree = typeof given.depth === "number";
+    const dot = given.tone === undefined ? null : given.tone === "off" ? div().flex_none().w(8).h(8).rounded(4).border_1().border_color(t.dim) : div().flex_none().w(8).h(8).rounded(4).bg(toneOf(given.tone, t));
+    const opener = !isTree
+      ? null
+      : typeof given.isOpen === "boolean" && toggle !== undefined
+        ? Button.new(`${drawn.key}:${key}:toggle`).role("disclosure_triangle").accessibility_label(given.isOpen ? `Close ${label}` : `Open ${label}`).flex_none().w(INDENT_PX).h(ITEM_PX).flex().items_center().justify_center().rounded(RADIUS.chip).cursor_pointer().text_size(TYPE.caption).text_color(t.dim).hover((el) => el.text_color(t.foreground))
+          .on_click((_event, cx) => this.press(drawn, toggle, { key: `${key}:toggle` }, cx)).child(given.isOpen ? "▾" : "▸")
+        : div().flex_none().w(INDENT_PX);
+    const content = (el) => el.flex_1().h(ITEM_PX).px(SPACE_PX).flex().items_center().gap(SPACE_PX).rounded(RADIUS.control).min_w(0).text_color(t.foreground)
+      .when(isSelected, (e) => e.bg(t.selected).font_medium())
+      .when(dot !== null, (e) => e.child(dot))
+      .when(typeof given.leading === "string", (e) => e.child(div().flex_none().text_color(t.muted).child(given.leading ?? "")))
+      .child(div().flex_1().min_w(0).truncate().child(label))
+      .when(typeof given.description === "string", (e) => e.child(div().flex_none().text_color(t.muted).child(given.description ?? "")))
+      .when(given.trailing !== undefined, (e) => e.child(h_flex().flex_none().gap(SPACE_PX / 2).items_center().children(this.nodes(given.trailing, drawn, `${path}.trailing`, t, false))));
+    const row = handler === undefined
+      ? content(div())
+      : content(Button.new(`${drawn.key}:${key}`).selected(isSelected).accessibility_label(label).cursor_pointer().hover((el) => el.bg(isSelected ? t.selected : t.hover)))
+        .on_click((_event, cx) => this.press(drawn, handler, { key }, cx));
+    return h_flex().min_w(0).items_center().role(isTree ? "tree_item" : "list_item").accessibility_label(label).aria_selected(isSelected)
+      .when(isTree, (el) => el.aria_level((given.depth ?? 0) + 1).pl((given.depth ?? 0) * INDENT_PX))
+      .when(opener !== null, (el) => el.child(opener))
+      .child(row);
   }
 
   badge(given, drawn, path, t) {
+    const isToned = TONES[given.tone] !== undefined;
     const color = toneOf(given.tone, t);
     const words = textOf(given.children);
-    return div().flex_none().px(SPACE_PX * 0.75).py(1).rounded(RADIUS.chip).text_size(TYPE.caption).font_medium().text_color(given.tone === "neutral" || TONES[given.tone] === undefined ? t.muted : color).bg(t.raised)
+    return div().flex_none().px(SPACE_PX * 0.75).h(20).flex().items_center().rounded(RADIUS.chip).text_size(TYPE.caption).font_medium()
+      .text_color(isToned ? color : t.muted).bg((isToned ? tint(color, "26") : undefined) ?? t.raised)
       .role("label").accessibility_label(words ?? "").children(words === undefined ? this.nodes(given.children, drawn, `${path}.children`, t, false) : [words]);
   }
 
@@ -888,9 +919,9 @@ export default class Cmod extends View {
     const color = toneOf(given.tone, t);
     const title = typeof given.title === "string" ? given.title : undefined;
     const words = textOf(given.children);
-    return v_flex().min_w(0).gap(SPACE_PX).p(INSET_PX).rounded(RADIUS.control).border_1().border_color(color).bg(t.raised).role("status").accessibility_label(title ?? words ?? "")
+    return v_flex().min_w(0).gap(SPACE_PX).px(INSET_PX).py(SPACE_PX * 1.25).rounded(RADIUS.control).bg(tint(color, "1f") ?? t.raised).role("status").accessibility_label(title ?? words ?? "")
       .when(title !== undefined, (el) => el.child(div().font_semibold().text_color(color).child(title ?? "")))
-      .when(given.children !== undefined, (el) => el.child(words === undefined ? v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)) : div().text_color(title === undefined ? color : t.foreground).child(words)))
+      .when(given.children !== undefined, (el) => el.child(words === undefined ? v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)) : div().text_color(t.foreground).child(words)))
       .when(given.actions !== undefined, (el) => el.child(h_flex().flex_wrap().gap(SPACE_PX).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false))));
   }
 }

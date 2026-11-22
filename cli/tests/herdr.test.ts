@@ -132,6 +132,8 @@ type Asked = readonly [string, unknown]
 
 type Answer = (method: string, params: readonly unknown[]) => unknown
 
+const unanswered = Symbol('a call cmod serve never answers')
+
 type Herdr = {
   readonly view: { init(props: object, cx: unknown): void; render(cx: unknown): Element; close(): Promise<void> }
   readonly cx: unknown
@@ -145,6 +147,7 @@ type Herdr = {
   readonly released: unknown[]
   settled(): Promise<void>
   endFrame(): void
+  drop(): void
   render(): Element
 }
 
@@ -165,6 +168,7 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
   const afterFrame: (() => void)[] = []
   const inbox: string[] = []
   let wake: () => void = () => undefined
+  let isDropped = false
   let focusedTerminal = 't1'
   let shownPanes: { readonly pane: string; readonly mod: string; readonly tab: string }[] = []
   const deliver = (message: object) => {
@@ -178,13 +182,18 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
       if (id === undefined) return
       if (method === '$/listen') return deliver({ jsonrpc: '2.0', id, result: null })
       try {
-        deliver({ jsonrpc: '2.0', id, result: answer(method, params) ?? null })
+        const result = answer(method, params)
+        if (result === unanswered) return
+        deliver({ jsonrpc: '2.0', id, result: result ?? null })
       } catch (error) {
         deliver({ jsonrpc: '2.0', id, error: { code: -32098, message: (error as Error).message } })
       }
     },
     read: async () => {
-      while (inbox.length === 0) await new Promise<void>((resolve) => (wake = resolve))
+      while (inbox.length === 0) {
+        if (isDropped) throw new Error('WebSocket connection is closed')
+        await new Promise<void>((resolve) => (wake = resolve))
+      }
       return inbox.shift() as string
     },
     close: async () => undefined,
@@ -202,6 +211,7 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
     Progress: { new: element('Progress') },
     ProgressTrack: { new: element('ProgressTrack') },
     ProgressIndicator: { new: element('ProgressIndicator') },
+    Popover: { new: element('Popover') },
     TextView: { markdown: element('TextView.markdown') },
     InputState: { new: (options: { readonly value?: string }) => retained(options, released) },
     Input: { new: element('Input') },
@@ -209,7 +219,13 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
     Textarea: { new: element('Textarea') },
     EditorState: { new: (options: { readonly value?: string }) => retained(options, released) },
     Editor: { new: element('Editor') },
-    WebSocket: { connect: async (url: string) => (isServing && url === 'ws://127.0.0.1:4100/ui?token=secret' ? socket : Promise.reject(new Error(`refused ${url}`))) },
+    WebSocket: {
+      connect: async (url: string) => {
+        if (!isServing || url !== 'ws://127.0.0.1:4100/ui?token=secret') throw new Error(`refused ${url}`)
+        isDropped = false
+        return socket
+      },
+    },
     exec: async () => ({ code: 0, stdout: `/home/.claude\n${store}`, stderr: '' }),
     checking: () => false,
     terminals: () => [
@@ -280,12 +296,18 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
       for (const handler of afterFrame.splice(0)) handler()
     },
     settled,
+    drop: () => {
+      isDropped = true
+      wake()
+    },
     render: () => view.render(cx),
   }
 }
 
+const slotsOf = (each: Element) => ['trigger', 'content'].flatMap((slot) => (each.calls[slot] ?? []).filter((node): node is Element => node instanceof Element))
+
 function found(root: Element, isWanted: (each: Element) => boolean): Element[] {
-  return [...(isWanted(root) ? [root] : []), ...root.nodes.filter((node): node is Element => node instanceof Element).flatMap((node) => found(node, isWanted))]
+  return [...(isWanted(root) ? [root] : []), ...[...slotsOf(root), ...root.nodes].filter((node): node is Element => node instanceof Element).flatMap((node) => found(node, isWanted))]
 }
 
 function clicked(root: Element, isWanted: (each: Element) => boolean, cx: unknown): void {
@@ -348,10 +370,12 @@ test("cmod's Herdr mod reaches cmod serve over the one WebSocket serve.json name
   expect(calledWith(herdr, 'cmod/UI.draw')).toEqual([['worker', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'herdr' }]])
   expect(labelled(root)).toEqual([
     ['Tabs', 'Views'],
+    ['Tab', 'Runs'],
     ['div', 'Runs today: 3'],
     ['Button', 'Run again'],
     ['Input', 'Note'],
-    ['h_flex', 'Speed'],
+    ['div', 'Speed: Fast'],
+    ['v_flex', 'Speed'],
     ['Button', 'Fast'],
     ['Button', 'Slow'],
     ['div', 'Coverage chart'],
@@ -370,7 +394,7 @@ const kit = {
   props: {
     flexDirection: 'column',
     children: [
-      { $cmodElement: 'Panel', props: { title: 'Mods', children: { $cmodElement: 'List', props: { label: 'Mods', children: [{ $cmodElement: 'ListItem', props: { key: 'demo/kit:mod:cmod', label: 'cmod', tone: 'neutral', isSelected: true } }, { $cmodElement: 'ListItem', props: { key: 'demo/kit:mod:old', label: 'old', tone: 'off', onPress: { $cmodHandler: 1 } } }] } } } },
+      { $cmodElement: 'Panel', props: { title: 'Mods', children: { $cmodElement: 'List', props: { label: 'Mods', children: [{ $cmodElement: 'ListItem', props: { key: 'demo/kit:mod:cmod', label: 'cmod', tone: 'neutral', isSelected: true } }, { $cmodElement: 'ListItem', props: { key: 'demo/kit:mod:old', label: 'old', tone: 'off', onPress: { $cmodHandler: 1 } } }, { $cmodElement: 'ListItem', props: { key: 'demo/kit:run:1', label: 'bun test', leading: 'Bash', depth: 1, isOpen: false, onToggle: { $cmodHandler: 7 }, trailing: { $cmodElement: 'Badge', props: { tone: 'critical', children: 'failed' } } } }] } } } },
       { $cmodElement: 'Tabs', props: { key: 'demo/kit:', tabs: [{ key: 'options', label: 'Options', isSelected: true, onSelect: { $cmodHandler: 2 } }, { key: 'log', label: 'Log', isSelected: false, onSelect: { $cmodHandler: 3 } }], children: { $cmodElement: 'Text', props: { children: 'body' } } } },
       { $cmodElement: 'Toggle', props: { key: 'demo/kit:', label: 'Show errors', checked: true, onToggle: { $cmodHandler: 4 } } },
       { $cmodElement: 'Progress', props: { value: 40, width: 10, label: 'Context used' } },
@@ -382,13 +406,19 @@ const kit = {
   },
 }
 
-test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel as a heading over a card, a List of rows, Tabs, a Switch, a progress bar, Pagination, a Badge, a Banner, and a tooltip", async () => {
+test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel as a titled section with no card, a List of rows and tree rows, Tabs, a Switch, a progress bar, Pagination, a tinted Badge and Banner, and a tooltip", async () => {
   const herdr = await herdrWith({}, listing(() => kit, { views: [{ mod: 'demo', id: 'kit', title: 'Kit' }], pages: [] }))
   const root = herdr.render()
   const drawn = found(root, () => true)
 
   expect(drawn.filter((each) => each.calls['role']?.[0] === 'heading').map((each) => each.nodes)).toEqual([['Mods']])
-  expect(drawn.find((each) => each.kind === 'v_flex' && each.calls['rounded']?.[0] === 10)?.calls['border_color']).toEqual(['#border'])
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'region').map((each) => [each.calls['accessibility_label']?.[0], each.calls['border_1']])).toEqual([['Mods', undefined]])
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'tree_item').map((each) => [each.calls['accessibility_label']?.[0], each.calls['aria_level']?.[0], each.calls['pl']?.[0]])).toEqual([['bun test', 2, 16]])
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'disclosure_triangle').map((each) => [each.calls['accessibility_label']?.[0], each.nodes])).toEqual([['Open bun test', ['▸']]])
+  expect(drawn.filter((each) => each.nodes.includes('Bash') || each.nodes.includes('failed')).map((each) => [each.nodes[0], each.calls['text_color']?.[0]])).toEqual([
+    ['Bash', '#muted'],
+    ['failed', '#blocked'],
+  ])
   expect(drawn.filter((each) => each.calls['role']?.[0] === 'list').map((each) => each.calls['accessibility_label'])).toEqual([['Mods']])
   expect(drawn.filter((each) => each.kind === 'Tab' && each.args[0] !== 'cmod-tab-demo/kit').map((each) => [each.args[0], each.calls['selected']?.[0]])).toEqual([
     ['demo/kit:demo/kit:tab:options', true],
@@ -400,7 +430,7 @@ test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel
     ['Previous', true],
     ['Next', false],
   ])
-  expect(drawn.find((each) => each.calls['role']?.[0] === 'status')?.calls['border_color']).toEqual(['#ansi3'])
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'status').map((each) => [each.calls['border_1'], each.calls['bg']?.[0]])).toEqual([[undefined, '#raised']])
   expect(drawn.find((each) => each.calls['tooltip']?.[0] === 'Files Claude read')?.kind).toBe('h_flex')
   expect(drawn.some((each) => each.calls['absolute'] !== undefined)).toBe(false)
 })
@@ -411,6 +441,7 @@ test("a press on a host component in cmod's Herdr mod runs its own handler throu
 
   clicked(root, (each) => each.kind === 'Tab' && each.args[0] === 'demo/kit:demo/kit:tab:log', herdr.cx)
   clicked(root, (each) => each.kind === 'Button' && each.calls['accessibility_label']?.[0] === 'old', herdr.cx)
+  clicked(root, (each) => each.kind === 'Button' && each.calls['accessibility_label']?.[0] === 'Open bun test', herdr.cx)
   const turn = found(root, (each) => each.kind === 'Switch')[0]?.calls['on_change']?.[0]
   if (typeof turn !== 'function') throw new Error('The drawing holds no Switch the test can turn.')
   turn(false, herdr.cx)
@@ -419,6 +450,7 @@ test("a press on a host component in cmod's Herdr mod runs its own handler throu
   expect(calledWith(herdr, 'cmod/UI.press')).toEqual([
     ['worker', 3, { surface: 'herdr', key: 'demo/kit:tab:log' }],
     ['worker', 1, { surface: 'herdr', key: 'demo/kit:mod:old' }],
+    ['worker', 7, { surface: 'herdr', key: 'demo/kit:run:1:toggle' }],
     ['worker', 4, { surface: 'herdr', key: 'demo/kit:toggle:Show errors' }],
   ])
 })
@@ -489,7 +521,7 @@ test("the dock of cmod's Herdr mod keeps showing the last Claude Code session's 
   expect(calledWith(herdr, 'cmod/UI.views')).toEqual([['worker'], ['other'], ['worker']])
 })
 
-test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing characters or runs of spaces, in the terminal font, and lines a row's buttons up with its field", async () => {
+test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing characters or runs of spaces, in the terminal font, and centers a row's buttons on its field", async () => {
   const usageView = {
     $cmodElement: 'Box',
     props: {
@@ -502,11 +534,11 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
   }
   const herdr = await herdrWith({}, listing(() => usageView, { views: [{ mod: 'demo', id: 'usage', title: 'Usage' }], pages: [] }))
   const drawn = found(herdr.render(), () => true)
-  const row = drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.kind === 'v_flex' && node.calls['min_w']?.[0] === 180))
+  const row = drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.calls['id']?.[0] === 'demo/usage:field:demo/usage:find'))
 
   expect(drawn.find((each) => each.nodes.includes('███'))?.calls['font_family']).toEqual(['JetBrains Mono'])
   expect(drawn.find((each) => each.nodes.includes('jarvis          '))?.calls['font_family']).toEqual(['JetBrains Mono'])
-  expect([row?.calls['items_end'], row?.calls['gap_y']]).toEqual([[], [8]])
+  expect([row?.calls['items_center'], row?.calls['gap_y']]).toEqual([[], [8]])
 })
 
 test("cmod's Herdr mod centers a view that draws one sentence, in the muted color", async () => {
@@ -744,4 +776,27 @@ test("a Close of the view the dock of cmod's Herdr mod shows goes back to the fi
     ['cmod-tab-demo/runs', false],
   ])
   expect(herdr.commands).toEqual([])
+})
+
+test("a dropped connection to cmod serve never shows as the view's error: the view keeps its drawing, the bar says it reconnects, and the view draws again once it does", async () => {
+  let isHeld = false
+  const boxed = listing((params) => ({ $cmodElement: 'Box', props: { children: { $cmodElement: 'Text', props: { children: `${params[0]}/${partOf(params).mod}/${partOf(params).id}` } } } }))
+  const herdr = await herdrWith({}, (method, params) => (isHeld && method === 'cmod/UI.draw' ? unanswered : boxed(method, params)))
+  isHeld = true
+  herdr.tell('Redraw', { session: 'worker', mod: 'cmod', id: 'dashboard' })
+  await herdr.settled()
+
+  herdr.drop()
+  await herdr.settled()
+  const dropped = herdr.render()
+  isHeld = false
+  herdr.endFrame()
+  await herdr.settled()
+  const back = herdr.render()
+
+  const alerts = (root: Element) => found(root, (each) => each.calls['role']?.[0] === 'alert').map((each) => each.nodes)
+  expect(alerts(dropped)).toEqual([['Reconnecting to cmod serve: WebSocket connection is closed']])
+  expect(found(dropped, (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
+  expect(alerts(back)).toEqual([])
+  expect(found(back, (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
 })

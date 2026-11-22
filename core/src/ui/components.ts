@@ -128,15 +128,29 @@ export const List = hostComponent(
   ({ children }: { readonly label: string; readonly children?: JSX.Children }) => Box({ flexDirection: 'column', children }),
 )
 
-type ListItemProps = { readonly key: string; readonly label: string; readonly description?: string; readonly tone?: Tone | 'off'; readonly isSelected?: boolean; readonly onPress?: Pressed }
+type ListItemShared = { readonly key: string; readonly label: string; readonly description?: string; readonly leading?: string; readonly trailing?: JSX.Children; readonly tone?: Tone | 'off'; readonly isSelected?: boolean; readonly depth?: number; readonly isOpen?: boolean; readonly onPress?: Pressed }
+
+type ListItemProps = ListItemShared & { readonly onOpenChange?: (isOpen: boolean) => void }
+
+type ListItemData = ListItemShared & { readonly onToggle?: Pressed }
 
 const statusOf = (tone: ListItemProps['tone']) => (tone === undefined ? [] : [tone === 'off' ? Text({ dimColor: true, children: '○ ' }) : Text({ ...textOf(tone), children: '● ' })])
 
+function treeRow({ key, label, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }: ListItemData): JSX.Element {
+  const opener = isOpen !== undefined && onToggle !== undefined ? Button({ plain: true, key: `${key}:toggle`, onPress: onToggle, children: Text({ dimColor: true, children: isOpen ? '▾' : '▸' }) }) : Text({ children: ' ' })
+  const shown = Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: [...statusOf(tone), ...(leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })]), label] })
+  const row = Box({ columnGap: 1, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] })
+  if (trailing === undefined) return Box({ paddingLeft: depth * 2, children: row })
+  return Box({ width: '100%', paddingLeft: depth * 2, columnGap: 1, justifyContent: 'space-between', children: [row, Box({ flexShrink: 0, children: trailing })] })
+}
+
 export const ListItem = hostComponent(
   'ListItem',
-  (props: ListItemProps) => props,
-  ({ key, label, description, tone, isSelected, onPress }: ListItemProps) => {
-    const shown = [...statusOf(tone), label, ...(description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })])]
+  ({ onOpenChange, ...props }: ListItemProps): ListItemData => ({ ...props, ...(onOpenChange === undefined || props.isOpen === undefined ? {} : { onToggle: () => onOpenChange(props.isOpen !== true) }) }),
+  (props: ListItemData) => {
+    const { key, label, description, leading, trailing, tone, isSelected, depth, onPress } = props
+    if (depth !== undefined) return treeRow(props)
+    const shown = [...statusOf(tone), ...(leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })]), label, ...(description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })]), ...(trailing === undefined ? [] : [' ', trailing])]
     if (isSelected === true || onPress === undefined) return Box({ ...(isSelected === true ? { backgroundColor: 'userMessageBackground' } : {}), paddingX: 1, children: Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: shown }) })
     return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) })
   },

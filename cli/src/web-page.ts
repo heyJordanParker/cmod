@@ -332,7 +332,14 @@ textarea.input{resize:vertical}
 .progress::-webkit-progress-bar{background:var(--subtle);border-radius:999px}.progress::-webkit-progress-value{background:var(--claude);border-radius:999px}.progress::-moz-progress-bar{background:var(--claude);border-radius:999px}
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .list-item{font:inherit;color:var(--inactive);background:none;border:0;border-radius:4px;padding:0 1ch;display:flex;gap:1ch;align-items:center;width:100%;text-align:left;cursor:pointer}
-li.list-item{cursor:default}
+span.list-item{cursor:default}
+.list-row{display:flex;align-items:center;min-width:0}
+.tree-row{padding-left:calc(var(--depth,0) * 2ch)}
+.opener{flex:0 0 2ch;align-self:stretch;font:inherit;color:var(--inactive);background:none;border:0;padding:0;cursor:pointer}
+button.opener::before{content:"▸"}button.opener[aria-expanded="true"]::before{content:"▾"}
+.opener:hover,.opener:focus-visible{color:var(--text);outline:none}
+.leading{color:var(--inactive);font-weight:400;flex:0 0 auto}
+.trailing{margin-left:auto;flex:0 0 auto;padding-left:1ch}
 .list-item.selected{background:var(--userMessageBackground);color:var(--text);font-weight:700}
 button.list-item:hover,button.list-item:focus-visible{background:var(--userMessageBackground);color:var(--text);outline:none}
 .item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

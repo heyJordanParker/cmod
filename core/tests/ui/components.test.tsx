@@ -235,6 +235,40 @@ test('List, ListItem, Badge, and Banner draw a list of rows, a toned word, and a
   expect(tested.state.session.picked).toBe('demo')
 })
 
+test('a ListItem given a depth draws a row of a tree: indented, with its ▸ or ▾ that opens it, its leading text, and its trailing badge at the right edge', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      state: { session: { isOpen: false, pressed: '' } },
+      async setup(mod) {
+        await mod.panes
+          .add({
+            id: 'runs',
+            title: 'Runs',
+            render: ({ state: { session } }) => (
+              <Box flexDirection="column" width={40}>
+                <List label="Runs">
+                  <ListItem key="run:1" leading="12:05" label="fix the login bug" depth={0} isOpen={session.isOpen} onOpenChange={(isOpen) => void (session.isOpen = isOpen)} trailing={<Badge tone="critical">1 failed</Badge>} onPress={() => void (session.pressed = 'run:1')} />
+                  {session.isOpen ? <ListItem key="run:2" leading="Bash" label="bun test" depth={1} /> : null}
+                </List>
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+
+  const closed = await tested.shown.pane.lines()
+  await tested.shown.pane.press('run:1:toggle')
+  const opened = await tested.shown.pane.lines()
+  await tested.shown.pane.press('run:1')
+
+  expect(closed).toEqual(['▸ 12:05 fix the login bug       1 failed'])
+  expect(opened).toEqual(['▾ 12:05 fix the login bug       1 failed', '    Bash bun test'])
+  expect(tested.state.session.pressed).toBe('run:1')
+})
+
 test('drawWith lowers a host component with the table it draws with', () => {
   const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
 

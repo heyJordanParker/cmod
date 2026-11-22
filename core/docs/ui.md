@@ -87,7 +87,7 @@ Tabs(props: { tabs: readonly { key: string; label: string; hotkey?: string }[]; 
 Split(props: { children: readonly JSX.Element[] })
 Panel(props: { title: string; children? })
 List(props: { label: string; children? })
-ListItem(props: { key: string; label: string; description?: string; tone?: Tone | 'off'; isSelected?: boolean; onPress?(): void })
+ListItem(props: { key: string; label: string; leading?: string; description?: string; trailing?; tone?: Tone | 'off'; isSelected?: boolean; onPress?(): void; depth?: number; isOpen?: boolean; onOpenChange?(isOpen: boolean): void })
 Badge(props: { tone?: Tone; children })
 Banner(props: { tone?: Tone; title?: string; children?; actions? })
 Toggle(props: { label: string; checked: boolean; onChange(checked: boolean): void })
@@ -100,7 +100,7 @@ Progress(props: { value: number; width?: number; label?: string })
 
 - `Tabs` draws a row of tabs over `children`. The selected tab's label is bold and underlined. Each other tab is a `Button`, so a part that holds the keyboard switches tabs by Tab and Enter or a click. A tab given a `hotkey`, one digit or one lowercase letter, draws it before its label, as `o: Open`, and that key switches to it. Leave the Sidebar's digits to the Sidebar: inside a page, a tab's hotkey that matches one replaces it.
 - `Split` lays its children side by side in equal widths. `Panel` frames one part of a page or pane in a rounded border with its bold title in the top border, as `╭─ Changed files ──╮`, grows to fill the room its parent gives it, and is never narrower than its title.
-- `List` holds `ListItem` rows, and `label` names the list for a screen reader. A `ListItem` draws `● label` with the dot in its `tone`'s color, `○` for `'off'`, and `description` dim after the label. The selected row draws on the highlight background in bold, and any other row with `onPress` is a quiet `Button` keyed `key`.
+- `List` holds `ListItem` rows, and `label` names the list for a screen reader. A `ListItem` draws `● leading label` with the dot in its `tone`'s color, `○` for `'off'`, `leading` and `description` dim before and after the label, and `trailing`, such as a `Badge`, last. The selected row draws on the highlight background in bold, and any other row with `onPress` is a quiet `Button` keyed `key`. A row given a `depth` is a row of a tree: it is indented two columns a level, keeps a column for `▸`, and puts `trailing` at the right edge. Give it `isOpen` and `onOpenChange` too, and that column is a `▸` or `▾` Button keyed `<key>:toggle`.
 - `Badge` draws a short status, such as `warning`, in its `tone`'s color. `Banner` draws a notice that needs the person: its `title` and text in its `tone`'s color, and its `actions`, the buttons, in a row under them.
 - `Toggle` draws `[x] label` or `[ ] label` as a `Button`. Enter or a click calls `onChange` with the other value.
 - `Tooltip` shows `text` in an inverted card above its children while the pointer rests on them. The card opens upward, because Claude Code paints a card over the rows drawn before it and under the rows drawn after it. It has no border, so a one-line card needs one free row above its children. The pointer alone opens it, so put nothing only a tooltip says.
@@ -108,7 +108,7 @@ Progress(props: { value: number; width?: number; label?: string })
 - `Dialog` lays out a dialog's title, body, and `actions`, the buttons in a row. Put the safe action first, as the `primary` Button with `autoFocus`.
 - `Pagination` draws `p: Previous  2 of 5  n: Next`. `p` and `n` are its hotkeys, and an end it cannot pass is dim text.
 - `Progress` fills `value` percent of `width` columns, 24 unless given, and `label` names the bar for a screen reader. Put the count beside it in a `Text`, or pass it as a loading toast's `description`.
-- `Tabs`, `Toggle`, `Help`, and `Pagination` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
+- `Tabs`, `Toggle`, `Help`, `Pagination`, and a tree `ListItem` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
 
 ## Views and pages
 
@@ -254,11 +254,11 @@ Each dock and page tab tells `show` the view or page it draws, under a client na
 Each element draws as Herdr's own, and each `label`, or a `Text`'s text, is its accessible name:
 
 - `Box` draws a flex row or column with its gap, padding, margin, sizes, and background, a column as 8 pixels across, a row as 20 pixels down, and a space step as 8 pixels. A `borderStyle` draws a card.
-- Each component of `ui/components.js` draws as Herdr's control of the same job: `Tabs` as its tabs, `Panel` as a heading above a card, `List` and `ListItem` as a list with a status dot, `Toggle` as its switch, `Progress` as its progress bar, `Pagination` with a disabled end, `Badge` and `Banner` in their tone's color, `Tooltip` and `Help` as its tooltip, and `Split` as equal columns.
+- Each component of `ui/components.js` draws as Herdr's control of the same job: `Tabs` as its tabs, `Panel` as a section under its title, with no card, and as the bare view when it is the view's outermost element, since the tab names it, `List` and `ListItem` as a list of rows with a status dot and, given a `depth`, as an indented tree row with its disclosure button, `Toggle` as its switch, `Progress` as its progress bar, `Pagination` with a disabled end, `Badge` and `Banner` tinted in their tone's color, `Tooltip` and `Help` as its tooltip, and `Split` as equal columns.
 - `Text` draws its text with its color, weight, and style. A theme color such as `'success'` draws in the Herdr theme's color of the same meaning. A `Text` with a `backgroundColor` draws as a chip, and text that lays out in cells, with block or box-drawing characters or a run of spaces, keeps the terminal font so its columns line up.
 - `Button` draws Herdr's button: `variant: 'primary'` as its solid button, a `plain` and `dimColor` one as a quiet row of a list, and any other as an outlined one, with its `label` and its `hotkey`. A press runs its handler, and a `Button` with `href` opens an `http:` or `https:` page in the browser, and copies any other link.
-- `Input` draws a field, and `rows` above 1 a text area. Each change runs `onInput`, and Enter runs `onSubmit`.
-- `Select` draws its options as a segmented control, with the selected one marked.
+- `Input` draws a field with its `label` inside it, before the text, and `rows` above 1 a text area. Each change runs `onInput`, and Enter runs `onSubmit`.
+- `Select` draws a button with its `label` and the chosen option, which opens a menu of the options with the chosen one checked.
 - `Markdown` draws Herdr's Markdown text. A link it lists in `pressableLinks`, or any link without them, runs `onLinkPress`, and with no `onLinkPress` it opens as a `Button`'s `href` does.
 - `Code` draws a read-only code view with the language's colors.
 - `Image` and `Svg` draw the picture, which the mod writes under `mods/cmod/.drawn/` first, because Herdr draws only a picture in its home. An image from shared memory draws its `label`.

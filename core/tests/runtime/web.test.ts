@@ -151,6 +151,7 @@ test('every component of ui/components.js draws in the browser as its own HTML c
         Pagination({ page: 1, pages: 3, onPage: () => undefined }),
         Progress({ value: 50, width: 4, label: 'Context used' }),
         List({ label: 'Mods', children: [ListItem({ key: 'mod:demo', label: 'demo', tone: 'warning', isSelected: true }), ListItem({ key: 'mod:old', label: 'old', tone: 'off', onPress: () => undefined })] }),
+        List({ label: 'Runs', children: [ListItem({ key: 'run:1', leading: 'Bash', label: 'bun test', depth: 1, isOpen: false, onOpenChange: () => undefined, trailing: Badge({ tone: 'critical', children: 'failed' }), onPress: () => undefined })] }),
         Badge({ tone: 'warning', children: 'warning' }),
         Banner({ tone: 'critical', title: 'Off', children: 'Claude Code does not load it.' }),
       ],
@@ -168,10 +169,11 @@ test('every component of ui/components.js draws in the browser as its own HTML c
   expect(html).toContain('data-press="4" autofocus>Keep it</button>')
   expect(html).toContain('<nav class="pagination" aria-label="Pages"><button type="button" class="button" disabled>Previous</button><span class="t">1 of 3</span><button type="button" class="button" data-press="5" data-hotkey="n">Next</button></nav>')
   expect(html).toContain('<progress class="progress" max="100" value="50" aria-label="Context used" style="width:4ch"></progress>')
-  expect(html).toContain('<ul class="list" aria-label="Mods"><li class="list-item selected" aria-current="true"><span class="dot tone-warning" aria-hidden="true"></span><span class="item-label">demo</span></li><li><button type="button" class="list-item" data-key="mod:old" data-press="6"><span class="dot tone-off" aria-hidden="true"></span><span class="item-label">old</span></button></li></ul>')
+  expect(html).toContain('<ul class="list" aria-label="Mods"><li class="list-row" aria-current="true"><span class="list-item selected"><span class="dot tone-warning" aria-hidden="true"></span><span class="item-label">demo</span></span></li><li class="list-row"><button type="button" class="list-item" data-key="mod:old" data-press="6"><span class="dot tone-off" aria-hidden="true"></span><span class="item-label">old</span></button></li></ul>')
+  expect(html).toContain('<ul class="list" aria-label="Runs"><li class="list-row tree-row" style="--depth:1" aria-level="2"><button type="button" class="opener" aria-label="Open" aria-expanded="false" data-key="run:1:toggle" data-press="8"></button><button type="button" class="list-item" data-key="run:1" data-press="7"><span class="leading">Bash</span><span class="item-label">bun test</span><span class="trailing"><span class="badge tone-critical">failed</span></span></button></li></ul>')
   expect(html).toContain('<span class="badge tone-warning">warning</span>')
   expect(html).toContain('<div role="status" class="banner tone-critical"><strong class="banner-title">Off</strong><div class="banner-body">Claude Code does not load it.</div></div>')
-  expect(handlers).toHaveLength(7)
+  expect(handlers).toHaveLength(9)
 })
 
 test('a tone a mod names that is not one of the tones draws as neutral, so no text reaches a class', () => {

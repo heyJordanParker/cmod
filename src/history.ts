@@ -1,6 +1,7 @@
 import { AttachedFile, InstructionFile, Note, Prompt, Reply, Skill, ToolCall, ToolResult, messageOf, sessions, type Message, type Mod, type Session, type Task, type Turn } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
-import { Box, Button, Input, Select, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { Badge, List, ListItem } from '../node_modules/@cmodjs/core/ui/components.js'
+import { Box, Input, Select, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
 export type HistoryFilter = 'all' | 'prompts' | 'tools' | 'errors'
 
@@ -29,7 +30,7 @@ export const historySession: HistoryState['session'] = { history: { find: '', fi
 
 export const historyMemory: HistoryState['memory'] = { history: null, historyError: null }
 
-export type HistoryView = { readonly title: string; draw(columns: number): JSX.Element; refresh(): void }
+export type HistoryView = { readonly title: string; draw(): JSX.Element; refresh(): void }
 
 const filters: readonly HistoryFilter[] = ['all', 'prompts', 'tools', 'errors']
 
@@ -240,33 +241,24 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
       .map((entry) => ({ entry, depth: 0, isOpen: false }))
   }
 
-  const row = ({ entry, depth, isOpen }: Shown, columns: number): JSX.Element => {
+  const row = ({ entry, depth, isOpen }: Shown): JSX.Element => {
     const { tools, failures } = counted(entry)
     const counts = entry.kind === 'prompt' || entry.kind === 'task' ? [tools > 0 ? `${tools} ${tools === 1 ? 'tool' : 'tools'}` : '', failures > 0 ? `${failures} failed` : ''].filter((part) => part !== '').join(' · ') : ''
-    const status = entry.isRunning && entry.kind === 'task' ? 'running' : entry.isError ? 'failed' : counts
-    const hasChildren = entry.children.length > 0 && mod.state.session.history.layout === 'tasks' && mod.state.session.history.filter !== 'prompts'
-    const opener = hasChildren
-      ? Button({ plain: true, key: `history:toggle:${entry.key}`, onPress: () => toggle(entry.key), children: Text({ dimColor: true, children: isOpen ? '▾' : '▸' }) })
-      : Text({ children: ' ' })
-    return Box({
-      key: `history:row:${entry.key}`,
-      paddingLeft: depth * 2,
-      columnGap: 1,
-      width: columns,
-      children: [
-        opener,
-        Button({
-          plain: true,
-          key: `history:${entry.key}`,
-          onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null),
-          children: Text({ wrap: 'truncate-end', ...(entry.kind === 'prompt' ? { bold: true } : {}), children: [Text({ dimColor: entry.kind !== 'prompt', children: entry.name }), ` ${entry.text}`] }),
-        }),
-        ...(status === '' ? [] : [Box({ flexGrow: 1 }), Text({ ...(entry.isError || failures > 0 ? { color: 'error' } : { dimColor: true }), children: status })]),
-      ],
+    const isRunning = entry.isRunning && entry.kind === 'task'
+    const status = isRunning ? 'running' : entry.isError ? 'failed' : counts
+    const isTree = mod.state.session.history.layout === 'tasks' && mod.state.session.history.filter !== 'prompts'
+    return ListItem({
+      key: `history:${entry.key}`,
+      leading: entry.name,
+      label: entry.text,
+      ...(status === '' ? {} : { trailing: Badge({ tone: entry.isError || failures > 0 ? 'critical' : isRunning ? 'info' : 'neutral', children: status }) }),
+      ...(isTree ? { depth } : {}),
+      ...(isTree && entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {}),
+      onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null),
     })
   }
 
-  const draw = (columns: number): JSX.Element => {
+  const draw = (): JSX.Element => {
     const { history: entries, historyError } = mod.state.memory
     const { find, filter, layout } = mod.state.session.history
     if (entries === null && historyError === null && loading === undefined) refresh()
@@ -274,7 +266,7 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
       columnGap: 2,
       flexWrap: 'wrap',
       children: [
-        Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'text in a row', submitLabel: 'find', onInput: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
+        Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'Find in the history', submitLabel: 'find', onInput: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
         Select({ key: 'history:filter', label: 'Show', value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked as HistoryFilter }) }),
         Select({ key: 'history:layout', label: 'As', value: layout, options: [{ value: 'tasks', label: 'Tasks' }, { value: 'timeline', label: 'Timeline' }], onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === 'timeline' ? 'timeline' : 'tasks' }) }),
       ],
@@ -285,7 +277,7 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
       if (entries.length === 0) return Text({ dimColor: true, wrap: 'wrap', children: 'Nothing here yet. Each prompt you send shows here, with what Claude did for it.' })
       const rows = layout === 'tasks' ? visible(entries) : timeline(entries)
       if (rows.length === 0) return Text({ dimColor: true, children: 'No row matches.' })
-      return Box({ flexDirection: 'column', children: rows.map((shown) => row(shown, columns)) })
+      return List({ label: 'History', children: rows.map(row) })
     }
     return Box({ flexDirection: 'column', gap: 1, children: [controls, body()] })
   }
