@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.4.2] - 2026-11-22
+
+### Fixed
+- `cmod update` moves a computer to the new cmod. Before, it updated the cmod plugin but left the cmod program, and with it `cmod serve` and the Herdr panel, on the old version until a Claude Code session started. It now downloads the updated plugin's cmod program, and `cmod serve` starts again on it.
+
 ## [8.4.1] - 2026-11-22
 
 ### Changed
