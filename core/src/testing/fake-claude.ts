@@ -195,7 +195,12 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     },
     http: {
       fetch: async (url, init) => {
-        if (fakes.http.fetch === undefined && init?.socketPath?.endsWith('/serve.sock') === true) return serve.fetch(url, init)
+        if (fakes.http.fetch === undefined && init?.socketPath?.endsWith('/serve.sock') === true) {
+          const answer = await serve.fetch(url, init)
+          const bytes = new TextEncoder().encode(answer.text).length
+          if (bytes > fetchBodyLimit) throw new Error(`$.http.fetch: ${url} refused: body of ${bytes} bytes is over the ${fetchBodyLimit}-byte limit`)
+          return answer
+        }
         return fetchFake(url, init)
       },
     },
@@ -284,6 +289,8 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
 
   return { claude, calls, fakes, shown, store, serve, settle, placePane }
 }
+
+const fetchBodyLimit = 4_194_304
 
 declare function setTimeout(fn: () => void, ms: number): unknown
 declare function clearTimeout(timeout: unknown): void

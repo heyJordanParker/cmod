@@ -87,7 +87,7 @@ export function fakeServe(
     },
     async fetch(url, init = {}) {
       requests += 1
-      const answered = await routing.routes.route({ method: init.method ?? 'GET', path: new URL(url).pathname, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
+      const answered = await routing.routes.route({ method: init.method ?? 'GET', path: `${new URL(url).pathname}${new URL(url).search}`, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
       if (answered === undefined) return { status: 404, ok: false, headers: {}, text: '' }
       return { status: answered.status, ok: answered.status >= 200 && answered.status < 300, headers: {}, text: answered.json === undefined ? '' : JSON.stringify(answered.json) }
     },

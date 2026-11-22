@@ -968,11 +968,16 @@ const indexedConversation = (() => {
   }
 })()
 
-function answerIndex(tested: ReturnType<typeof testMod>) {
+function answerIndex(tested: ReturnType<typeof testMod>, asked: Readonly<Record<string, unknown>>[] = []) {
   tested.fakes.serve.read = (_session, part, options) => {
     const task = typeof options['task'] === 'string' ? options['task'] : undefined
     if (part === 'turns') return task === undefined ? indexedConversation.turns : []
-    if (part === 'messages') return (indexedConversation.messages[task ?? 'main'] ?? []).filter((message) => options['turn'] === undefined || (message as { turn?: string }).turn === options['turn'])
+    if (part === 'messages') {
+      asked.push(options)
+      const list = (indexedConversation.messages[task ?? 'main'] ?? []).filter((message) => options['turn'] === undefined || (message as { turn?: string }).turn === options['turn'])
+      const after = list.findIndex((message) => (message as { id?: string }).id === options['after'])
+      return options['after'] === undefined ? list : after < 0 ? [] : list.slice(after + 1)
+    }
     if (part === 'tasks') return task === undefined ? indexedConversation.tasks : []
     if (part === 'goal') return { text: '' }
     return part === 'state' ? null : []
@@ -1023,6 +1028,28 @@ test('History shows a prompt the person sends while it is open', async () => {
 
   const rows = shown.split('\n')
   expect(rows.findIndex((row) => /\d\d:\d\d add a regression test/.test(row))).toBeGreaterThan(rows.findIndex((row) => row.includes('Claude Fixed the expired token check')))
+})
+
+test('History reads only the messages after the last one it holds when the conversation changes, so a long conversation is read once', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  const asked: Readonly<Record<string, unknown>>[] = []
+  answerIndex(tested, asked)
+  await tested.start()
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.type('/history')
+  const before = await historyLines(tested)
+
+  await prompt(tested, 'add a regression test')
+  await Bun.sleep(1100)
+  const after = await historyLines(tested)
+
+  const last = indexedConversation.messages['main']?.at(-1) as { readonly id: string }
+  const main = asked.filter((options) => options['task'] === undefined)
+  expect(main.slice(0, 1).map((options) => options['after'])).toEqual([undefined])
+  expect(main.slice(1).map((options) => options['after'])).toEqual(main.slice(1).map(() => last.id))
+  expect(main.length).toBeGreaterThan(1)
+  expect(after).toMatch(/\d\d:\d\d add a regression test/)
+  expect(after.split('Read src/auth.ts').length).toBe(before.split('Read src/auth.ts').length)
 })
 
 test('pressing a row of History scrolls the conversation to that message', async () => {

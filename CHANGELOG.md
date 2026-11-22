@@ -4,6 +4,18 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.4.1] - 2026-11-22
+
+### Changed
+- Herdr draws cmod's views as a panel that matches Herdr's own Files and Changes panels. Its tabs stay on one row that scrolls, each cut at its width, and the session's open pages sit at the end of that row as links to their own Herdr tabs. A box with a title on its border draws as a heading above a card, a `variant: "primary"` Button as Herdr's solid button, any other Button as an outlined one, and a dim `plain` Button as a quiet list row. Text that lays out in cells, such as block-character bars or names padded with spaces, keeps the terminal font so its columns line up. A view that draws one sentence shows it centered.
+- The Herdr panel keeps showing the last Claude Code session's views while you focus a terminal that runs none, in place of a sentence asking you to focus one.
+- A session that cannot show its views in Herdr shows why, with a Try again button, and a session still loading shows a spinner.
+- A primary button `filledButton` draws carries `variant: "primary"`, so an app that is not the terminal draws it as its primary button. The terminal draws it as before.
+
+### Fixed
+- A session whose conversation is larger than 4 MiB keeps its connection to `cmod serve`. Claude Code refuses an HTTP answer over 4 MiB, so reading such a conversation, as the History view does, dropped the cmod plugin's connection and failed with `body of <n> bytes is over the 4194304-byte limit`. `cmod serve` now sends a large answer in parts the cmod plugin joins.
+- History reads a conversation once. Before, each change while it showed read the whole conversation again, 56 MB for a long session. It now reads only the messages after the last one it holds, and keeps a finished subagent's messages.
+
 ## [8.4.0] - 2026-11-22
 
 ### Changed

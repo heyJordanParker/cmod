@@ -1100,7 +1100,7 @@ function devboxProvider() {
   })
   const routes = rpcRoutes({ handle: (connection) => server.handler(connection), onClose: (connection) => server.closed(connection), now: () => Date.now() })
   const fetch = async (url: string, init: { readonly method?: string; readonly body?: unknown } = {}) => {
-    const answered = await routes.route({ method: init.method ?? 'GET', path: new URL(url).pathname, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
+    const answered = await routes.route({ method: init.method ?? 'GET', path: `${new URL(url).pathname}${new URL(url).search}`, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
     return { status: answered?.status ?? 404, ok: answered !== undefined && answered.status < 300, headers: {}, text: answered?.json === undefined ? '' : JSON.stringify(answered.json) }
   }
   const files = fakeFiles({ '/store/instances/demo/sessions-server.json': JSON.stringify({ address: 'unix:/store/devbox.sock', pid: 1, started: '', provides: [sessionsInterface] }) })

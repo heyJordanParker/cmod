@@ -84,8 +84,12 @@ class Element {
         key in target
           ? (target as unknown as Record<string, unknown>)[key]
           : (...args: unknown[]) => {
-              if (key === 'child') target.nodes.push(args[0])
-              else if (key === 'children') target.nodes.push(...(args[0] as unknown[]))
+              if (key === 'child' || key === 'children') {
+                const given = key === 'child' ? [args[0]] : (args[0] as unknown[])
+                const refused = given.find((each) => !(each instanceof Element) && typeof each !== 'string' && typeof each !== 'number' && (typeof each !== 'object' || each === null || !('render' in each)))
+                if (refused !== undefined || !Array.isArray(given)) throw new Error(`Herdr refuses ${String(refused)} as a child of ${target.kind}: a child is an element, a string, a number, or a view.`)
+                target.nodes.push(...given)
+              }
               else if (key === 'when') {
                 if (args[0]) (args[1] as (element: Element) => Element)(proxy)
               } else target.calls[key] = args
@@ -97,6 +101,11 @@ class Element {
 }
 
 type Shown = Element | { render(cx: unknown): Element }
+
+const themeColors = [
+  'background', 'surface', 'canvas', 'chrome', 'popover', 'raised', 'hover', 'selected', 'border', 'input', 'foreground', 'muted', 'dim', 'accent', 'accent_foreground',
+  'solid', 'solid_foreground', 'selection', 'working', 'blocked', 'done', 'idle', 'unknown', ...Array.from({ length: 16 }, (_, index) => `ansi${index}`),
+]
 
 const element =
   (kind: string) =>
@@ -197,7 +206,7 @@ async function herdrWith(given: object, answer: (args: readonly string[]) => unk
       const sessionIds: Record<string, string> = { '/home/.claude/sessions/42.json': 'worker', '/home/.claude/sessions/43.json': 'other' }
       return sessionIds[path] === undefined ? null : JSON.stringify({ sessionId: sessionIds[path] })
     },
-    theme: () => new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
+    theme: () => Object.fromEntries(themeColors.map((name) => [name, `#${name}`])),
     run,
     panes: () => shownPanes,
     layout: () => tree,
@@ -355,7 +364,7 @@ const emptyDashboard = {
               gap: 1,
               children: [
                 { $cmodElement: 'Text', props: { dimColor: true, wrap: 'wrap', children: 'Place the widgets your mods add here, in Settings.' } },
-                { $cmodElement: 'Button', props: { plain: true, key: 'cmod/dashboard:arrange-widgets', label: 'Arrange widgets', onPress: { $cmodHandler: 5 }, children: { $cmodElement: 'Text', props: { backgroundColor: 'claude', color: 'inverseText', bold: true, children: ' Arrange widgets ' } } } },
+                { $cmodElement: 'Button', props: { plain: true, key: 'cmod/dashboard:arrange-widgets', label: 'Arrange widgets', variant: 'primary', onPress: { $cmodHandler: 5 }, children: { $cmodElement: 'Text', props: { backgroundColor: 'claude', color: 'inverseText', bold: true, children: ' Arrange widgets ' } } } },
               ],
             },
           },
@@ -377,6 +386,90 @@ test("cmod's Herdr mod draws the cmod plugin's own Dashboard with a value for ev
 
   expect(calls.filter(({ args }) => args.some((arg) => arg === undefined || arg === null || Number.isNaN(arg)))).toEqual([])
   expect(calls.filter(({ method }) => method === 'flex_grow').map(({ args }) => args)).toEqual([[1], [1]])
+})
+
+test("cmod's Herdr mod draws a titled border as a heading above its card, and a primary Button as Herdr's solid button with its label", async () => {
+  const herdr = await herdrWith({}, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? [{ mod: 'cmod', id: 'dashboard', title: 'Dashboard' }] : []) : emptyDashboard))
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+
+  const drawn = found(herdr.view.render(herdr.cx), () => true, herdr.cx)
+  const arrange = drawn.find((each) => each.kind === 'Button' && each.calls['accessibility_label']?.[0] === 'Arrange widgets')
+  const card = drawn.find((each) => each.calls['border_1'] !== undefined && each.calls['rounded']?.[0] === 10 && each.kind === 'div')
+
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'heading').map((each) => each.nodes)).toEqual([['Widgets']])
+  expect(drawn.some((each) => each.calls['absolute'] !== undefined)).toBe(false)
+  expect([arrange?.calls['bg'], arrange?.calls['text_color'], found(arrange as Element, (each) => each.nodes.includes('Arrange widgets'), herdr.cx).length]).toEqual([['#solid'], ['#solid_foreground'], 1])
+  expect(card?.calls['border_color']).toEqual(['#border'])
+})
+
+test("the dock of cmod's Herdr mod keeps its tabs on one row that scrolls, and lists the session's open pages there as links to their own Herdr tabs", async () => {
+  const herdr = await herdrWith({}, viewsAndLog)
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+  const root = herdr.view.render(herdr.cx)
+  const strip = found(root, (each) => each.kind === 'Tabs', herdr.cx)[0]
+
+  clicked(root, (each) => each.kind === 'Button' && each.calls['role']?.[0] === 'link', herdr.cx)
+
+  expect([strip?.calls['overflow_x_scroll'], strip?.calls['flex_wrap']]).toEqual([[], undefined])
+  expect(found(root, (each) => each.kind === 'Tab', herdr.cx).every((each) => each.calls['truncate'] !== undefined && each.calls['flex_none'] !== undefined)).toBe(true)
+  expect(labelled(root, herdr.cx).filter(([kind]) => kind === 'Button')).toEqual([['Button', 'Log, opens in its own tab']])
+  expect(herdr.commands).toEqual([['tab.new', { name: 'Log', mod: 'cmod', props: { show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' } }]])
+})
+
+test("the dock of cmod's Herdr mod keeps showing the last Claude Code session's views while a terminal with no session has the focus", async () => {
+  const herdr = await herdrWith({}, viewsAndLog)
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+
+  herdr.focus('t3')
+  herdr.view.render(herdr.cx)
+  await herdr.settled()
+  const kept = tabsOf(herdr).map(([tab]) => tab)
+  herdr.focus('t2')
+  herdr.view.render(herdr.cx)
+  await herdr.settled()
+
+  expect(kept).toEqual(['cmod-tab-cmod/dashboard', 'cmod-tab-demo/runs'])
+  expect(herdr.ran.filter((args) => args[1] === 'list' && args[2] === 'views').map((args) => args[3])).toEqual(['worker', 'other'])
+})
+
+const usageView = {
+  $cmodElement: 'Box',
+  props: {
+    flexDirection: 'column',
+    children: [
+      { $cmodElement: 'Box', props: { gap: 2, children: [{ $cmodElement: 'Text', props: { children: 'jarvis          ' } }, { $cmodElement: 'Text', props: { color: 'inactive', children: '███' } }, { $cmodElement: 'Text', props: { color: 'inactive', backgroundColor: 'warning', children: '▋' } }, { $cmodElement: 'Text', props: { color: 'warning', children: '' } }] } },
+      { $cmodElement: 'Box', props: { columnGap: 2, flexWrap: 'wrap', children: [{ $cmodElement: 'Input', props: { key: 'demo/usage:find', label: 'Find', value: '' } }, { $cmodElement: 'Button', props: { plain: true, key: 'demo/usage:filter', label: 'Show: All', onPress: { $cmodHandler: 3 } } }] } },
+    ],
+  },
+}
+
+test("cmod's Herdr mod keeps a mod's cell drawing in the terminal font without chip padding, and lines a row's buttons up with its field", async () => {
+  const herdr = await herdrWith({}, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? [{ mod: 'demo', id: 'usage', title: 'Usage' }] : []) : usageView))
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+  const drawn = found(herdr.view.render(herdr.cx), () => true, herdr.cx)
+  const bar = drawn.find((each) => each.nodes.includes('▋'))
+  const row = drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.kind === 'v_flex' && node.calls['min_w']?.[0] === 180))
+
+  expect([bar?.calls['font_family'], bar?.calls['rounded'], bar?.calls['bg']]).toEqual([['JetBrains Mono'], undefined, ['#ansi3']])
+  expect(drawn.some((each) => each.nodes.includes('◗'))).toBe(true)
+  expect(drawn.find((each) => each.nodes.includes('jarvis          '))?.calls['font_family']).toEqual(['JetBrains Mono'])
+  expect([row?.calls['items_end'], row?.calls['gap_y']]).toEqual([[], [8]])
+})
+
+test("cmod's Herdr mod centers a view that draws one sentence, in the muted color", async () => {
+  const herdr = await herdrWith({}, (asked) => (asked[1] === 'list' ? (asked[2] === 'views' ? [{ mod: 'rulebook', id: 'results', title: 'rulebook' }] : []) : { $cmodElement: 'Text', props: { dimColor: true, children: 'Run /rulebook to check every Prompt in this project.' } }))
+  herdr.follow({ cursor: '1:0:0:0:0', events: [], missed: true })
+  await herdr.settled()
+  const root = herdr.view.render(herdr.cx)
+  const body = found(root, (each) => each.calls['id']?.[0] === 'cmod-units', herdr.cx)[0]
+  const note = found(root, (each) => each.nodes.includes('Run /rulebook to check every Prompt in this project.'), herdr.cx)[0]
+
+  expect([body?.calls['items_center'], body?.calls['justify_center']]).toEqual([[], []])
+  expect([note?.calls['text_center'], note?.calls['text_color']]).toEqual([[], ['#muted']])
 })
 
 test("a press in cmod's Herdr mod runs cmod ui press with the handler of the element pressed, and the surface herdr", async () => {
@@ -621,7 +714,7 @@ test("cmod's Herdr mod releases a view it stops showing only after a frame that 
   expect(herdr.released).toContain(dashboard)
 })
 
-test("cmod's Herdr mod shows why a session shows nothing in place of its views, and never says a session shows no views", async () => {
+test("cmod's Herdr mod shows why a session shows nothing in place of its views, with Try again, and never says a session shows no views", async () => {
   const refusal = 'Session worker runs a cmod plugin older than this cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.'
   const herdr = await herdrWith({}, () => {
     throw new Error(refusal)
@@ -632,8 +725,9 @@ test("cmod's Herdr mod shows why a session shows nothing in place of its views, 
   await herdr.settled()
 
   expect(labelled(herdr.view.render(herdr.cx), herdr.cx)).toEqual([
-    ['Tabs', 'Views'],
-    ['div', `cmod ui: ${refusal}`],
+    ['div', "This session can't show its views here"],
+    ['div', refusal],
+    ['Button', 'Try again'],
   ])
 })
 

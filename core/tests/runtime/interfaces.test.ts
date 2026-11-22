@@ -31,7 +31,7 @@ const noSessions: SessionComputer = {
 
 function fetchOf(routesAt: (socketPath: string | undefined) => RpcRoutes | undefined): HttpFetch {
   return async (url, init) => {
-    const answer = await routesAt(init.socketPath)?.route({ method: init.method, path: new URL(url).pathname, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
+    const answer = await routesAt(init.socketPath)?.route({ method: init.method, path: `${new URL(url).pathname}${new URL(url).search}`, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
     return { status: answer?.status ?? 404, text: answer?.json === undefined ? '' : JSON.stringify(answer.json) }
   }
 }
@@ -558,6 +558,30 @@ test("a request sent while cmod serve starts again, which the new cmod serve ans
 
   expect(before).toBe('first answered demo/Echo.echo')
   expect(after).toBe('second answered demo/Echo.echo')
+  await client.close()
+  routes.close()
+})
+
+test("an answer larger than Claude Code's 4 MiB fetch limit reaches the client whole, in parts each poll carries under the limit, and keeps the connection", async () => {
+  const conversation = 'a long conversation '.repeat(300_000)
+  const routes = rpcRoutes({ handle: () => async (method) => (method === 'demo/Read.everything' ? conversation : 'still connected'), now: () => Date.now() })
+  const polled: number[] = []
+  const servedFetch = fetchOf(() => routes)
+  const claudeFetch: HttpFetch = async (url, init) => {
+    const answer = await servedFetch(url, init)
+    const bytes = new TextEncoder().encode(answer.text).length
+    if (bytes > 4_194_304) throw new Error(`$.http.fetch: ${url} refused: body of ${bytes} bytes is over the 4194304-byte limit`)
+    if (init.method === 'GET') polled.push(bytes)
+    return answer
+  }
+  const client = connectRpc({ call: addressCall(claudeFetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+
+  const read = await client.request<string>('demo/Read.everything')
+  const after = await client.request<string>('demo/Echo.ping')
+
+  expect([read.length, read === conversation, after]).toEqual([conversation.length, true, 'still connected'])
+  expect(polled.filter((bytes) => bytes > 500_000).length).toBeGreaterThanOrEqual(6)
+  expect(Math.max(...polled)).toBeLessThan(4_194_304)
   await client.close()
   routes.close()
 })

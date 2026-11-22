@@ -200,7 +200,7 @@ function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'sta
 }
 
 export function answered(routes: RpcRoutes, request: Request): Promise<Response> | undefined {
-  const answer = routes.route({ method: request.method, path: new URL(request.url).pathname, signal: request.signal, json: () => request.json() })
+  const answer = routes.route({ method: request.method, path: `${new URL(request.url).pathname}${new URL(request.url).search}`, signal: request.signal, json: () => request.json() })
   return answer?.then(({ status, json }) => (json === undefined ? new Response(null, { status }) : Response.json(json, { status })))
 }
 

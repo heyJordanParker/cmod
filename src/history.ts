@@ -1,4 +1,4 @@
-import { AttachedFile, InstructionFile, Note, Prompt, Reply, Skill, ToolCall, ToolResult, messageOf, sessions, type Message, type Mod, type Task, type Turn } from '../node_modules/@cmodjs/core/mod.js'
+import { AttachedFile, InstructionFile, Note, Prompt, Reply, Skill, ToolCall, ToolResult, messageOf, sessions, type Message, type Mod, type Session, type Task, type Turn } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
@@ -83,6 +83,8 @@ type Shown = { readonly entry: HistoryEntry; readonly depth: number; readonly is
 export function history<State extends HistoryState>(mod: Mod<State>, isShown: () => boolean): HistoryView {
   const { claude, report } = engineOf(mod)
   const messages = new Map<string, Message>()
+  const closedTasks = new Map<string, readonly Message[]>()
+  let read: { readonly session: string; readonly list: Message[] } | undefined
   let loading: Promise<void> | undefined
   let isStale = false
 
@@ -110,7 +112,7 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
   }
 
   const taskEntryOf = async (task: Task): Promise<HistoryEntry> => {
-    const [own, handedOn] = await Promise.all([task.messages(), task.tasks()])
+    const [own, handedOn] = await Promise.all([messagesOfTask(task), task.tasks()])
     const opened = new Set(own.flatMap((message) => (message.type === ToolCall ? [message.callId] : [])))
     const children = await entriesOf(own.filter((message) => message.type !== Prompt), handedOn)
     const loose = await Promise.all(handedOn.filter((each) => !opened.has(each.openedBy)).map(taskEntryOf))
@@ -126,9 +128,28 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
     return { key: turn.prompt.id, message: turn.prompt.id, kind: 'prompt', name: timeOf(turn.openedAt), text: firstLine(turn.prompt.text), at: turn.openedAt, isError: false, isRunning: turn.closedAt === undefined, children }
   }
 
+  const messagesOfTask = async (task: Task): Promise<readonly Message[]> => {
+    const kept = closedTasks.get(task.id)
+    if (kept !== undefined) return kept
+    const list = await task.messages()
+    if (task.closedAt !== undefined) closedTasks.set(task.id, list)
+    return list
+  }
+
+  const messagesOf = async (current: Session): Promise<readonly Message[]> => {
+    if (read?.session !== current.id) {
+      read = { session: current.id, list: [] }
+      closedTasks.clear()
+    }
+    const known = read
+    const last = known.list.at(-1)?.id
+    known.list.push(...(await current.messages(last === undefined ? {} : { after: last })))
+    return known.list
+  }
+
   const load = async () => {
     const current = sessions.current
-    const [turns, all, tasks] = await Promise.all([current.turns(), current.messages(), current.goal.tasks()])
+    const [turns, all, tasks] = await Promise.all([current.turns(), messagesOf(current), current.goal.tasks()])
     const own = all.filter((message) => message.task === undefined)
     messages.clear()
     const prompts = await Promise.all(turns.map((turn) => promptEntryOf(turn, own, tasks)))

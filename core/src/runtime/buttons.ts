@@ -15,6 +15,7 @@ export function filledButton({ key, label, hotkey, variant = 'secondary', onPres
     plain: true,
     key,
     label,
+    variant,
     ...(hotkey === undefined ? {} : { hotkey }),
     onPress,
     children: Text({ backgroundColor: isPrimary ? 'claude' : 'userMessageBackground', color: isPrimary ? 'inverseText' : 'text', bold: isPrimary, children: ` ${label} ` }),

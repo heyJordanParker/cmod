@@ -40,6 +40,42 @@ export type Peer = {
 
 const cancelMethod = '$/cancelRequest'
 
+const partMethod = '$/part'
+
+export const pollChars = 1_000_000
+
+function partsOf(message: RpcMessage, chars: number): RpcMessage[] {
+  const text = JSON.stringify(message)
+  const size = Math.max(1, Math.floor(chars / 4))
+  const count = Math.ceil(text.length / size)
+  return Array.from({ length: count }, (_, index) => ({ jsonrpc: '2.0', method: partMethod, params: { text: text.slice(index * size, (index + 1) * size), isLast: index === count - 1 } }))
+}
+
+function partOf(message: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (typeof message !== 'object' || message === null) return undefined
+  const fields = message as Readonly<Record<string, unknown>>
+  const params = fields['params']
+  return fields['method'] === partMethod && typeof params === 'object' && params !== null ? (params as Readonly<Record<string, unknown>>) : undefined
+}
+
+function takenWithin(outbox: RpcMessage[], chars: number | undefined): RpcMessage[] {
+  if (chars === undefined) return outbox.splice(0)
+  const taken: RpcMessage[] = []
+  let size = 0
+  while (outbox.length > 0) {
+    const next = outbox[0] as RpcMessage
+    const length = JSON.stringify(next).length
+    if (length > chars && !('method' in next && next.method === partMethod)) {
+      outbox.splice(0, 1, ...partsOf(next, chars))
+      continue
+    }
+    if (taken.length > 0 && size + length > chars) break
+    taken.push(outbox.shift() as RpcMessage)
+    size += length
+  }
+  return taken
+}
+
 type Waiting = { resolve(value: unknown): void; reject(error: Error): void }
 
 export function createPeer({ send, handle }: { readonly send: (message: RpcMessage) => void; readonly handle: RpcHandler }): Peer {
@@ -151,6 +187,7 @@ type Held = {
   readonly connection: RpcConnection
   readonly outbox: RpcMessage[]
   poll: ((messages: RpcMessage[]) => void) | undefined
+  chars: number | undefined
   seenAt: number
 }
 
@@ -198,16 +235,17 @@ export function rpcRoutes({
     const peer = createPeer({
       send: (message) => {
         if (entry === undefined) return
-        if (entry.poll === undefined) return void outbox.push(message)
+        outbox.push(message)
+        if (entry.poll === undefined) return
         const poll = entry.poll
         entry.poll = undefined
-        poll([...outbox.splice(0), message])
+        poll(takenWithin(outbox, entry.chars))
       },
       handle: (method, params, signal) => handler(method, params, signal),
     })
     const connection: RpcConnection = Object.assign(peer, { id })
     const handler = handle(connection)
-    entry = { connection, outbox, poll: undefined, seenAt: now() }
+    entry = { connection, outbox, poll: undefined, chars: undefined, seenAt: now() }
     held.set(id, entry)
     return entry
   }
@@ -223,10 +261,11 @@ export function rpcRoutes({
     return each
   }
 
-  const poll = (each: Held, signal: AbortSignal) =>
+  const poll = (each: Held, signal: AbortSignal, chars: number | undefined) =>
     new Promise<RpcMessage[]>((resolve) => {
       each.poll?.([])
-      if (each.outbox.length > 0) return resolve(each.outbox.splice(0))
+      each.chars = chars
+      if (each.outbox.length > 0) return resolve(takenWithin(each.outbox, chars))
       const timer = timers.setTimeout(() => answer([]), pollMs)
       const answer = (messages: RpcMessage[]) => {
         timers.clearTimeout(timer)
@@ -246,21 +285,23 @@ export function rpcRoutes({
 
   const route = async (request: RpcHttpRequest): Promise<RpcHttpAnswer> => {
     sweep()
-    const [, id] = /^\/rpc\/([\w-]{1,64})$/.exec(request.path) ?? []
+    const url = new URL(request.path, 'http://cmod')
+    const [, id] = /^\/rpc\/([\w-]{1,64})$/.exec(url.pathname) ?? []
+    const chars = Number(url.searchParams.get('chars'))
     try {
-      if (request.path === `${rpcPath}/connect` && request.method === 'POST') return { status: 200, json: { connection: open().connection.id } }
-      if (id === undefined) return { status: 404, json: { error: `cmod has no ${request.method} ${request.path}.` } }
+      if (url.pathname === `${rpcPath}/connect` && request.method === 'POST') return { status: 200, json: { connection: open().connection.id } }
+      if (id === undefined) return { status: 404, json: { error: `cmod has no ${request.method} ${url.pathname}.` } }
       if (request.method === 'DELETE') {
         drop(id, 'the client closed it')
         return { status: 204 }
       }
       const each = known(id)
-      if (request.method === 'GET') return { status: 200, json: await poll(each, request.signal) }
+      if (request.method === 'GET') return { status: 200, json: await poll(each, request.signal, Number.isInteger(chars) && chars > 0 ? chars : undefined) }
       if (request.method === 'POST') {
         each.connection.receive(await request.json())
         return { status: 204 }
       }
-      return { status: 405, json: { error: `cmod has no ${request.method} ${request.path}.` } }
+      return { status: 405, json: { error: `cmod has no ${request.method} ${url.pathname}.` } }
     } catch (error) {
       if (error instanceof GoneError) return { status: goneStatus, json: { error: error.message } }
       throw error
@@ -346,7 +387,7 @@ export function connectRpc({
   readonly retryMs?: number
   readonly keepsConnecting?: boolean
 }): RpcClient {
-  type Link = { readonly id: string; readonly peer: Peer; lastAsked: RpcId | undefined; readonly undelivered: Set<RpcId> }
+  type Link = { readonly id: string; readonly peer: Peer; lastAsked: RpcId | undefined; readonly undelivered: Set<RpcId>; part: string }
   let current: Link | undefined
   let connecting: Promise<Link> | undefined
   let isClosed = false
@@ -385,10 +426,21 @@ export function connectRpc({
 
   const pollLoop = async (link: Link) => {
     while (current === link && !isClosed) {
-      const answer = await call(`${rpcPath}/${link.id}`, { method: 'GET' }).catch((error: unknown) => ({ status: 0, text: String(error) }))
+      const answer = await call(`${rpcPath}/${link.id}?chars=${pollChars}`, { method: 'GET' }).catch((error: unknown) => ({ status: 0, text: String(error) }))
       if (current !== link) return
       if (answer.status !== 200) return lose(link, new RpcUnreached(`cmod serve answered the poll with ${answer.status}: ${answer.text}`))
-      link.peer.receive(JSON.parse(answer.text))
+      for (const message of [JSON.parse(answer.text) as unknown].flat()) {
+        const part = partOf(message)
+        if (part === undefined) {
+          link.peer.receive(message)
+          continue
+        }
+        link.part += String(part['text'])
+        if (part['isLast'] !== true) continue
+        const whole = link.part
+        link.part = ''
+        link.peer.receive(JSON.parse(whole))
+      }
     }
   }
 
@@ -420,6 +472,7 @@ export function connectRpc({
         }),
         lastAsked: undefined,
         undelivered: new Set(),
+        part: '',
       }
       current = link
       hasConnected = true
