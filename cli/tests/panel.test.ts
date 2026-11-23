@@ -85,14 +85,24 @@ test('redraws that come while a drawing is on its way ask once more after it lan
   expect(run.screen().parts?.[0]?.drawn?.tree).toEqual(tree('newer'))
 })
 
-test('the panel draws every view a session lists, so switching tabs shows the drawing at once with no request', () => {
+test('switching tabs shows the view its last drawing at once, and asks for a fresh one behind it', () => {
   const run = shown('valid')
   const drawsBefore = run.calls('cmod/UI.draw').length
 
   run.send({ type: 'select', key: 'cmod/settings' })
 
-  expect(run.calls('cmod/UI.draw')).toHaveLength(drawsBefore)
+  expect(run.calls('cmod/UI.draw')).toHaveLength(drawsBefore + 1)
   expect(run.screen()).toMatchObject({ kind: 'ready', parts: [{ key: 'cmod/settings', drawn: { tree: tree('valid settings') } }] })
+})
+
+test('a view the panel does not show asks for no drawing when its mod redraws it, so a busy session costs the panel only the view on screen', () => {
+  const run = shown('valid')
+  const drawsBefore = run.calls('cmod/UI.draw').length
+
+  const effects = run.send({ type: 'heard', event: 'Redraw', payload: { session: 'valid', mod: 'cmod', id: 'settings' } })
+
+  expect(effects).toEqual([])
+  expect(run.calls('cmod/UI.draw')).toHaveLength(drawsBefore)
 })
 
 test('a session the panel showed before shows its last drawing at once when the panel comes back to it, and draws it again behind it', () => {
@@ -149,7 +159,7 @@ test('the panel tells cmod serve what it shows as the host of the session, and c
 
   expect(run.calls('cmod/UI.show').map((effect) => effect.params)).toEqual([
     ['first', 'herdr-test', [], { isHost: true }],
-    ['first', 'herdr-test', [{ mod: 'cmod', id: 'dashboard' }, { mod: 'cmod', id: 'settings' }], { isHost: true }],
+    ['first', 'herdr-test', [{ mod: 'cmod', id: 'dashboard' }], { isHost: true }],
     ['first', 'herdr-test', []],
     ['second', 'herdr-test', [], { isHost: true }],
   ])

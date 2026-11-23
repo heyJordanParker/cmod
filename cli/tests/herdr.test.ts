@@ -140,6 +140,7 @@ type Herdr = {
   readonly asked: Asked[]
   readonly commands: (readonly [string, Record<string, unknown>])[]
   readonly timers: (readonly [number, (cx: unknown) => void])[]
+  notified(): number
   focus(terminal: string): void
   tell(event: string, payload: object): void
   readonly written: Map<string, Uint8Array>
@@ -153,7 +154,7 @@ type Herdr = {
 
 const store = '/home/.local/share/cmod'
 
-async function herdrWith(given: object, answer: Answer, { leftovers = [], tree = null, isServing = true }: { readonly leftovers?: readonly string[]; readonly tree?: object | null; readonly isServing?: boolean } = {}): Promise<Herdr> {
+async function herdrWith(given: object, answer: Answer, { leftovers = [], tree = null, isServing = true, failedSessionReads = 0 }: { readonly leftovers?: readonly string[]; readonly tree?: object | null; readonly isServing?: boolean; readonly failedSessionReads?: number } = {}): Promise<Herdr> {
   const folder = join(await temporaryHome(), 'herdr-mod')
   await mkdir(folder)
   const main = await readFile(join(source, 'main.js'), 'utf8')
@@ -169,6 +170,8 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
   const inbox: string[] = []
   let wake: () => void = () => undefined
   let isDropped = false
+  let notified = 0
+  let sessionReadsToFail = failedSessionReads
   let focusedTerminal = 't1'
   let shownPanes: { readonly pane: string; readonly mod: string; readonly tab: string }[] = []
   const deliver = (message: object) => {
@@ -237,6 +240,10 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
     readTextFile: async (path: string) => {
       if (path === `${store}/serve.json`) return isServing ? JSON.stringify({ url: 'ws://127.0.0.1:4100/ui', token: 'secret' }) : null
       const sessionIds: Record<string, string> = { '/home/.claude/sessions/42.json': 'worker', '/home/.claude/sessions/43.json': 'other' }
+      if (sessionIds[path] !== undefined && sessionReadsToFail > 0) {
+        sessionReadsToFail -= 1
+        throw new Error(`EIO: ${path}`)
+      }
       return sessionIds[path] === undefined ? null : JSON.stringify({ sessionId: sessionIds[path] })
     },
     theme: () => Object.fromEntries(themeColors.map((name) => [name, `#${name}`])),
@@ -268,7 +275,7 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
   ;(globalThis as { herdrModules?: unknown }).herdrModules = values
   const { default: Cmod } = (await import(join(folder, 'main.js'))) as { readonly default: new () => Herdr['view'] }
   const cx = {
-    notify: () => undefined,
+    notify: () => void (notified += 1),
     spawn: (body: (cx: unknown) => Promise<unknown>) => void body(cx),
     timer: { after: (_ms: number, handler: (cx: unknown) => void) => void afterFrame.push(() => handler(cx)), every: (ms: number, handler: (cx: unknown) => void) => void timers.push([ms, handler]) },
     open_url: () => undefined,
@@ -288,6 +295,7 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
     asked,
     commands,
     timers,
+    notified: () => notified,
     focus: (terminal) => void (focusedTerminal = terminal),
     tell: (event, payload) => deliver({ jsonrpc: '2.0', method: '$/on', params: { id: event, payload } }),
     written,
@@ -686,7 +694,7 @@ test("cmod's Herdr mod opens a page a mod opened as a Herdr tab, closes that tab
 
 const clientOf = (herdr: Herdr) => (calledWith(herdr, 'cmod/UI.show')[0] as readonly unknown[])[1] as string
 
-test("a window of cmod's Herdr mod tells cmod/UI show every view of the session as shown, as the session's host, keeps that across tab switches, renews it inside the lease, tells it again when the focused session changes, and clears it when it closes", async () => {
+test("a window of cmod's Herdr mod tells cmod/UI show the view it shows, as the session's host, tells it again for each tab switch, renews it inside the lease, tells it again when the focused session changes, and clears it when it closes", async () => {
   const herdr = await herdrWith({ show: 'views', overlay: 'o1' }, named)
   const client = clientOf(herdr)
 
@@ -704,11 +712,12 @@ test("a window of cmod's Herdr mod tells cmod/UI show every view of the session 
   expect(herdr.timers.map(([ms]) => ms < 16_000)).toEqual([true])
   expect(calledWith(herdr, 'cmod/UI.show')).toEqual([
     ['worker', client, [], { isHost: true }],
-    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
-    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }], { isHost: true }],
+    ['worker', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['worker', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
     ['worker', client, []],
     ['other', client, [], { isHost: true }],
-    ['other', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['other', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
     ['other', client, []],
   ])
 })
@@ -779,6 +788,29 @@ test("cmod's Herdr mod shows why a session shows nothing in place of its views, 
     ['div', refusal],
     ['Button', 'Try again'],
   ])
+  expect(found(herdr.render(), (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
+})
+
+test("cmod's Herdr mod redraws the window for no event that changes nothing it shows, as another session's redraw, because every mod redraw redraws Herdr's whole window", async () => {
+  const herdr = await herdrWith({}, named)
+  const before = herdr.notified()
+
+  herdr.tell('Redraw', { session: 'elsewhere', mod: 'demo', id: 'runs' })
+  herdr.tell('Change', { session: 'elsewhere', part: 'views' })
+  await herdr.settled()
+
+  expect(herdr.notified()).toBe(before)
+})
+
+test("cmod's Herdr mod looks up the focused session again after a failed read, so one failure never leaves it on No session in focus", async () => {
+  const herdr = await herdrWith({}, named, { failedSessionReads: 1 })
+  const failed = labelled(herdr.render())
+
+  herdr.endFrame()
+  herdr.render()
+  await herdr.settled()
+
+  expect(failed).toContainEqual(['div', 'No session in focus'])
   expect(found(herdr.render(), (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
 })
 

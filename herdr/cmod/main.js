@@ -11,6 +11,7 @@ import { init, update, screen, entryOf, keyOf, QUIET_LOADING_MS } from "./panel.
 const HOMES = 'printf "%s\\n%s" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${XDG_DATA_HOME:-$HOME/.local/share}/cmod"';
 const RESIZE_MS = 250;
 const SHOW_MS = 5_000;
+const LOCATE_RETRY_MS = 2_000;
 const UI = {
   text: { caption: 12, body: 13, title: 14 },
   height: { inline: 20, control: 28, row: 32, header: 44 },
@@ -213,18 +214,17 @@ export default class Cmod extends View {
       swept = deleteEveryDrawn();
       cx.spawn(async () => swept.catch((error) => notify({ title: "cmod kept old drawings", body: messageOf(error), level: "warning" })));
     }
-    this.homes = exec("sh", ["-c", HOMES]).then((answer) => {
-      const [claude, store] = answer.stdout.split("\n");
-      return { claude, store };
-    });
+    this.homes = null;
     cx.timer.every(SHOW_MS, (cx) => this.dispatch({ type: "renew" }, cx));
     this.dispatch({ type: "connect" }, cx);
   }
 
   dispatch(message, cx) {
-    const [model, effects] = update(this.model, { ...message, now: Date.now() });
+    const before = this.model;
+    const [model, effects] = update(before, { ...message, now: Date.now() });
     this.model = model;
     for (const effect of effects) this.perform(effect, cx);
+    if (message.type !== "tick" && Object.keys(model).every((key) => key === "now" || model[key] === before[key])) return;
     this.prepareShown(cx);
     cx.notify();
   }
@@ -239,9 +239,20 @@ export default class Cmod extends View {
     throw new Error(`The cmod panel performs no ${effect.type}.`);
   }
 
+  homesOf() {
+    this.homes ??= exec("sh", ["-c", HOMES]).then((answer) => {
+      const [claude, store] = answer.stdout.split("\n");
+      return { claude, store };
+    }, (error) => {
+      this.homes = null;
+      throw error;
+    });
+    return this.homes;
+  }
+
   async connect(cx) {
     try {
-      const { store } = await this.homes;
+      const { store } = await this.homesOf();
       const text = await readTextFile(`${store}/serve.json`);
       if (text === null) throw new Error(`cmod serve is not running: ${store}/serve.json does not exist. A Claude Code session with the cmod plugin starts it.`);
       const { url, token } = JSON.parse(text);
@@ -305,14 +316,21 @@ export default class Cmod extends View {
     if (located === this.located) return;
     this.located = located;
     cx.spawn(async (cx) => {
-      const session = await this.sessionOf(target);
-      if (this.located === located) this.dispatch({ type: "focused", session }, cx);
+      try {
+        const session = await this.sessionOf(target);
+        if (this.located === located) this.dispatch({ type: "focused", session }, cx);
+      } catch (error) {
+        if (this.located !== located) return;
+        this.located = null;
+        cx.timer.after(LOCATE_RETRY_MS, (cx) => cx.notify());
+        notify({ title: "cmod could not find the focused session", body: messageOf(error), level: "warning" });
+      }
     });
   }
 
   async sessionOf({ address, pid }) {
     if (pid === null || address.includes("/")) return null;
-    const record = await readTextFile(`${(await this.homes).claude}/sessions/${pid}.json`);
+    const record = await readTextFile(`${(await this.homesOf()).claude}/sessions/${pid}.json`);
     return record === null ? null : JSON.parse(record).sessionId ?? null;
   }
 

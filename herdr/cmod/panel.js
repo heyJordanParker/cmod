@@ -48,6 +48,12 @@ export function shownParts(model, session = model.target) {
   return entry.lists.views ?? [];
 }
 
+export function liveParts(model, session = model.target) {
+  if (model.show !== "views") return shownParts(model, session);
+  const shown = shownView(model, entryOf(model, session));
+  return shown === undefined ? [] : [shown];
+}
+
 export function screen(model) {
   const entry = entryOf(model, model.target);
   const isLive = model.connection.status === "open";
@@ -113,7 +119,7 @@ function refreshed(model, session) {
 function telling(model, isRenewal = false) {
   if (model.show === "widgets" || model.connection.status !== "open") return [model, []];
   const session = model.target;
-  const parts = shownParts(model).map(keyOf);
+  const parts = liveParts(model).map(keyOf);
   const host = model.isHost ? [{ isHost: true }] : [];
   const before = model.told;
   const isSame = before.session === session && before.parts.join(" ") === parts.join(" ");
@@ -142,7 +148,7 @@ const then = (model, ...steps) => {
   return [next, effects];
 };
 
-const drawShown = (session) => (model) => drawing(model, session, shownParts(model, session));
+const drawLive = (session) => (model) => drawing(model, session, liveParts(model, session));
 const drawUndrawn = (session) => (model) =>
   drawing(
     model,
@@ -181,7 +187,7 @@ export function update(model, message) {
       const lists = { views: [], pages: [], widgets: [], ...entry.lists, [message.part]: message.result ?? [] };
       const listed = withEntry(at, message.session, (each) => ({ ...each, lists, pending, refusal: null }));
       if (Object.keys(pending).length > 0) return [listed, []];
-      const steps = [drawShown(message.session)];
+      const steps = [drawLive(message.session), drawUndrawn(message.session)];
       if (message.session === at.target) steps.push(telling);
       return then(listed, ...steps);
     }
@@ -207,14 +213,14 @@ export function update(model, message) {
       return heard(at, message.event, message.payload ?? {});
     case "select": {
       if (message.key === at.tab) return [at, []];
-      return then({ ...at, tab: message.key }, drawUndrawn(at.target), telling);
+      return then({ ...at, tab: message.key }, drawLive(at.target), telling);
     }
     case "resized": {
       if (message.columns === at.columns) return [at, []];
       return [{ ...at, columns: message.columns }, []];
     }
     case "redrawShown":
-      return at.target === null || at.connection.status !== "open" ? [at, []] : drawShown(at.target)(at);
+      return at.target === null || at.connection.status !== "open" ? [at, []] : drawLive(at.target)(at);
     case "press":
       return [at, [call(`${UI}.press`, [message.session, message.handler, { surface: SURFACE, ...message.input }], null, { type: "pressFailed", session: message.session, key: message.key })]];
     case "renew":
@@ -241,20 +247,20 @@ function heard(model, event, payload) {
   if (entry === undefined) return [model, []];
   const key = keyOf(payload);
   if (event === "Redraw") {
-    const isShown = shownParts(model, session).some((part) => keyOf(part) === key);
-    if (isShown) return drawing(model, session, shownParts(model, session).filter((part) => keyOf(part) === key));
+    const isLive = liveParts(model, session).some((part) => keyOf(part) === key);
+    if (isLive) return drawing(model, session, liveParts(model, session).filter((part) => keyOf(part) === key));
     if (entry.parts[key] === undefined) return [model, []];
     return [withEntry(model, session, (each) => ({ ...each, parts: { ...each.parts, [key]: { ...each.parts[key], isStale: true } } })), []];
   }
   if (model.show !== "views" || session !== model.target) return [model, []];
   const page = entry.lists?.pages.find((each) => keyOf(each) === key);
   if (event === "Close") {
-    if (shownView(model, entry) !== undefined && keyOf(shownView(model, entry)) === key) return then({ ...model, tab: null }, drawUndrawn(session), telling);
+    if (shownView(model, entry) !== undefined && keyOf(shownView(model, entry)) === key) return then({ ...model, tab: null }, drawLive(session), telling);
     return [model, [{ type: "closePage", key }]];
   }
   if (page !== undefined) return [model, [{ type: "openPage", session, page }]];
   if (!(entry.lists?.views ?? []).some((view) => keyOf(view) === key)) return [model, []];
   const reveal = payload.isAsked === true && model.isHost && !model.isWindow ? [{ type: "reveal" }] : [];
-  const [next, effects] = then({ ...model, tab: key }, drawUndrawn(session), telling);
+  const [next, effects] = then({ ...model, tab: key }, drawLive(session), telling);
   return [next, [...reveal, ...effects]];
 }
