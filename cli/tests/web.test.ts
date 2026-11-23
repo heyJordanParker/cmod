@@ -116,13 +116,13 @@ async function browsed(base: string) {
   })().catch((error: unknown) => {
     if (!(error instanceof Error && error.name === 'AbortError')) throw error
   })
-  const showing = async (text: string) => {
+  const showing = async (...texts: readonly string[]) => {
     for (let waited = 0; waited < 15_000; waited += 50) {
-      const found = screens.findLast((screen) => screen.html.includes(text))
-      if (found !== undefined && found === screens.at(-1)) return found
+      const last = screens.at(-1)
+      if (last !== undefined && texts.every((text) => last.html.includes(text))) return last
       await Bun.sleep(50)
     }
-    throw new Error(`the browser app never showed "${text}". It showed:\n${screens.at(-1)?.html ?? 'nothing'}`)
+    throw new Error(`the browser app never showed ${texts.map((text) => `"${text}"`).join(' and ')} on one screen. It showed:\n${screens.at(-1)?.html ?? 'nothing'}`)
   }
   const press = async (screen: { readonly draw: number; readonly html: string }, key: string, attribute: string, input: Record<string, string> = {}) => {
     const handler = new RegExp(`data-key="${key}"[^>]*?${attribute}="(\\d+)"`).exec(screen.html)?.[1]
@@ -181,7 +181,7 @@ test.concurrent('the browser app lists a running session of every project, with 
   })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
-  const screen = await browser.showing('site-2')
+  const screen = await browser.showing('site-2', 'Replied 2', 'app-1', '>app  </span>', '>site  </span>', 'Renamed it to publish.')
   browser.close()
   serving.child.kill()
 
@@ -198,7 +198,7 @@ test.concurrent("a session's row and header carry the name Claude Code gives it,
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.', name: 'app-3f' } })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
-  const screen = await browser.showing('Replied 1')
+  const screen = await browser.showing('Replied 1', '<span class="t" style="font-weight:700">app-3f</span>', '<span class="t size-heading">app-3f</span>', 'placeholder="Reply to app-3f"')
   browser.close()
   serving.child.kill()
 
@@ -214,7 +214,7 @@ test.concurrent("a permission wait the session's cmod plugin tells cmod serve pu
   const plugin = await hold('s1', 'work/app')
   plugin.tell({ status: 'waiting', waitingFor: { dialog: 'permission prompt', tool: 'Bash', input: { command: 'bun test' } } })
   const browser = await browsed(base)
-  const screen = await browser.showing('Needs you 1')
+  const screen = await browser.showing('Needs you 1', 'Wants to run Bash: bun test</span>', 'Wants to run Bash: bun test. Answer it in the session&#39;s terminal.', 'data-key="stop"')
   browser.close()
   serving.child.kill()
 
@@ -228,9 +228,9 @@ test.concurrent('a session moves to Needs you once Claude Code records it waits 
   const home = await homeWith({ s1: running, s2: { project: 'work/site', prompt: 'Pick a color', reply: 'Asking.', status: 'waiting', waitingFor: 'input needed' } })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
-  const asked = await browser.showing('Needs you 1')
+  const asked = await browser.showing('Needs you 1', 'Asks you a question</span>')
   await writeFiles(home, { '.claude/sessions/1.json': registryEntry(home, 's1', { ...running, status: 'waiting', waitingFor: 'permission prompt' }) })
-  const both = await browser.showing('Needs you 2')
+  const both = await browser.showing('Needs you 2', 'Wants permission to run a tool</span>')
   browser.close()
   serving.child.kill()
 
@@ -255,9 +255,9 @@ test.concurrent("cmod serve follows Claude Code's session records with one watch
     await listener(listenMethod, { id: 'test', interface: 'cmod/Sessions', event: 'Change', kind: 'on' }, AbortSignal.timeout(5000))
     const listenedAt = Date.now()
     const browser = await browsed(`http://127.0.0.1:${web.listen(0)}`)
-    const working = await browser.showing('claude-opus-5-5')
+    const working = await browser.showing('claude-opus-5-5', 'Working 1')
     await writeFiles(home, { '.claude/sessions/1.json': registryEntry(home, 's1', { ...running, status: 'waiting', waitingFor: 'permission prompt' }) })
-    const waiting = await browser.showing('Needs you 1')
+    const waiting = await browser.showing('Needs you 1', 'Wants permission to run a tool</span>')
     const waitedMs = Date.now() - listenedAt
     browser.close()
 
@@ -286,7 +286,7 @@ test.concurrent("a turn stopped while its command keeps running says so on its r
   const plugin = await hold('s1', 'work/app')
   plugin.tell({ status: 'idle', lastTurn: { reason: 'stopped', at: at(9) } })
   const browser = await browsed(base)
-  const screen = await browser.showing('Needs you 1')
+  const screen = await browser.showing('Needs you 1', 'Stopped, and a command still runs in its terminal</span>', 'app · claude-opus-5-5 · Stopped, and a command still runs in its terminal</span>')
   browser.close()
   serving.child.kill()
 
@@ -310,7 +310,7 @@ test.concurrent("a prompt typed in a session's prompt box reaches that session's
   const typed = await browser.press(opened, 'prompt:s1:0', 'data-submit', { kind: 'submit', value: 'Now run the whole suite' })
   await prompted
   plugin.tell({ status: 'busy' })
-  const working = await browser.showing('Working 1')
+  const working = await browser.showing('Working 1', 'data-key="prompt:s1:1"')
   const stopped = next()
   await browser.press(working, 'stop', 'data-press', { kind: 'press' })
   await stopped
@@ -361,9 +361,7 @@ test.concurrent("the browser app lists the running sessions of every other sessi
   await writeFiles(home, { '.local/share/cmod/instances/demo/sessions-server.json': other.instance })
   const { base, serving } = await served(home)
   const browser = await browsed(base)
-  await browser.showing('app-1')
-  await browser.showing('build-box-1')
-  const listed = await browser.showing('Deployed it on the build box.')
+  const listed = await browser.showing('app-1', 'build-box-1', 'Deployed it on the build box.')
   await browser.press(listed, 'row:r1', 'data-press', { kind: 'press' })
   const opened = await browser.showing('data-key="prompt:r1:0"')
   await browser.press(opened, 'prompt:r1:0', 'data-submit', { kind: 'submit', value: 'Roll it back' })
@@ -389,7 +387,6 @@ test.concurrent('opening a replied session marks it visited, done and unread mov
   await browser.press(replied, 'row:s1', 'data-press', { kind: 'press' })
   const read = await browser.showing('Idle 1')
   await browser.press(read, 'unread', 'data-press', { kind: 'press' })
-  await browser.showing('Replied 1')
   const unread = await browser.showing('Replied 1')
   await browser.press(unread, 'done', 'data-press', { kind: 'press' })
   await browser.showing('Idle 1')
