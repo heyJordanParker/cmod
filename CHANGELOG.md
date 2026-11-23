@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.7.1] - 2026-11-23
+
+### Fixed
+- The Herdr panel no longer slows the Herdr window down. It redraws only when what it shows changed, where every event of every session redrew Herdr's whole window, and it draws again only the view on screen, where every view of the session drew again on each of its mod's redraws. Choosing a tab shows the view's last drawing at once and a fresh one behind it.
+- The Herdr panel finds the focused session again after one failed read of it, where it stayed on No session in focus until Herdr restarted.
+
 ## [8.7.0] - 2026-11-23
 
 ### Added
