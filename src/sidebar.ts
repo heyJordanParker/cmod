@@ -1,4 +1,4 @@
-import { Dashboard, type Mod, type Pane, type Surface } from '../node_modules/@cmodjs/core/mod.js'
+import { Dashboard, type Mod, type Pane, type Surface, type View } from '../node_modules/@cmodjs/core/mod.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { installView } from '../node_modules/@cmodjs/core/runtime/installer.js'
@@ -215,7 +215,22 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
 
   const view = settings(pane, () => tell())
 
-  mod.views.add({ id: dashboardTab, title: 'Dashboard', render: (_current, { columns, surface }) => drawDashboard(columns, surface) })
+  let dashboardView: View | undefined
+  const hasDashboard = () => {
+    const layout = widgets.layout()
+    const running = new Set(widgets.widgets().map((widget) => widget.key))
+    return layout.areas[Dashboard].some((row) => [...row.left, ...row.right].some((key) => running.has(key) && !layout.hidden.includes(key)))
+  }
+  const placeDashboard = () => {
+    if (hasDashboard() === (dashboardView !== undefined)) return
+    if (dashboardView === undefined) dashboardView = mod.views.add({ id: dashboardTab, title: 'Dashboard', render: (_current, { columns, surface }) => drawDashboard(columns, surface) })
+    else {
+      dashboardView.remove()
+      dashboardView = undefined
+    }
+  }
+  placeDashboard()
+  widgets.onChange(placeDashboard)
   const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() })
   mod.views.add({ id: settingsTab, title: 'Settings', render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) })
   const isFixedTab = (name: string, id: string) => name === mod.name && (id === dashboardTab || id === settingsTab)

@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-11-23
+
+### Added
+- `Panel` takes a `description` and `actions`, its buttons, and draws them as the header of a page about one thing: on its first line in the terminal, beside its title in the browser, and as a page header in Herdr.
+
+### Changed
+- Settings lists your mods, and a press opens the mod as its own page: its version and description, Turn off and Remove, then its views in Settings, Options, Hotkeys, and Changelog as sections of one page, in place of a list beside the mod with a row of tabs. cmod's own page holds Hotkeys, Widgets, Log, and Preferences the same way, and `All mods` goes back.
+- History lists the prompts you sent, the newest first, 50 at a time with `Show earlier` for more, each one line with its time. Opening a prompt shows what Claude did for it. Rows no longer show how many tools ran and failed, Show and the Timeline are gone, and Find keeps the prompts that hold your text, opened down to the rows that hold it.
+- The Herdr panel draws every view of the session as it lists them, and keeps each one shown while it shows the session, so switching tabs shows the view at once and a mod's view keeps its state instead of reading again. It follows T3 Code's look, as anyhost's Herdr panel does: one row of tabs in sentence case, 32-pixel rows, settings rows with the label at the left and the field at the right, and Herdr's own chevron and check icons.
+- Herdr and the browser list the Dashboard only while a widget is on it.
+
+### Fixed
+- `search_sessions` names each session it finds by its title, project, device, and whether it runs, and shows the words around each match, where it showed a session id, a message id, and only a tool's name for a match inside a tool call. It leaves out earlier `search_sessions` calls, which held the searched text themselves.
+- The Herdr panel no longer falls behind a busy session. A redraw that comes while a view's drawing is on its way draws that view once more after it lands, in place of dropping the drawing that landed.
+
 ## [8.6.0] - 2026-11-23
 
 ### Added

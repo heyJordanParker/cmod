@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.6.0";
+var coreVersion = "8.7.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -9880,9 +9880,12 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     }).catch((error) => report("widgets:layout", "Could not save the widget layout", error));
     return saving;
   };
+  const listeners = new Set;
   const place = () => {
     layout = withNewWidgets(stored);
     redraw();
+    for (const listener of listeners)
+      listener();
   };
   const withNewWidgets = (current) => placed().filter(({ key, mod }) => mod !== "claude" && placedIn(current, key) === undefined && !placedKeys.has(key)).reduce((next, { key, areas: [area = AbovePrompt], place }) => {
     const [first, ...rest] = next.areas[area];
@@ -9998,7 +10001,8 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     reload,
     recheck,
     rows,
-    draw
+    draw,
+    onChange: (listener) => void listeners.add(listener)
   };
 }
 
@@ -10492,14 +10496,17 @@ var Split = hostComponent("Split", ({ children }) => ({ children }), ({ children
   const width = `${Math.floor(100 / Math.max(children.length, 1))}%`;
   return Box({ gap: 1, children: children.map((child) => Box({ width, children: child })) });
 });
-var Panel = hostComponent("Panel", ({ title, children }) => ({ title, ...children === undefined ? {} : { children } }), ({ title, children }) => Box({
-  flexDirection: "column",
-  flexGrow: 1,
-  children: [
-    Box({ flexDirection: "column", flexGrow: 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: "subtle", paddingX: 1, children }),
-    Box({ position: "absolute", top: 0, left: 2, children: Text({ bold: true, wrap: "truncate-end", children: ` ${title} ` }) })
-  ]
-}));
+var Panel = hostComponent("Panel", ({ title, description, actions, children }) => ({ title, ...description === undefined ? {} : { description }, ...actions === undefined ? {} : { actions }, ...children === undefined ? {} : { children } }), ({ title, description, actions, children }) => {
+  const header = description === undefined && actions === undefined ? [] : [Box({ justifyContent: "space-between", columnGap: 2, flexWrap: "wrap", children: [Text({ dimColor: true, wrap: "wrap", children: description ?? "" }), ...actions === undefined ? [] : [Box({ gap: 2, flexShrink: 0, children: actions })]] })];
+  return Box({
+    flexDirection: "column",
+    flexGrow: 1,
+    children: [
+      Box({ flexDirection: "column", flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: "subtle", paddingX: 1, children: [...header, children] }),
+      Box({ position: "absolute", top: 0, left: 2, children: Text({ bold: true, wrap: "truncate-end", children: ` ${title} ` }) })
+    ]
+  });
+});
 var Toggle = hostComponent("Toggle", ({ label, checked, onChange }) => ({ key: "", label, checked, onToggle: () => onChange(!checked) }), ({ key, label, checked, onToggle }) => Button({ plain: true, key: `${key}toggle:${label}`, label: `${checked ? "[x]" : "[ ]"} ${label}`, onPress: onToggle }));
 var cardColumns = 36;
 function card(text, isShown) {
@@ -10536,13 +10543,14 @@ var Progress = hostComponent("Progress", ({ value, width = 24, label }) => ({ va
 });
 var List = hostComponent("List", ({ label, children }) => ({ label, ...children === undefined ? {} : { children } }), ({ children }) => Box({ flexDirection: "column", children }));
 var statusOf = (tone) => tone === undefined ? [] : [tone === "off" ? Text({ dimColor: true, children: "○ " }) : Text({ ...textOf2(tone), children: "● " })];
-function treeRow({ key, label, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }) {
+function treeRow({ key, label, description, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }) {
   const opener = isOpen !== undefined && onToggle !== undefined ? Button({ plain: true, key: `${key}:toggle`, onPress: onToggle, children: Text({ dimColor: true, children: isOpen ? "▾" : "▸" }) }) : Text({ children: " " });
   const shown = Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: [...statusOf(tone), ...leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })], label] });
-  const row = Box({ columnGap: 1, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] });
-  if (trailing === undefined)
+  const row = Box({ columnGap: 1, minWidth: 0, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] });
+  const end = [...description === undefined ? [] : [Text({ dimColor: true, children: description })], ...trailing === undefined ? [] : [trailing]];
+  if (end.length === 0)
     return Box({ paddingLeft: depth * 2, children: row });
-  return Box({ width: "100%", paddingLeft: depth * 2, columnGap: 1, justifyContent: "space-between", children: [row, Box({ flexShrink: 0, children: trailing })] });
+  return Box({ width: "100%", paddingLeft: depth * 2, columnGap: 1, justifyContent: "space-between", children: [row, Box({ flexShrink: 0, columnGap: 1, children: end })] });
 }
 var ListItem = hostComponent("ListItem", ({ onOpenChange, ...props }) => ({ ...props, ...onOpenChange === undefined || props.isOpen === undefined ? {} : { onToggle: () => onOpenChange(props.isOpen !== true) } }), (props) => {
   const { key, label, description, leading, trailing, tone, isSelected, depth, onPress } = props;
@@ -12218,9 +12226,9 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
-var settingsSession = { selected: null, section: "options", viewParams: null, notice: null, widget: null };
+var settingsSession = { selected: null, viewParams: null, notice: null, widget: null };
 var areaTitles = {
   [AbovePrompt]: "Above the prompt",
   [BelowPrompt]: "Below the prompt",
@@ -12240,10 +12248,8 @@ var preferenceTitles = {
   servesTailnet: "Open web apps from your other devices, through Tailscale"
 };
 var viewSection = "view:";
-var statusColumns = 2;
-var rowPadding = 2;
 var panelColumns = 4;
-var detailMinColumns = 40;
+var shownVersions = 5;
 function storeOf(mod) {
   return cmodStore(engineOf(mod).claude);
 }
@@ -12349,21 +12355,19 @@ function timeOf(at) {
 }
 function widgetsLayout(current, widgets) {
   const widgetFor = (key, area) => widgets.widgets().find((widget) => widget.key === key) ?? { key, mod: key.slice(0, key.indexOf("/")), title: key, areas: [area] };
-  const chip = (key, area) => {
+  const layout = widgets.layout();
+  const selected = current.state.session.widget;
+  const item = (key, area) => {
     const widget = widgetFor(key, area);
     const isRunning = widgets.widgets().some((each) => each.key === key);
-    const isHidden = widgets.layout().hidden.includes(widget.key);
-    const isSelected = current.state.session.widget === widget.key;
-    const label = `${isSelected ? "▸ " : ""}${widget.title}${widget.mod === "claude" || widget.title === widget.key ? "" : ` (${widget.mod})`}${isRunning ? "" : " (not running)"}${isHidden ? " (hidden)" : ""}`;
-    return Button({ plain: true, key: `widget:${widget.key}`, label, ...isHidden || !isRunning ? { dimColor: true } : {}, onPress: () => void (current.state.session.widget = widget.key) });
+    const isHidden = layout.hidden.includes(widget.key);
+    const notes = [widget.mod === "claude" || widget.title === widget.key ? undefined : widget.mod, isRunning ? undefined : "not running", isHidden ? "hidden" : undefined].filter((note) => note !== undefined);
+    return ListItem({ key: `widget:${widget.key}`, label: widget.title, ...notes.length === 0 ? {} : { description: notes.join(" · ") }, ...isHidden || !isRunning ? { tone: "off" } : {}, isSelected: selected === widget.key, onPress: () => void (current.state.session.widget = widget.key) });
   };
-  const layout = widgets.layout();
-  const sections = areas.map((area) => {
-    const rows = layout.areas[area].map((row, index) => Box({ key: `row:${area}:${index}`, columnGap: 2, flexWrap: "wrap", children: [...row.left.map((key) => chip(key, area)), Text({ dimColor: true, children: "│" }), ...row.right.map((key) => chip(key, area))] }));
-    const builtIns = area === BelowPrompt ? [Box({ columnGap: 2, flexWrap: "wrap", children: builtInWidgets.map(({ key }) => chip(key, area)) })] : [];
-    return Box({ flexDirection: "column", children: [Text({ bold: true, children: areaTitles[area] }), ...builtIns, ...rows.length === 0 ? [Text({ dimColor: true, children: "No widgets" })] : rows] });
+  const groups = areas.map((area) => {
+    const keys = [...area === BelowPrompt ? builtInWidgets.map(({ key }) => key) : [], ...layout.areas[area].flatMap((row) => [...row.left, ...row.right])];
+    return Box({ key: `area:${area}`, flexDirection: "column", children: [Text({ dimColor: true, children: areaTitles[area] }), keys.length === 0 ? Text({ dimColor: true, children: "No widgets" }) : List({ label: areaTitles[area], children: keys.map((key) => item(key, area)) })] });
   });
-  const selected = current.state.session.widget;
   const area = selected === null ? undefined : placedIn(layout, selected);
   const isBuiltIn = builtInWidgets.some((widget) => widget.key === selected);
   const actions = selected === null || area === undefined && !isBuiltIn ? [Text({ dimColor: true, children: "Pick a widget to move it, hide it, or show it." })] : [
@@ -12376,7 +12380,7 @@ function widgetsLayout(current, widgets) {
       ]
     })
   ];
-  return Box({ flexDirection: "column", gap: 1, children: [...sections, ...actions] });
+  return Box({ flexDirection: "column", gap: 1, children: [...groups, ...actions] });
 }
 function settings2(mod) {
   return (pane, changed) => {
@@ -12456,25 +12460,13 @@ function settings2(mod) {
     const turn = (name, isOn) => act(() => runCmod([isOn ? "enable" : "disable", name], `Turned ${name} ${isOn ? "on" : "off"}.`));
     const setOption = (name, row, text) => act(() => runCmod(["options", "set", name, row.key.slice(name.length + 1), text.split(",").map((item) => item.trim()).join(",")], `Saved ${row.label}. ${name} reads it at its next start.`));
     const bind = (name, hotkey, combo) => act(() => runCmod(["hotkeys", "set", name, hotkey.name, combo.trim()], `Bound ${combo.trim()} to ${hotkey.title}.`));
-    const sectionsOf = (view) => {
-      const own = parts.declared().find((each) => each.mod === view.name)?.views.filter((settingsView) => settingsView.place === "settings") ?? [];
-      return [
-        ...own.map((settingsView) => ({ key: `${viewSection}${settingsView.id}`, label: settingsView.title })),
-        ...view.name === mod.name ? [] : [{ key: "options", label: "Options" }],
-        { key: "hotkeys", label: "Hotkeys" },
-        ...view.name === mod.name ? [
-          { key: "widgets", label: "Widgets" },
-          { key: "log", label: "Log" },
-          { key: "preferences", label: "Preferences" }
-        ] : [],
-        ...view.changelog.length === 0 ? [] : [{ key: "changelog", label: "Changelog" }]
-      ];
-    };
-    const shownOf = () => {
-      const { selected, section } = mod.state.session;
-      const view = mod.state.memory.views.find((each) => each.name === selected) ?? mod.state.memory.views[0];
-      const sections = view === undefined ? [] : sectionsOf(view);
-      return { view, section: sections.some(({ key }) => key === section) ? section : sections[0]?.key ?? "hotkeys" };
+    const settingsViewsOf = (view) => parts.declared().find((each) => each.mod === view.name)?.views.filter((settingsView) => settingsView.place === "settings") ?? [];
+    const selectedView = () => mod.state.memory.views.find((each) => each.name === mod.state.session.selected);
+    const select = (name) => {
+      mod.state.session.selected = name;
+      mod.state.session.viewParams = null;
+      mod.state.memory.removing = null;
+      changed();
     };
     const failuresLog = () => {
       const { log, reporting } = mod.state.memory;
@@ -12522,165 +12514,96 @@ function settings2(mod) {
         })
       });
     };
-    const drawSection = (view, section, columns, isFocused, surface) => {
-      if (section.startsWith(viewSection))
-        return parts.element(view.name, section.slice(viewSection.length), mod.state.session.viewParams, columns, isFocused, surface) ?? Text({ dimColor: true, children: "Drawing…" });
-      if (section === "widgets")
-        return widgetsLayout(mod, widgets);
-      if (section === "log")
-        return failuresLog();
-      if (section === "preferences") {
-        return Box({
-          flexDirection: "column",
-          gap: 1,
-          children: Object.entries(preferenceTitles).map(([key, title]) => {
-            const isOn = mod.state.memory.preferences[key];
-            const turn = async () => {
-              await writePreference(mod, key, !isOn);
-              return;
-            };
-            return Toggle({ label: title, checked: isOn, onChange: () => act(turn) });
-          })
-        });
-      }
-      if (section === "options") {
-        if (view.options.length === 0)
-          return Text({ dimColor: true, children: `${view.name} has no options.` });
-        return Box({
-          flexDirection: "column",
-          gap: 1,
-          children: view.options.map((row) => Box({
-            flexDirection: "column",
-            children: [
-              Text({ children: [Text({ bold: true, children: row.label }), row.isLocked ? Text({ dimColor: true, children: "  set by your organization" }) : ""] }),
-              row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: "Value", value: Array.isArray(row.value) ? row.value.join(", ") : String(row.value), submitLabel: "save", onSubmit: (text) => setOption(view.name, row, text) })
-            ]
-          }))
-        });
-      }
-      if (section === "hotkeys") {
-        if (view.hotkeys.length === 0)
-          return Text({ dimColor: true, children: `${view.name} has no hotkeys.` });
-        return Box({
-          flexDirection: "column",
-          gap: 1,
-          children: view.hotkeys.map((hotkey) => Box({
-            flexDirection: "column",
-            children: [
-              Text({ children: [Text({ bold: true, children: hotkey.title }), ...hotkey.combo === undefined ? [Text({ dimColor: true, children: " · unbound" })] : []] }),
-              Input({ key: `hotkey:${hotkey.name}`, label: "Combo", value: hotkey.combo ?? "", placeholder: "none", submitLabel: "bind", onSubmit: (combo) => bind(view.name, hotkey, combo) })
-            ]
-          }))
-        });
-      }
+    const section = (key, title, children) => Box({ key: `section:${key}`, flexDirection: "column", children: Panel({ title, children }) });
+    const preferences = () => Object.entries(preferenceTitles).map(([key, title]) => {
+      const isOn = mod.state.memory.preferences[key];
+      const turn = async () => {
+        await writePreference(mod, key, !isOn);
+        return;
+      };
+      return Toggle({ label: title, checked: isOn, onChange: () => act(turn) });
+    });
+    const optionRows = (view) => view.options.map((row) => row.isLocked ? ListItem({ key: `option:${row.key}`, label: row.label, description: `${String(row.value)} · set by your organization` }) : Input({ key: `option:${row.key}`, label: row.label, value: Array.isArray(row.value) ? row.value.join(", ") : String(row.value), submitLabel: "save", onSubmit: (text) => setOption(view.name, row, text) }));
+    const hotkeyRows = (view) => view.hotkeys.map((hotkey) => Input({ key: `hotkey:${hotkey.name}`, label: hotkey.title, value: hotkey.combo ?? "", placeholder: "Unbound", submitLabel: "bind", onSubmit: (combo) => bind(view.name, hotkey, combo) }));
+    const changes = (view) => {
+      const installed = view.changelog.findIndex(({ version }) => version === view.version);
+      const shown = view.changelog.filter((_, index) => index < shownVersions || index === installed);
+      return shown.map(({ version, date, text }) => Box({
+        key: `changelog:${version}`,
+        flexDirection: "column",
+        children: [Text({ children: [Text({ bold: true, children: version }), Text({ dimColor: true, children: `${date === undefined ? "" : ` · ${date}`}${version === view.version ? " · installed" : ""}` })] }), Markdown({ text: text === "" ? "_No changes listed._" : text })]
+      }));
+    };
+    const finishSetup = (view) => act(async () => {
+      const opened = await claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null });
+      if (isObject(opened))
+        parts.update(view.name, opened);
+      return;
+    });
+    const detail = (view, columns, isFocused, surface) => {
+      const { removing } = mod.state.memory;
+      const { notice, viewParams } = mod.state.session;
+      const isCmod = view.name === mod.name;
+      const actions = isCmod || removing === view.name ? undefined : [filledButton({ key: "turn", label: view.isOn ? "Turn off" : "Turn on", onPress: () => turn(view.name, !view.isOn) }), filledButton({ key: "remove", label: "Remove", onPress: () => void (mod.state.memory.removing = view.name) })];
+      const facts = [...view.isService ? ["Runs as a service of this computer"] : [], ...view.webApps.flatMap((app) => app.url !== null ? [`${app.name} opens from your other devices at ${app.url}`] : app.reason !== null ? [`${app.name} is not on your tailnet: ${app.reason}`] : [])];
+      const removal = removing === view.name ? [Banner({ tone: "warning", children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.`, actions: [filledButton({ key: "keep", variant: "primary", label: "Keep", onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: "remove-confirmed", label: "Remove", onPress: () => remove(view.name) })] })] : [];
+      const attention = [
+        ...view.isOn ? [] : [Banner({ tone: "warning", children: "Off: Claude Code does not load it." })],
+        ...view.pendingSteps.length === 0 ? [] : [Banner({ tone: "warning", children: `Needs setup: ${view.pendingSteps.join(", ")}`, actions: [filledButton({ key: "finish", variant: "primary", label: "Finish setup", onPress: () => finishSetup(view) })] })]
+      ];
+      const inner = columns - panelColumns * 2;
+      const about = [view.version, view.description].filter((part) => part !== undefined && part !== "").join(" · ");
+      const sections = [
+        ...settingsViewsOf(view).map((each) => section(`${viewSection}${each.id}`, each.title, parts.element(view.name, each.id, viewParams, inner, isFocused, surface) ?? Text({ dimColor: true, children: "Drawing…" }))),
+        ...isCmod || view.options.length === 0 ? [] : [section("options", "Options", Box({ flexDirection: "column", gap: 1, children: optionRows(view) }))],
+        ...view.hotkeys.length === 0 ? [] : [section("hotkeys", "Hotkeys", Box({ flexDirection: "column", gap: 1, children: hotkeyRows(view) }))],
+        ...isCmod ? [section("widgets", "Widgets", widgetsLayout(mod, widgets)), section("log", "Log", failuresLog()), section("preferences", "Preferences", Box({ flexDirection: "column", gap: 1, children: preferences() }))] : [],
+        ...view.changelog.length === 0 ? [] : [section("changelog", "Changelog", Box({ flexDirection: "column", gap: 1, children: changes(view) }))]
+      ];
       return Box({
         flexDirection: "column",
         gap: 1,
-        children: view.changelog.map(({ version, date, text }) => Box({
-          key: `changelog:${version}`,
-          flexDirection: "column",
-          children: [
-            Text({ children: [Text({ bold: true, children: version }), Text({ dimColor: true, children: `${date === undefined ? "" : ` · ${date}`}${version === view.version ? " · installed" : ""}` })] }),
-            Markdown({ text: text === "" ? "_No changes listed._" : text })
-          ]
-        }))
+        children: [
+          Button({ plain: true, dimColor: true, key: "back", label: "← All mods", onPress: () => select(null) }),
+          Panel({
+            title: view.name,
+            ...about === "" ? {} : { description: about },
+            ...actions === undefined ? {} : { actions },
+            children: Box({ flexDirection: "column", gap: 1, children: [...facts.map((fact) => Text({ dimColor: true, wrap: "wrap", children: fact })), ...removal, ...attention, ...notice === null ? [] : [Text({ dimColor: true, wrap: "wrap", children: notice })], ...sections] })
+          })
+        ]
+      });
+    };
+    const modList = (views) => {
+      const { notice } = mod.state.session;
+      const toneOf = (each) => !each.isOn ? { tone: "off" } : each.pendingSteps.length > 0 ? { tone: "warning" } : {};
+      return Box({
+        flexDirection: "column",
+        gap: 1,
+        children: [
+          ...notice === null ? [] : [Text({ dimColor: true, wrap: "wrap", children: notice })],
+          List({ label: "Mods", children: views.map((each) => ListItem({ key: `mod:${each.name}`, label: each.name, ...each.isOn ? each.version === "" ? {} : { description: each.version } : { description: "off" }, ...toneOf(each), onPress: () => select(each.name) })) })
+        ]
       });
     };
     return {
       draw(columns, isFocused, surface) {
-        const { removing, views } = mod.state.memory;
-        const { notice } = mod.state.session;
-        const { view, section: shownSection } = shownOf();
-        if (view === undefined)
-          return Text({ dimColor: true, children: notice ?? "Reading your mods…" });
-        const sections = sectionsOf(view);
-        const toneOf = (each) => !each.isOn ? "off" : each.pendingSteps.length > 0 ? "warning" : "neutral";
-        const rowLabel = (each) => `${each.name}${each.isOn ? "" : " (off)"}`;
-        const listColumns = Math.max(...views.map((each) => rowLabel(each).length)) + statusColumns + rowPadding + panelColumns;
-        const isWide = columns - listColumns - 1 >= detailMinColumns;
-        const mods = Panel({
-          title: "Mods",
-          children: List({
-            label: "Mods",
-            children: views.map((each) => ListItem({
-              key: `mod:${each.name}`,
-              label: each.name,
-              ...each.isOn ? {} : { description: "(off)" },
-              tone: toneOf(each),
-              isSelected: each === view,
-              onPress: () => {
-                mod.state.session.selected = each.name;
-                mod.state.session.viewParams = null;
-                mod.state.memory.removing = null;
-                changed();
-              }
-            }))
-          })
-        });
-        const actions = view.name === mod.name || removing === view.name ? [] : [
-          Box({
-            gap: 2,
-            flexShrink: 0,
-            children: [filledButton({ key: "turn", label: view.isOn ? "Turn off" : "Turn on", onPress: () => turn(view.name, !view.isOn) }), filledButton({ key: "remove", label: "Remove", onPress: () => void (mod.state.memory.removing = view.name) })]
-          })
-        ];
-        const header = Box({
-          flexDirection: "column",
-          children: [
-            Box({ justifyContent: "space-between", columnGap: 2, flexWrap: "wrap", children: [Text({ dimColor: true, children: view.version }), ...actions] }),
-            ...view.description === undefined ? [] : [Text({ dimColor: true, wrap: "wrap", children: view.description })],
-            ...view.isService ? [Text({ dimColor: true, wrap: "wrap", children: "Runs as a service of this computer" })] : [],
-            ...view.webApps.flatMap((app) => app.url !== null ? [Text({ dimColor: true, wrap: "wrap", children: `${app.name} opens from your other devices at ${app.url}` })] : app.reason !== null ? [Text({ dimColor: true, wrap: "wrap", children: `${app.name} is not on your tailnet: ${app.reason}` })] : [])
-          ]
-        });
-        const removal = removing === view.name ? [
-          Banner({
-            tone: "warning",
-            children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.`,
-            actions: [filledButton({ key: "keep", variant: "primary", label: "Keep", onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: "remove-confirmed", label: "Remove", onPress: () => remove(view.name) })]
-          })
-        ] : [];
-        const finishSetup = () => act(async () => {
-          const opened = await claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null });
-          if (isObject(opened))
-            parts.update(view.name, opened);
-          return;
-        });
-        const attention = [
-          ...view.isOn ? [] : [Banner({ tone: "warning", children: "Off: Claude Code does not load it." })],
-          ...view.pendingSteps.length === 0 ? [] : [Banner({ tone: "warning", children: `Needs setup: ${view.pendingSteps.join(", ")}`, actions: [filledButton({ key: "finish", variant: "primary", label: "Finish setup", onPress: finishSetup })] })]
-        ];
-        const detailColumns = (isWide ? columns - listColumns - 1 : columns) - panelColumns;
-        const tabs = Tabs({
-          tabs: sections,
-          selected: shownSection,
-          onSelect: (key) => {
-            mod.state.session.section = key;
-            mod.state.session.viewParams = null;
-            changed();
-          },
-          children: drawSection(view, shownSection, detailColumns, isFocused, surface)
-        });
-        const details = Panel({
-          title: view.name,
-          children: Box({
-            flexDirection: "column",
-            gap: 1,
-            children: [header, ...removal, ...attention, tabs, ...notice === null ? [] : [Text({ dimColor: true, wrap: "wrap", children: notice })]]
-          })
-        });
-        return isWide ? Box({ flexGrow: 1, columnGap: 1, children: [Box({ width: listColumns, flexShrink: 0, children: mods }), details] }) : Box({ flexDirection: "column", flexGrow: 1, gap: 1, children: [Box({ flexDirection: "column", flexShrink: 0, children: mods }), details] });
+        const { views } = mod.state.memory;
+        if (views.length === 0)
+          return Text({ dimColor: true, children: mod.state.session.notice ?? "Reading your mods…" });
+        const view = selectedView();
+        return view === undefined ? modList(views) : detail(view, columns, isFocused, surface);
       },
       refresh,
       shownView() {
-        const { view, section } = shownOf();
-        return view !== undefined && section.startsWith(viewSection) ? { mod: view.name, id: section.slice(viewSection.length) } : undefined;
+        const view = selectedView();
+        const first = view === undefined ? undefined : settingsViewsOf(view)[0];
+        return view === undefined || first === undefined ? undefined : { mod: view.name, id: first.id };
       },
       closeView(name, shown) {
-        const view = mod.state.memory.views.find((each) => each.name === name);
-        if (mod.state.session.selected !== name || mod.state.session.section !== `${viewSection}${shown}` || view === undefined)
+        const view = selectedView();
+        if (view === undefined || view.name !== name || !settingsViewsOf(view).some((each) => each.id === shown))
           return false;
-        mod.state.session.section = sectionsOf(view).find(({ key }) => !key.startsWith(viewSection))?.key ?? "hotkeys";
         mod.state.session.viewParams = null;
         return true;
       },
@@ -12691,22 +12614,20 @@ function settings2(mod) {
           throw new Error(`${name} is not a mod cmod set up.`);
         mod.state.session.selected = name;
         mod.state.memory.removing = null;
-        mod.state.session.section = section ?? sectionsOf(view)[0]?.key ?? "hotkeys";
-        mod.state.session.viewParams = params ?? null;
-        if (section !== "changelog")
+        mod.state.session.viewParams = section?.startsWith(viewSection) === true ? params ?? null : null;
+        if (section === undefined)
           return;
         const shown = view.changelog.some(({ version }) => version === view.version) ? view.version : unreleased;
-        await pane.scrollTo({ key: `changelog:${shown}` }, { block: "start" });
+        await pane.scrollTo({ key: section === "changelog" ? `changelog:${shown}` : `section:${section}` }, { block: "start" });
       }
     };
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/history.ts
-var historySession = { history: { find: "", filter: "all", layout: "tasks", toggled: [] } };
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/history.ts
+var pageRows = 50;
+var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
-var filters = ["all", "prompts", "tools", "errors"];
-var filterLabels = { all: "All", prompts: "Prompts", tools: "Tools", errors: "Errors" };
 var reloadQuietMs = 1000;
 var agentTools2 = new Set(["Agent", "Task"]);
 var summaryKeys = ["command", "file_path", "path", "pattern", "url", "description", "query", "skill", "prompt"];
@@ -12723,31 +12644,10 @@ function timeOf2(at) {
   const date = new Date(at);
   return Number.isNaN(date.getTime()) ? "" : `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-function counted(entry) {
-  let tools = 0;
-  let failures = 0;
-  const visit = (each) => {
-    if (each.kind === "tool")
-      tools += 1;
-    if (each.kind === "tool" && each.isError)
-      failures += 1;
-    each.children.forEach(visit);
-  };
-  entry.children.forEach(visit);
-  return { tools, failures };
-}
-function matchesFilter(entry, filter) {
-  if (filter === "prompts")
-    return entry.kind === "prompt";
-  if (filter === "tools")
-    return entry.kind === "tool";
-  if (filter === "errors")
-    return entry.isError;
-  return true;
-}
 function matchesFind(entry, find) {
-  return find === "" || `${entry.name} ${entry.text}`.toLowerCase().includes(find);
+  return `${entry.name} ${entry.text}`.toLowerCase().includes(find);
 }
+var holdsMatch = (entry, find) => matchesFind(entry, find) || entry.children.some((child) => holdsMatch(child, find));
 function history(mod, isShown) {
   const { claude, report } = engineOf(mod);
   const messages = new Map;
@@ -12855,98 +12755,65 @@ function history(mod, isShown) {
       return;
     sessions.current.scrollTo(message, { block: "start" }).catch((error) => report({ id: "history:scroll", message: "Could not scroll the conversation to that message", error }));
   };
+  const change = (next) => void (mod.state.session.historyView = { ...mod.state.session.historyView, ...next });
   const toggle = (key) => {
-    const { toggled } = mod.state.session.history;
-    mod.state.session.history = { ...mod.state.session.history, toggled: toggled.includes(key) ? toggled.filter((each) => each !== key) : [...toggled, key] };
+    const { opened } = mod.state.session.historyView;
+    change({ opened: opened.includes(key) ? opened.filter((each) => each !== key) : [...opened, key] });
   };
   const visible = (entries) => {
-    const { find, filter, toggled } = mod.state.session.history;
+    const { find, opened, shown: page } = mod.state.session.historyView;
     const lowered = find.trim().toLowerCase();
-    const isNarrowed = lowered !== "" || filter === "tools" || filter === "errors";
-    const newest = entries.findLast((entry) => entry.kind === "prompt")?.key;
-    const isLive = (entry) => entry.isRunning || entry.children.some(isLive);
-    const holdsMatch = (entry) => matchesFilter(entry, filter) && matchesFind(entry, lowered) || entry.children.some(holdsMatch);
-    const shown = [];
+    const isFinding = lowered !== "";
+    const newestFirst = entries.toReversed().filter((entry) => !isFinding || holdsMatch(entry, lowered));
+    const rows = [];
     const walk = (list, depth) => {
       for (const entry of list) {
-        if (filter === "prompts") {
-          if (entry.kind === "prompt" && matchesFind(entry, lowered))
-            shown.push({ entry, depth, isOpen: false });
+        if (isFinding && depth > 0 && !holdsMatch(entry, lowered))
           continue;
-        }
-        if (isNarrowed && !holdsMatch(entry))
-          continue;
-        const isOpenByDefault = entry.key === newest || isLive(entry);
-        const isOpen = entry.children.length > 0 && (isNarrowed || isOpenByDefault !== toggled.includes(entry.key));
-        shown.push({ entry, depth, isOpen });
+        const isOpen = entry.children.length > 0 && (isFinding ? entry.children.some((child) => holdsMatch(child, lowered)) : opened.includes(entry.key));
+        rows.push({ entry, depth, isOpen });
         if (isOpen)
           walk(entry.children, depth + 1);
       }
     };
-    walk(entries, 0);
-    return shown;
+    walk(newestFirst.slice(0, page), 0);
+    return { rows, earlier: Math.max(newestFirst.length - page, 0) };
   };
-  const timeline = (entries) => {
-    const { find, filter } = mod.state.session.history;
-    const lowered = find.trim().toLowerCase();
-    const all = [];
-    const walk = (list) => {
-      for (const entry of list) {
-        all.push(entry);
-        walk(entry.children);
-      }
-    };
-    walk(entries);
-    return all.filter((entry) => matchesFilter(entry, filter) && matchesFind(entry, lowered)).toSorted((one, other) => one.at.localeCompare(other.at)).map((entry) => ({ entry, depth: 0, isOpen: false }));
-  };
-  const row = ({ entry, depth, isOpen }) => {
-    const { tools, failures } = counted(entry);
-    const counts = entry.kind === "prompt" || entry.kind === "task" ? [tools > 0 ? `${tools} ${tools === 1 ? "tool" : "tools"}` : "", failures > 0 ? `${failures} failed` : ""].filter((part) => part !== "").join(" · ") : "";
-    const isRunning = entry.isRunning && entry.kind === "task";
-    const status = isRunning ? "running" : entry.isError ? "failed" : counts;
-    const isTree = mod.state.session.history.layout === "tasks" && mod.state.session.history.filter !== "prompts";
-    return ListItem({
-      key: `history:${entry.key}`,
-      leading: entry.name,
-      label: entry.text,
-      ...status === "" ? {} : { trailing: Badge({ tone: entry.isError || failures > 0 ? "critical" : isRunning ? "info" : "neutral", children: status }) },
-      ...isTree ? { depth } : {},
-      ...isTree && entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {},
-      onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null)
-    });
-  };
+  const row = ({ entry, depth, isOpen }) => ListItem({
+    key: `history:${entry.key}`,
+    label: entry.text,
+    depth,
+    ...depth === 0 ? { description: timeOf2(entry.at) } : { leading: entry.name },
+    ...entry.isError ? { tone: "critical" } : {},
+    ...entry.isRunning ? { trailing: Badge({ tone: "info", children: "Working" }) } : {},
+    ...entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {},
+    onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null)
+  });
   const draw = () => {
     const { history: entries, historyError } = mod.state.memory;
-    const { find, filter, layout } = mod.state.session.history;
+    const { find, shown } = mod.state.session.historyView;
     if (entries === null && historyError === null && loading === undefined)
       refresh();
-    const controls = Box({
-      columnGap: 2,
-      flexWrap: "wrap",
-      children: [
-        Input({ key: "history:find", label: "Find", value: find, placeholder: "Find in the history", submitLabel: "find", onInput: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
-        Select({ key: "history:filter", label: "Show", value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked }) }),
-        Select({ key: "history:layout", label: "As", value: layout, options: [{ value: "tasks", label: "Tasks" }, { value: "timeline", label: "Timeline" }], onSelect: (picked) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === "timeline" ? "timeline" : "tasks" }) })
-      ]
-    });
+    const finder = Input({ key: "history:find", label: "Find", value: find, placeholder: "Find a prompt", submitLabel: "find", onInput: (text) => change({ find: text }), onSubmit: (text) => change({ find: text }) });
     const body = () => {
       if (historyError !== null)
-        return Text({ color: "error", wrap: "wrap", children: historyError });
+        return Banner({ tone: "critical", children: historyError });
       if (entries === null)
         return Text({ dimColor: true, children: "Reading the conversation…" });
       if (entries.length === 0)
-        return Text({ dimColor: true, wrap: "wrap", children: "Nothing here yet. Each prompt you send shows here, with what Claude did for it." });
-      const rows = layout === "tasks" ? visible(entries) : timeline(entries);
+        return Text({ dimColor: true, wrap: "wrap", children: "Each prompt you send shows here, with what Claude did for it." });
+      const { rows, earlier } = visible(entries);
       if (rows.length === 0)
-        return Text({ dimColor: true, children: "No row matches." });
-      return List({ label: "History", children: rows.map(row) });
+        return Text({ dimColor: true, children: "No prompt matches." });
+      const more = earlier === 0 ? [] : [Button({ plain: true, dimColor: true, key: "history:earlier", label: `Show ${Math.min(earlier, pageRows)} earlier`, onPress: () => change({ shown: shown + pageRows }) })];
+      return Box({ flexDirection: "column", children: [List({ label: "History", children: rows.map(row) }), ...more] });
     };
-    return Box({ flexDirection: "column", gap: 1, children: [controls, body()] });
+    return Box({ flexDirection: "column", gap: 1, children: [finder, body()] });
   };
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13121,7 +12988,24 @@ function sidebar(mod, settings, history, openInBrowser) {
     onClose: () => tell()
   });
   const view = settings(pane, () => tell());
-  mod.views.add({ id: dashboardTab, title: "Dashboard", render: (_current, { columns, surface }) => drawDashboard(columns, surface) });
+  let dashboardView;
+  const hasDashboard = () => {
+    const layout = widgets.layout();
+    const running = new Set(widgets.widgets().map((widget) => widget.key));
+    return layout.areas[Dashboard].some((row) => [...row.left, ...row.right].some((key) => running.has(key) && !layout.hidden.includes(key)));
+  };
+  const placeDashboard = () => {
+    if (hasDashboard() === (dashboardView !== undefined))
+      return;
+    if (dashboardView === undefined)
+      dashboardView = mod.views.add({ id: dashboardTab, title: "Dashboard", render: (_current, { columns, surface }) => drawDashboard(columns, surface) });
+    else {
+      dashboardView.remove();
+      dashboardView = undefined;
+    }
+  };
+  placeDashboard();
+  widgets.onChange(placeDashboard);
   const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() });
   mod.views.add({ id: settingsTab, title: "Settings", render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) });
   const isFixedTab = (name, id) => name === mod.name && (id === dashboardTab || id === settingsTab);
@@ -13269,11 +13153,13 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
 var lineChars = 300;
+var snippetBefore = 60;
+var snippetAfter = 140;
 var sessionId = { type: "string", description: "The id of the session, as list_sessions names it." };
 var oneLine2 = (text) => {
   const line = firstLine(text);
@@ -13302,6 +13188,26 @@ var onTerminal = async (session, run) => {
   throw new Error(found.length === 0 ? `no program on this computer provides cmod/Terminal, so the terminal of session ${session} is out of reach. A session claude --bg started has none.` : `no terminal runs session ${session}. ${refused.join(" ")}`);
 };
 var messageLine = (message) => `${message.id}  ${message.at}  ${message.type}${message.task === undefined ? "" : ` in task ${message.task}`}: ${oneLine2(searchText(message))}`;
+var speakerOf = (message) => message.type === Prompt ? "prompt" : message.type === Reply ? "Claude" : message.type === ToolCall ? `${message.name} call` : message.type === Note ? "note" : message.type;
+var snippetOf = (text, find) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const at = flat.toLowerCase().indexOf(find.toLowerCase());
+  if (at === -1)
+    return oneLine2(flat);
+  const start = Math.max(0, at - snippetBefore);
+  const end = Math.min(flat.length, at + find.length + snippetAfter);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
+};
+var isSearchCall = (message) => message.type === ToolCall && message.name.endsWith("search_sessions");
+var foundIn = (session, id, hits, find) => {
+  const about = session === undefined ? [] : [`${session.project}${session.device === undefined ? "" : ` on ${session.device.name}`}`, session.isRunning ? "running" : `ended, last active ${session.lastAt}`];
+  return [
+    `${session?.title || "(untitled)"}${about.map((part) => ` · ${part}`).join("")}`,
+    `  session ${id}`,
+    ...hits.map((message) => `  ${message.at}  ${message.task === undefined ? "" : `subagent ${message.task}, `}${speakerOf(message)}: ${snippetOf(searchText(message), find)}  (message ${message.id})`)
+  ].join(`
+`);
+};
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
   let compaction;
@@ -13373,7 +13279,7 @@ function addClaudeTools(mod) {
   }));
   mod.use(tool({
     name: "search_sessions",
-    description: "Search the messages of Claude Code sessions for a text, newest first.",
+    description: "Search the messages of Claude Code sessions for a text, newest first. Each session found shows its title, project, and state, then each message that holds the text with the words around it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -13386,11 +13292,18 @@ function addClaudeTools(mod) {
     execute: async ({ text, everyProject }) => {
       const found = [];
       for await (const message of sessions.search(text, undefined, everyProject === undefined ? {} : { everyProject })) {
+        if (isSearchCall(message))
+          continue;
         found.push(message);
         if (found.length === foundMessages)
           break;
       }
-      return found.length === 0 ? `No message holds "${text}".` : found.map((message) => `${message.session}  ${messageLine(message)}`).join(`
+      if (found.length === 0)
+        return `No message holds "${text}".`;
+      const listed = await sessions.list(everyProject === undefined ? {} : { everyProject });
+      const ids = [...new Set(found.map((message) => message.session))];
+      return ids.map((id) => foundIn(listed.find((session) => session.id === id), id, found.filter((message) => message.session === id), text)).join(`
+
 `);
     }
   }));
@@ -13501,7 +13414,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13531,7 +13444,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -14034,7 +13947,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-5OKXre/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-6oNsDj/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
