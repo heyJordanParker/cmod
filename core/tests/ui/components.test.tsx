@@ -269,6 +269,31 @@ test('a ListItem given a depth draws a row of a tree: indented, with its ▸ or 
   expect(tested.state.session.pressed).toBe('run:1')
 })
 
+test('a Panel given a description and actions draws them on its first line, and a tree row draws its description at the right edge', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      async setup(mod) {
+        await mod.panes
+          .add({
+            id: 'page',
+            title: 'Page',
+            render: () => (
+              <Box flexDirection="column" width={40}>
+                <Panel title="demo" description="0.2.0" actions={[<Button plain key="turn" label="Turn off" onPress={() => undefined} />]}>
+                  <ListItem key="run:1" label="fix the login bug" description="12:05" depth={0} />
+                </Panel>
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.pane.lines()).toEqual(['╭─ demo ───────────────────────────────╮', '│ 0.2.0                       Turn off │', '│                                      │', '│   fix the login bug            12:05 │', '╰──────────────────────────────────────╯'])
+})
+
 test('drawWith lowers a host component with the table it draws with', () => {
   const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
 

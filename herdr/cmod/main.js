@@ -1,4 +1,4 @@
-import { View, div, image } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Tabs, Tab, Switch, Progress, ProgressTrack, ProgressIndicator, Popover, TextView, InputState, Input, TextareaState, Textarea, EditorState, Editor } from "gpui-base";
 import { exec, checking, terminals, focused, readTextFile, theme, run, props, appHome, settings, notify, panes, layout } from "herdr";
 import { WebSocket } from "websocket";
@@ -11,22 +11,23 @@ import { init, update, screen, entryOf, keyOf, QUIET_LOADING_MS } from "./panel.
 const HOMES = 'printf "%s\\n%s" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${XDG_DATA_HOME:-$HOME/.local/share}/cmod"';
 const RESIZE_MS = 250;
 const SHOW_MS = 5_000;
-const CELL_PX = 8;
-const ROW_PX = 20;
-const SPACE_PX = 8;
+const UI = {
+  text: { caption: 12, body: 13, title: 14 },
+  height: { inline: 20, control: 28, row: 32, header: 44 },
+  icon: { small: 12, body: 14 },
+  space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 },
+  radius: { pill: 4, control: 6, panel: 8 },
+  dot: 8,
+  indent: 16,
+  field: 220,
+  menu: 180,
+  note: 320,
+  cell: 8,
+  line: 20,
+};
 const MIN_COLUMNS = 20;
 const CODE_ROWS = 30;
-const TYPE = { caption: 12, body: 13, heading: 14, title: 16 };
-const RADIUS = { chip: 5, control: 7, card: 10 };
-const HEADER_PX = 42;
-const CONTROL_PX = 28;
-const ITEM_PX = 28;
-const INDENT_PX = 16;
-const INSET_PX = 12;
-const TAB_MAX_PX = 168;
-const TEXT_FIELD_MAX_PX = 360;
-const MENU_MIN_PX = 160;
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const ICONS = "mods/workspace-chrome";
 const DRAWN = "mods/cmod/.drawn";
 const SPACES = { xs: 0.25, sm: 0.5, md: 1, lg: 1.5, xl: 2 };
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
@@ -39,8 +40,7 @@ const THEMED = {
 const SURFACES = { userMessageBackground: "selected", inactive: "selected", subtle: "raised", secondaryText: "raised", promptBorder: "raised", gray: "raised", grey: "raised" };
 const BORDERS = new Set(["subtle", "inactive", "secondaryText", "promptBorder", "userMessageBackground", "text", "gray", "grey"]);
 const TONES = { info: "working", success: "done", warning: "ansi3", critical: "blocked" };
-const CELL_TEXT = /[─-▟-]| {2,}/;
-const FIELDS = new Set(["Input", "Select"]);
+const CELL_TEXT = /[─-▟]| {2,}/;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -53,6 +53,8 @@ const handlerOf = (value) => (typeof value?.$cmodHandler === "number" ? value.$c
 const shownProblem = (problem) => problem.replace(/^cmod ui: /, "");
 const cmodTabs = () => new Set(panes().filter((pane) => pane.mod === "cmod").map((pane) => pane.tab));
 const terminalFont = () => settings().font_family ?? "JetBrains Mono";
+const titled = (text) => (text.length === 0 ? text : `${text[0].toUpperCase()}${text.slice(1)}`);
+const icon = (name, size = UI.icon.small) => svg(`${ICONS}/${name}.svg`).size(size).flex_none();
 
 const pathTo = (node, isWanted) => {
   if (node === null || typeof node !== "object") return null;
@@ -69,8 +71,8 @@ const textOf = (children) => {
   return all.every((each) => typeof each === "string" || typeof each === "number") ? all.join("") : undefined;
 };
 
-const across = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * CELL_PX : undefined);
-const down = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * ROW_PX : undefined);
+const across = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * UI.cell : undefined);
+const down = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * UI.line : undefined);
 const spaceOf = (value) => (typeof value === "number" ? value : SPACES[value]);
 
 const colorOf = (value, t, role = "text") => {
@@ -180,6 +182,7 @@ const rasterRows = (cells, columns) => {
   if (row.length > 0) rows.push(row);
   return rows;
 };
+
 
 export default class Cmod extends View {
   init(_props, cx) {
@@ -317,7 +320,7 @@ export default class Cmod extends View {
     const now = screen(this.model);
     const session = this.model.target;
     const wanted = new Set();
-    for (const part of now.parts ?? []) {
+    for (const part of now.all ?? now.parts ?? []) {
       const key = `${session}\n${part.key}`;
       wanted.add(key);
       const tree = part.drawn?.tree ?? null;
@@ -449,8 +452,8 @@ export default class Cmod extends View {
   }
 
   resized(size, cx) {
-    const inset = this.model.show === "widgets" ? 0 : INSET_PX * 2;
-    const columns = Math.max(MIN_COLUMNS, Math.floor((size.width / (Number(settings().zoom) || 1) - inset) / CELL_PX));
+    const inset = this.model.show === "widgets" ? 0 : UI.space.md * 2;
+    const columns = Math.max(MIN_COLUMNS, Math.floor((size.width / (Number(settings().zoom) || 1) - inset) / UI.cell));
     if (columns === this.model.columns) return;
     this.dispatch({ type: "resized", columns }, cx);
     const resizing = (this.resizing += 1);
@@ -468,6 +471,7 @@ export default class Cmod extends View {
     });
   }
 
+
   render(cx) {
     if (!checking()) this.locate(cx);
     this.notePageTabs();
@@ -482,14 +486,14 @@ export default class Cmod extends View {
       });
     }
     if (this.model.show === "widgets") {
-      return h_flex().id("cmod-root").size_full().min_w(0).gap(SPACE_PX * 1.5).items_center().text_size(TYPE.body).text_color(t.foreground)
+      return h_flex().id("cmod-root").size_full().min_w(0).gap(UI.space.md).items_center().text_size(UI.text.body).text_color(t.foreground)
         .on_size_change((size, cx) => this.resized(size, cx))
         .children((now.parts ?? []).map((part) => this.part(part, t)))
-        .when(now.problem != null, (el) => el.child(div().text_size(TYPE.caption).text_color(t.blocked).truncate().role("alert").accessibility_label(shownProblem(now.problem ?? "")).child(shownProblem(now.problem ?? ""))));
+        .when(now.problem != null, (el) => el.child(this.alert(shownProblem(now.problem ?? ""), t).truncate()));
     }
     const isCard = this.model.show === "views" && !this.model.isWindow;
-    return v_flex().id("cmod-root").size_full().min_h(0).min_w(0).text_size(TYPE.body).text_color(t.foreground)
-      .when(isCard, (el) => el.rounded(RADIUS.card).overflow_hidden().bg(t.background).border_1().border_color(t.border))
+    return v_flex().id("cmod-root").size_full().min_h(0).min_w(0).text_size(UI.text.body).text_color(t.foreground)
+      .when(isCard, (el) => el.rounded(UI.radius.panel).overflow_hidden().bg(t.background).border_1().border_color(t.border))
       .on_size_change((size, cx) => this.resized(size, cx))
       .when(now.kind === "ready" && this.model.show === "views" && now.views.length + now.pages.length > 0, (el) => el.child(this.header(now, t)))
       .child(this.body(now, t))
@@ -497,13 +501,13 @@ export default class Cmod extends View {
   }
 
   body(now, t) {
-    if (now.kind === "noSession") return this.emptyState("No session yet", "Focus a terminal running Claude Code to see its Dashboard, History, Settings, and its mods' views.", t);
+    if (now.kind === "noSession") return this.emptyState("No session in focus", "Click a terminal running Claude Code to see its views here.", t);
     if (now.kind === "noPage") return this.emptyState("This page has no session", "Open it again from its session's views.", t);
     if (now.kind === "unreached") return this.emptyState("cmod serve isn't reachable", shownProblem(now.message ?? ""), t, { label: "Try again", run: (cx) => this.dispatch({ type: "connect" }, cx) });
     if (now.kind === "refused") return this.emptyState("This session can't show its views here", shownProblem(now.message ?? ""), t, { label: "Try again", run: (cx) => this.dispatch({ type: "retry" }, cx) });
-    if (now.kind === "loading") return now.isQuiet ? v_flex().id("cmod-body").flex_1() : this.loadingState(t);
-    if (now.parts.length === 1 && this.isLoneNote(now.parts[0])) return v_flex().id("cmod-body").flex_1().min_h(0).items_center().justify_center().p(INSET_PX * 2).child(this.part(now.parts[0], t));
-    return v_flex().id("cmod-body").flex_1().min_h(0).min_w(0).p(INSET_PX).gap(INSET_PX).overflow_y_scrollbar().children(now.parts.map((part) => this.part(part, t)));
+    if (now.kind === "loading") return now.isQuiet ? v_flex().id("cmod-body").flex_1() : this.note("Loading this session's views", t, "status");
+    if (now.parts.length === 1 && this.isLoneNote(now.parts[0])) return this.note(textOf(now.parts[0].drawn?.tree?.props?.children) ?? "", t);
+    return v_flex().id("cmod-body").flex_1().min_h(0).min_w(0).p(UI.space.md).gap(UI.space.lg).overflow_y_scrollbar().children(now.parts.map((part) => this.part(part, t)));
   }
 
   isLoneNote(part) {
@@ -511,57 +515,61 @@ export default class Cmod extends View {
     return tree?.$cmodElement === "Text" && textOf(tree.props?.children) !== undefined;
   }
 
-  emptyState(title, text, t, action) {
-    return v_flex().id("cmod-empty").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX * 0.75).p(INSET_PX * 2)
-      .child(div().role("heading").accessibility_label(title).text_size(TYPE.heading).font_semibold().text_center().child(title))
-      .child(div().role("label").accessibility_label(text).max_w(320).text_color(t.muted).text_center().child(text))
-      .when(action !== undefined, (el) => el.child(div().pt(SPACE_PX).child(this.control(Button.new("cmod-empty-action"), "outline", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
+  note(text, t, role = "label") {
+    return v_flex().id("cmod-note").flex_1().min_h(0).items_center().justify_center().p(UI.space.xl)
+      .child(div().max_w(UI.note).text_center().text_color(t.muted).role(role).accessibility_label(text).child(text));
   }
 
-  loadingState(t) {
-    return h_flex().id("cmod-loading").flex_1().min_h(0).items_center().justify_center().gap(SPACE_PX).text_color(t.muted).role("status").accessibility_label("Loading this session's views")
-      .child(div().font_family(terminalFont()).frames(SPINNER, 80).child(SPINNER[0]))
-      .child("Loading views");
+  emptyState(title, text, t, action) {
+    return v_flex().id("cmod-empty").flex_1().min_h(0).items_center().justify_center().gap(UI.space.xs).p(UI.space.xl)
+      .child(div().role("heading").accessibility_label(title).text_size(UI.text.title).font_semibold().text_center().child(title))
+      .child(div().role("label").accessibility_label(text).max_w(UI.note).text_color(t.muted).text_center().child(text))
+      .when(action !== undefined, (el) => el.child(div().pt(UI.space.md).child(this.control(Button.new("cmod-empty-action"), "secondary", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
+  }
+
+  alert(text, t) {
+    return div().text_size(UI.text.caption).text_color(t.blocked).role("alert").accessibility_label(text).child(text);
   }
 
   problemBar(problem, t) {
     const isConnection = this.model.connection.status !== "open";
-    return h_flex().id("cmod-problem").flex_none().gap(SPACE_PX).items_center().px(INSET_PX).py(SPACE_PX).border_t(1).border_color(t.border).text_size(TYPE.caption)
-      .child(div().flex_1().min_w(0).text_color(t.blocked).role("alert").accessibility_label(shownProblem(problem)).child(isConnection ? `Reconnecting to cmod serve: ${shownProblem(problem)}` : shownProblem(problem)))
-      .child(Button.new("cmod-problem-retry").accessibility_label("Try again").flex_none().px(SPACE_PX).h(24).flex().items_center().rounded(RADIUS.chip).cursor_pointer().text_color(t.muted).hover((el) => el.bg(t.hover).text_color(t.foreground))
-        .on_click((_event, cx) => this.dispatch({ type: isConnection ? "connect" : "retry" }, cx)).child("Try again"));
+    return h_flex().id("cmod-problem").flex_none().gap(UI.space.sm).items_center().px(UI.space.md).py(UI.space.xs).border_t(1).border_color(t.border)
+      .child(this.alert(isConnection ? `Reconnecting to cmod serve: ${shownProblem(problem)}` : shownProblem(problem), t).flex_1().min_w(0))
+      .child(this.control(Button.new("cmod-problem-retry"), "ghost", t).accessibility_label("Try again").on_click((_event, cx) => this.dispatch({ type: isConnection ? "connect" : "retry" }, cx)).child("Try again"));
   }
 
   control(el, kind, t) {
-    el = el.flex().flex_none().items_center().justify_center().gap(SPACE_PX * 0.75).rounded(RADIUS.control).border_1().cursor_pointer().max_w_full();
-    el = kind === "ghost" ? el.py(2) : el.h(CONTROL_PX).px(SPACE_PX * 1.5);
-    if (kind === "primary") return el.bg(t.solid).border_color(t.solid).text_color(t.solid_foreground).font_medium().hover((h) => h.opacity(0.9)).focus((f) => f.border_color(t.accent));
-    if (kind === "outline") return el.bg(t.raised).border_color(t.border).font_medium().hover((h) => h.bg(t.hover)).focus((f) => f.border_color(t.accent));
-    return el.border_color("#00000000").hover((h) => h.text_color(t.foreground)).focus((f) => f.border_color(t.accent));
+    el = el.flex().flex_none().items_center().justify_center().gap(UI.space.xs).h(UI.height.control).rounded(UI.radius.control).text_size(UI.text.body).font_medium().cursor_pointer().max_w_full();
+    if (kind === "primary") return el.px(UI.space.md).bg(t.solid).text_color(t.solid_foreground).hover((h) => h.opacity(0.9));
+    if (kind === "secondary") return el.px(UI.space.md).border_1().border_color(t.border).bg(t.raised).hover((h) => h.bg(t.hover));
+    return el.px(UI.space.sm).text_color(t.muted).hover((h) => h.bg(t.hover).text_color(t.foreground));
+  }
+
+  choice(el, isChosen, t) {
+    return el.flex().flex_none().items_center().gap(UI.space.xs).h(UI.height.control).px(UI.space.sm).rounded(UI.radius.control).text_size(UI.text.body).cursor_pointer()
+      .when(isChosen, (e) => e.bg(t.selected).text_color(t.foreground).font_medium())
+      .when(!isChosen, (e) => e.text_color(t.muted).hover((h) => h.bg(t.hover).text_color(t.foreground)));
   }
 
   header(now, t) {
     const shown = now.shown;
-    const tab = (el, isSelected) => el.flex_none().max_w(TAB_MAX_PX).h(CONTROL_PX).px(SPACE_PX * 1.25).flex().items_center().rounded(RADIUS.control).truncate().cursor_pointer()
-      .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.bg(t.selected)).hover((el) => el.bg(t.hover).text_color(t.foreground));
     const viewTabs = now.views.map((view, index) => {
       const key = keyOf(view);
       const isSelected = shown !== undefined && key === keyOf(shown);
-      return tab(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, now.views.length).accessibility_label(view.title), isSelected)
+      return this.choice(Tab.new(`cmod-tab-${key}`).selected(isSelected).set_position(index + 1, now.views.length).accessibility_label(titled(view.title)), isSelected, t)
         .on_click((_event, cx) => this.dispatch({ type: "select", key }, cx))
-        .child(view.title);
+        .child(titled(view.title));
     });
     const session = this.model.target;
     const pageTabs = now.pages.map((page) =>
-      tab(Button.new(`cmod-page-${keyOf(page)}`).role("link").accessibility_label(`${page.title}, opens in its own tab`).tooltip(`Open ${page.title} in its own tab`).gap(SPACE_PX / 2), false)
+      this.choice(Button.new(`cmod-page-${keyOf(page)}`).role("link").accessibility_label(`${titled(page.title)}, opens in its own tab`).tooltip(`Opens ${titled(page.title)} in its own tab`), false, t)
         .on_click(() => this.openPage(session, page))
-        .child(div().truncate().child(page.title))
-        .child(div().flex_none().text_color(t.dim).child("↗")),
+        .child(titled(page.title)),
     );
-    return h_flex().id("cmod-header").flex_none().h(HEADER_PX).px(SPACE_PX).items_center().border_b(1).border_color(t.border).child(
-      Tabs.new("cmod-tabs").accessibility_label("Views").h_flex().flex_1().min_w(0).h_full().items_center().gap(SPACE_PX / 4).overflow_x_scroll()
+    return h_flex().id("cmod-header").flex_none().h(UI.height.header).px(UI.space.sm).items_center().border_b(1).border_color(t.border).child(
+      Tabs.new("cmod-tabs").accessibility_label("Views").h_flex().flex_1().min_w(0).h_full().items_center().gap(2).overflow_x_scroll()
         .children(viewTabs)
-        .when(pageTabs.length > 0, (el) => el.child(div().flex_none().w(1).h(16).mx(SPACE_PX / 2).bg(t.border)).children(pageTabs)),
+        .when(pageTabs.length > 0, (el) => el.child(div().flex_none().w(UI.space.sm)).children(pageTabs)),
     );
   }
 
@@ -569,13 +577,12 @@ export default class Cmod extends View {
     const drawn = this.drawnParts.get(`${this.model.target}\n${part.key}`);
     const tree = part.drawn?.tree ?? null;
     const error = part.drawn?.error ?? null;
-    const alert = (text) => div().text_color(t.blocked).text_size(TYPE.caption).role("alert").accessibility_label(text).child(text);
-    if (tree === null) return error === null ? div().id(`part-${part.key}`) : alert(error);
+    if (tree === null) return error === null ? div().id(`part-${part.key}`) : this.alert(error, t);
     if (drawn === undefined) return div().id(`part-${part.key}`);
-    if (this.isLoneNote(part)) return div().max_w(320).text_center().text_color(t.muted).role("label").accessibility_label(textOf(tree.props?.children)).child(textOf(tree.props?.children));
-    return v_flex().id(`part-${part.key}`).min_w(0).gap(SPACE_PX)
+    if (this.isLoneNote(part)) return div().text_color(t.muted).role("label").accessibility_label(textOf(tree.props?.children)).child(textOf(tree.props?.children));
+    return v_flex().id(`part-${part.key}`).min_w(0).gap(UI.space.sm)
       .children(this.nodes(tree, drawn, drawn.key, t))
-      .when(error !== null, (el) => el.child(alert(error ?? "")));
+      .when(error !== null, (el) => el.child(this.alert(error ?? "", t)));
   }
 
   nodes(value, drawn, path, t, inColumn = true) {
@@ -603,7 +610,7 @@ export default class Cmod extends View {
     el = isColumn ? el.flex_col() : el.flex_row();
     if (given.flexWrap === "wrap") el = el.flex_wrap();
     const children = [given.children].flat(Infinity);
-    const align = given.alignItems ?? (isColumn ? undefined : children.some((child) => FIELDS.has(child?.$cmodElement)) ? "center" : "flex-start");
+    const align = given.alignItems ?? (isColumn ? undefined : "center");
     el = { "flex-start": (e) => e.items_start(), center: (e) => e.items_center(), "flex-end": (e) => e.items_end(), stretch: (e) => e.items_stretch() }[align]?.(el) ?? el;
     el = { "flex-start": (e) => e.self_start(), center: (e) => e.self_center(), "flex-end": (e) => e.self_end() }[given.alignSelf]?.(el) ?? el;
     el = { "flex-start": (e) => e.justify_start(), center: (e) => e.justify_center(), "flex-end": (e) => e.justify_end(), "space-between": (e) => e.justify_between(), "space-around": (e) => e.justify_around(), "space-evenly": (e) => e.justify_evenly() }[given.justifyContent]?.(el) ?? el;
@@ -611,15 +618,15 @@ export default class Cmod extends View {
     if (given.flexShrink === 0) el = el.flex_shrink_0();
     const gapX = spaceOf(given.columnGap ?? given.gap);
     const gapY = spaceOf(given.rowGap ?? given.gap) ?? (given.flexWrap === "wrap" && !isColumn ? 1 : undefined);
-    if (gapX !== undefined) el = el.gap_x(gapX * SPACE_PX);
-    if (gapY !== undefined) el = el.gap_y(gapY * SPACE_PX);
+    if (gapX !== undefined) el = el.gap_x(gapX * UI.space.sm);
+    if (gapY !== undefined) el = el.gap_y(gapY * UI.space.sm);
     const isBordered = typeof given.borderStyle === "string";
     for (const [side, axis, method] of [["Top", "Y", "t"], ["Right", "X", "r"], ["Bottom", "Y", "b"], ["Left", "X", "l"]]) {
       const padding = spaceOf(given[`padding${side}`] ?? given[`padding${axis}`] ?? given.padding);
       const margin = spaceOf(given[`margin${side}`] ?? given[`margin${axis}`] ?? given.margin);
-      const inset = (padding ?? 0) * SPACE_PX + (isBordered ? INSET_PX : 0);
+      const inset = (padding ?? 0) * UI.space.sm + (isBordered ? UI.space.md : 0);
       if (inset > 0) el = el[`p${method}`](inset);
-      if (margin !== undefined && margin !== 0) el = el[`m${method}`](margin * SPACE_PX);
+      if (margin !== undefined && margin !== 0) el = el[`m${method}`](margin * UI.space.sm);
     }
     for (const [prop, method, size] of [["width", "w", across], ["height", "h", down], ["minWidth", "min_w", across], ["minHeight", "min_h", down]]) {
       const value = size(given[prop]);
@@ -634,9 +641,9 @@ export default class Cmod extends View {
     }
     const background = colorOf(given.backgroundColor, t, "surface");
     if (isBordered) {
-      el = el.border_1().border_color(colorOf(given.borderColor, t, "border") ?? t.border).rounded(given.borderStyle === "round" ? RADIUS.card : RADIUS.control);
+      el = el.border_1().border_color(colorOf(given.borderColor, t, "border") ?? t.border).rounded(UI.radius.panel);
       if (given.borderStyle === "dashed" || given.borderStyle === "classic") el = el.border_dashed();
-    } else if (background !== undefined) el = el.rounded(RADIUS.control);
+    } else if (background !== undefined) el = el.rounded(UI.radius.control);
     if (background !== undefined) el = el.bg(background);
     if (given.overflow === "hidden" || isBordered) el = el.overflow_hidden();
     const hoverBackground = colorOf(given.hover?.backgroundColor, t, "surface");
@@ -658,7 +665,7 @@ export default class Cmod extends View {
     if (given.italic === true) el = el.italic();
     if (given.underline === true) el = el.underline();
     if (given.strikethrough === true) el = el.line_through();
-    const size = { caption: TYPE.caption, footnote: TYPE.caption, heading: TYPE.heading, title: TYPE.title }[given.size];
+    const size = { caption: UI.text.caption, footnote: UI.text.caption, heading: UI.text.title, title: UI.text.title }[given.size];
     if (size !== undefined) el = el.text_size(size);
     if (given.size === "heading" || given.size === "title") el = el.font_semibold();
     if (typeof given.wrap === "string" && given.wrap !== "wrap") el = el.truncate();
@@ -679,21 +686,18 @@ export default class Cmod extends View {
     const words = textOf(given.children);
     const key = typeof given.key === "string" ? given.key : label ?? words ?? path;
     const name = (label ?? words ?? key).trim();
-    const hotkey = typeof given.hotkey === "string" ? given.hotkey : undefined;
-    const kind = given.variant === "primary" ? "primary" : given.plain === true && given.variant === undefined && given.dimColor === true ? "ghost" : "outline";
+    const kind = given.variant === "primary" ? "primary" : given.plain === true && given.dimColor === true ? "ghost" : "secondary";
     let el = this.control(Button.new(`${drawn.key}:${key}`).accessibility_label(name), kind, t);
     if (inColumn) el = el.self_start();
-    if (kind === "ghost") el = el.text_color(t.muted).justify_start();
     el = el.on_click((_event, cx) => (handler !== undefined ? this.press(drawn, handler, { key }, cx) : typeof given.href === "string" ? this.openLink(given.href, cx) : undefined));
-    if (label === undefined && words === undefined && given.children !== undefined && !(Array.isArray(given.children) && given.children.length === 0)) return el.child(h_flex().min_w(0).gap(SPACE_PX / 2).children(this.nodes(given.children, drawn, `${path}.children`, t, false)));
-    return el.child(div().min_w(0).truncate().child(name))
-      .when(hotkey !== undefined && label !== undefined, (e) => e.child(div().flex_none().px(SPACE_PX / 2).rounded(RADIUS.chip).bg(t.raised).text_size(TYPE.caption).text_color(t.muted).child((hotkey ?? "").toUpperCase())));
+    if (label === undefined && words === undefined && given.children !== undefined && !(Array.isArray(given.children) && given.children.length === 0)) return el.child(h_flex().min_w(0).gap(UI.space.xs).children(this.nodes(given.children, drawn, `${path}.children`, t, false)));
+    return el.child(div().min_w(0).truncate().child(name));
   }
 
   link(given, drawn, _path, t) {
     const href = typeof given.href === "string" ? given.href : "";
     const shown = textOf(given.children) || (typeof given.label === "string" ? given.label : href);
-    return Button.new(`${drawn.key}:link:${href}`).accessibility_label(shown).role("link").cursor_pointer().rounded(RADIUS.chip).text_color(t.accent).hover((h) => h.underline()).focus((f) => f.underline())
+    return Button.new(`${drawn.key}:link:${href}`).accessibility_label(shown).role("link").cursor_pointer().rounded(UI.radius.pill).text_color(t.accent).hover((h) => h.underline()).focus((f) => f.underline())
       .on_click((_event, cx) => this.openLink(href, cx)).child(shown);
   }
 
@@ -701,8 +705,8 @@ export default class Cmod extends View {
     const field = drawn.fields.get(`code:${given.key ?? path}`);
     const source = typeof given.source === "string" ? given.source : "";
     const rows = Math.min(Math.max(source.split("\n").length, 1), CODE_ROWS);
-    if (!field) return div().font_family(terminalFont()).text_size(TYPE.caption).text_color(t.muted).child(source);
-    return div().id(`${drawn.key}:code:${given.key ?? path}`).h(rows * ROW_PX + SPACE_PX * 2).rounded(RADIUS.control).border_1().border_color(t.border).bg(t.background).overflow_hidden().child(Editor.new(field.state).size_full());
+    if (!field) return div().font_family(terminalFont()).text_size(UI.text.caption).text_color(t.muted).child(source);
+    return div().id(`${drawn.key}:code:${given.key ?? path}`).h(rows * UI.line + UI.space.md).rounded(UI.radius.control).border_1().border_color(t.border).bg(t.background).overflow_hidden().child(Editor.new(field.state).size_full());
   }
 
   markdown(given, drawn, path, t) {
@@ -715,20 +719,17 @@ export default class Cmod extends View {
     return el;
   }
 
-  fieldLabel(label, t) {
-    return div().flex_none().text_color(t.muted).child(label);
-  }
-
   input(given, drawn, _path, t) {
     const field = drawn.fields.get(`input:${given.key}`);
     const label = typeof given.label === "string" ? given.label : undefined;
     const name = label ?? (typeof given.placeholder === "string" ? given.placeholder : given.key);
-    const rows = field?.rows ?? 1;
     if (!field) return div().text_color(t.muted).child(typeof given.value === "string" ? given.value : "");
-    return h_flex().id(`${drawn.key}:field:${given.key}`).flex_1().min_w(160).max_w(TEXT_FIELD_MAX_PX).gap(SPACE_PX).px(SPACE_PX * 1.25).rounded(RADIUS.control).border_1().border_color(t.input).bg(t.background).cursor_text()
-      .when(rows > 1, (el) => el.items_start().py(SPACE_PX * 0.75).min_h(rows * ROW_PX + SPACE_PX * 2)).when(rows === 1, (el) => el.items_center().h(CONTROL_PX))
-      .when(label !== undefined, (el) => el.child(this.fieldLabel(label ?? "", t)))
-      .child((rows > 1 ? Textarea : Input).new(field.state).accessibility_label(name).flex_1().min_w(0));
+    let control = (field.rows > 1 ? Textarea : Input).new(field.state).accessibility_label(name).px(UI.space.sm).rounded(UI.radius.control).border_1().border_color(t.input).bg(t.background).text_size(UI.text.body).text_color(t.foreground);
+    control = field.rows > 1 ? control.min_h(field.rows * UI.line + UI.space.md) : control.h(UI.height.row);
+    if (label === undefined) return control.w_full().min_w(0);
+    return h_flex().id(`${drawn.key}:field:${given.key}`).w_full().min_w(0).gap(UI.space.md).items_center()
+      .child(div().flex_1().min_w(0).truncate().child(label))
+      .child(control.w(UI.field).flex_none());
   }
 
   select(given, drawn, _path, t) {
@@ -740,22 +741,21 @@ export default class Cmod extends View {
     const chosen = options.find((option) => option.value === given.value);
     const shownOf = (option) => (typeof option.label === "string" ? option.label : option.value);
     const trigger = div().id(`${id}:trigger`).role("button").accessibility_label(`${label}: ${chosen === undefined ? "none" : shownOf(chosen)}`)
-      .flex().flex_none().items_center().gap(SPACE_PX * 0.75).h(CONTROL_PX).px(SPACE_PX * 1.25).max_w_full().rounded(RADIUS.control).border_1().border_color(t.border).cursor_pointer()
+      .flex().flex_none().items_center().gap(UI.space.xs).h(UI.height.control).px(UI.space.sm).max_w_full().rounded(UI.radius.control).border_1().border_color(t.border).cursor_pointer()
       .bg(isOpen ? t.hover : t.raised).hover((el) => el.bg(t.hover))
-      .when(typeof given.label === "string", (el) => el.child(div().flex_none().text_color(t.muted).child(given.label)))
-      .child(div().min_w(0).truncate().child(chosen === undefined ? "" : shownOf(chosen)))
-      .child(div().flex_none().text_size(TYPE.caption).text_color(t.dim).child("▾"));
-    const menu = v_flex().id(`${id}:menu`).role("menu").accessibility_label(label).min_w(MENU_MIN_PX).p(SPACE_PX / 2).gap(1).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover).shadow_lg().children(
+      .child(div().min_w(0).truncate().when(chosen === undefined, (el) => el.text_color(t.muted)).child(chosen === undefined ? label : shownOf(chosen)))
+      .child(icon("chevron-down").text_color(t.muted));
+    const menu = v_flex().id(`${id}:menu`).role("menu").accessibility_label(label).min_w(UI.menu).p(UI.space.xs).gap(1).rounded(UI.radius.panel).border_1().border_color(t.border).bg(t.popover).shadow_lg().children(
       options.map((option) => {
         const isSelected = option.value === given.value;
         return Button.new(`${id}:${option.value}`).role("menu_item_radio").selected(isSelected).accessibility_label(shownOf(option))
-          .h(CONTROL_PX).px(SPACE_PX).flex().items_center().gap(SPACE_PX).rounded(RADIUS.chip).cursor_pointer().text_color(t.foreground).hover((el) => el.bg(t.hover))
+          .h(UI.height.control).px(UI.space.sm).flex().items_center().gap(UI.space.sm).rounded(UI.radius.pill).cursor_pointer().text_color(t.foreground).hover((el) => el.bg(t.hover))
           .on_click((_event, cx) => {
             this.openMenu = null;
             this.press(drawn, handler, { key: given.key, value: option.value }, cx);
             cx.notify();
           })
-          .child(div().flex_none().w(12).text_color(t.accent).child(isSelected ? "✓" : ""))
+          .child(div().flex_none().size(UI.icon.small).text_color(t.accent).when(isSelected, (el) => el.child(icon("check"))))
           .child(div().min_w(0).truncate().child(shownOf(option)));
       }),
     );
@@ -770,8 +770,8 @@ export default class Cmod extends View {
     const file = drawn.prepared.get(path);
     const frame = div().role("image").accessibility_label(label);
     if (!file) return frame.text_color(t.dim).child(label);
-    const width = typeof given.columns === "number" ? given.columns * CELL_PX : given.width;
-    const height = typeof given.rows === "number" ? given.rows * ROW_PX : given.height;
+    const width = typeof given.columns === "number" ? given.columns * UI.cell : given.width;
+    const height = typeof given.rows === "number" ? given.rows * UI.line : given.height;
     let picture = image(file);
     if (typeof width === "number") picture = picture.w(width);
     if (typeof height === "number") picture = picture.h(height);
@@ -781,7 +781,7 @@ export default class Cmod extends View {
   raster(given, drawn, path) {
     const rows = drawn.prepared.get(path) ?? [];
     const label = typeof given.label === "string" ? given.label : "";
-    return v_flex().role("image").accessibility_label(label).font_family(terminalFont()).line_height(ROW_PX).children(
+    return v_flex().role("image").accessibility_label(label).font_family(terminalFont()).line_height(UI.line).children(
       rows.map((row) => h_flex().children(row.map((cells) => {
         let el = div().whitespace_nowrap().child(cells.text);
         if (cells.fg !== null) el = el.text_color(cells.fg);
@@ -793,41 +793,46 @@ export default class Cmod extends View {
 
   tabs(given, drawn, path, t) {
     const tabs = Array.isArray(given.tabs) ? given.tabs : [];
-    const strip = Tabs.new(`${drawn.key}:${given.key ?? ""}tabs`).accessibility_label("Sections").h_flex().min_w(0).gap(SPACE_PX * 2).border_b(1).border_color(t.border).overflow_x_scroll().children(
+    const strip = Tabs.new(`${drawn.key}:${given.key ?? ""}tabs`).accessibility_label("Sections").h_flex().min_w(0).flex_wrap().gap(2).children(
       tabs.map((each, index) => {
         const isSelected = each.isSelected === true;
-        return Tab.new(`${drawn.key}:${given.key ?? ""}tab:${each.key}`).selected(isSelected).set_position(index + 1, tabs.length).accessibility_label(each.label)
-          .flex_none().py(SPACE_PX * 0.75).border_b(2).border_color(isSelected ? t.accent : "#00000000").cursor_pointer()
-          .text_color(isSelected ? t.foreground : t.muted).when(isSelected, (el) => el.font_medium()).hover((el) => el.text_color(t.foreground))
+        return this.choice(Tab.new(`${drawn.key}:${given.key ?? ""}tab:${each.key}`).selected(isSelected).set_position(index + 1, tabs.length).accessibility_label(each.label), isSelected, t)
           .on_click((_event, cx) => this.press(drawn, handlerOf(each.onSelect), { key: `${given.key ?? ""}tab:${each.key}` }, cx))
           .child(each.label);
       }),
     );
-    return v_flex().min_w(0).gap(INSET_PX).child(strip).children(this.nodes(given.children, drawn, `${path}.children`, t));
+    return v_flex().min_w(0).gap(UI.space.md).child(strip).children(this.nodes(given.children, drawn, `${path}.children`, t));
   }
 
   split(given, drawn, path, t) {
     const children = Array.isArray(given.children) ? given.children : [given.children];
-    return h_flex().min_w(0).gap(INSET_PX).items_start().children(children.map((child, index) => v_flex().flex_1().min_w(0).children(this.nodes(child, drawn, `${path}.children.${index}`, t))));
+    return h_flex().min_w(0).gap(UI.space.lg).items_start().children(children.map((child, index) => v_flex().flex_1().min_w(0).gap(UI.space.sm).children(this.nodes(child, drawn, `${path}.children.${index}`, t))));
   }
 
   panel(given, drawn, path, t) {
     const title = typeof given.title === "string" ? given.title : "";
+    const description = typeof given.description === "string" && given.description !== "" ? given.description : undefined;
+    const hasHeader = description !== undefined || given.actions !== undefined;
     const body = this.nodes(given.children, drawn, `${path}.children`, t);
-    if (path === drawn.key) return v_flex().flex_grow(1).min_w(0).gap(INSET_PX).role("region").accessibility_label(title).children(body);
-    return v_flex().flex_grow(1).min_w(0).gap(SPACE_PX).role("region").accessibility_label(title)
-      .child(div().text_size(TYPE.caption).font_medium().text_color(t.muted).truncate().role("heading").accessibility_label(title).child(title))
-      .child(v_flex().min_w(0).gap(SPACE_PX).children(body));
+    if (path === drawn.key && !hasHeader) return v_flex().flex_grow(1).min_w(0).gap(UI.space.lg).role("region").accessibility_label(title).children(body);
+    const heading = div().flex_1().min_w(0).truncate().role("heading").accessibility_label(title)
+      .when(hasHeader, (el) => el.text_size(UI.text.title).font_semibold().text_color(t.foreground))
+      .when(!hasHeader, (el) => el.text_size(UI.text.caption).font_medium().text_color(t.muted))
+      .child(title);
+    return v_flex().flex_grow(1).min_w(0).gap(UI.space.sm).role("region").accessibility_label(title)
+      .child(h_flex().min_w(0).gap(UI.space.sm).items_center().child(heading).when(given.actions !== undefined, (el) => el.child(h_flex().flex_none().gap(UI.space.sm).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false)))))
+      .when(description !== undefined, (el) => el.child(div().text_color(t.muted).child(description ?? "")))
+      .child(v_flex().min_w(0).gap(UI.space.md).pt(hasHeader ? UI.space.sm : 0).children(body));
   }
 
   toggle(given, drawn, _path, t) {
     const label = typeof given.label === "string" ? given.label : "";
     const checked = given.checked === true;
-    const track = div().flex_none().w(28).h(16).rounded(8).p(2).flex().items_center().bg(checked ? t.accent : t.border).when(checked, (el) => el.justify_end())
-      .child(div().w(12).h(12).rounded(6).bg(checked ? t.accent_foreground : t.foreground));
-    return Switch.new(`${drawn.key}:${given.key ?? ""}toggle:${label}`).checked(checked).accessibility_label(label).self_start().flex().items_center().gap(SPACE_PX).cursor_pointer()
+    const track = div().flex_none().w(32).h(18).rounded(9).p(2).flex().items_center().bg(checked ? t.accent : t.border).when(checked, (el) => el.justify_end())
+      .child(div().size(14).rounded(7).bg(checked ? t.accent_foreground : t.foreground));
+    return Switch.new(`${drawn.key}:${given.key ?? ""}toggle:${label}`).checked(checked).accessibility_label(label).w_full().min_w(0).min_h(UI.height.row).flex().items_center().gap(UI.space.md).cursor_pointer()
       .on_change((_checked, cx) => this.press(drawn, handlerOf(given.onToggle), { key: `${given.key ?? ""}toggle:${label}` }, cx))
-      .child(track).child(div().child(label));
+      .child(div().flex_1().min_w(0).child(label)).child(track);
   }
 
   tooltip(given, drawn, path, t) {
@@ -837,36 +842,36 @@ export default class Cmod extends View {
   help(given, drawn, _path, t) {
     const text = typeof given.text === "string" ? given.text : "";
     const isOpen = given.isOpen === true;
-    return v_flex().min_w(0).gap(SPACE_PX / 2)
-      .child(Button.new(`${drawn.key}:${given.key ?? ""}help:${text}`).accessibility_label("Help").tooltip(text).flex_none().w(20).h(20).flex().items_center().justify_center().rounded(10).border_1().border_color(t.border).text_color(t.muted).cursor_pointer().hover((el) => el.text_color(t.foreground))
+    return v_flex().min_w(0).gap(UI.space.xs)
+      .child(Button.new(`${drawn.key}:${given.key ?? ""}help:${text}`).accessibility_label("Help").tooltip(text).flex_none().size(UI.height.inline).flex().items_center().justify_center().rounded(UI.height.inline / 2).border_1().border_color(t.border).text_size(UI.text.caption).text_color(t.muted).cursor_pointer().hover((el) => el.text_color(t.foreground))
         .on_click((_event, cx) => this.press(drawn, handlerOf(given.onToggle), { key: `${given.key ?? ""}help-button:${text}` }, cx)).child("?"))
-      .when(isOpen, (el) => el.child(div().max_w(320).p(SPACE_PX).rounded(RADIUS.control).bg(t.raised).border_1().border_color(t.border).text_size(TYPE.caption).role("note").accessibility_label(text).child(text)));
+      .when(isOpen, (el) => el.child(div().max_w(UI.note).p(UI.space.sm).rounded(UI.radius.control).bg(t.raised).text_size(UI.text.caption).role("note").accessibility_label(text).child(text)));
   }
 
   dialog(given, drawn, path, t) {
     const title = typeof given.title === "string" ? given.title : "";
-    return v_flex().min_w(0).gap(INSET_PX).p(INSET_PX).rounded(RADIUS.card).border_1().border_color(t.border).bg(t.popover ?? t.background).role("dialog").accessibility_label(title)
-      .child(div().text_size(TYPE.heading).font_semibold().role("heading").accessibility_label(title).child(title))
-      .child(v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)))
-      .child(h_flex().flex_wrap().gap(SPACE_PX).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false)));
+    return v_flex().min_w(0).gap(UI.space.md).p(UI.space.lg).rounded(UI.radius.panel).border_1().border_color(t.border).bg(t.popover ?? t.background).role("dialog").accessibility_label(title)
+      .child(div().text_size(UI.text.title).font_semibold().role("heading").accessibility_label(title).child(title))
+      .child(v_flex().min_w(0).gap(UI.space.sm).children(this.nodes(given.children, drawn, `${path}.children`, t)))
+      .child(h_flex().flex_wrap().gap(UI.space.sm).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false)));
   }
 
   pagination(given, drawn, _path, t) {
-    const step = (handler, label, hotkey) => {
+    const step = (handler, label) => {
       const isOff = handlerOf(handler) === undefined;
-      return this.control(Button.new(`${drawn.key}:page:${label}`), "outline", t).accessibility_label(label).disabled(isOff).when(isOff, (el) => el.opacity(0.45).cursor_default())
-        .on_click((_event, cx) => this.press(drawn, handlerOf(handler), { key: label }, cx)).child(label).child(div().flex_none().px(SPACE_PX / 2).rounded(RADIUS.chip).bg(t.background).text_size(TYPE.caption).text_color(t.muted).child(hotkey.toUpperCase()));
+      return this.control(Button.new(`${drawn.key}:page:${label}`), "secondary", t).accessibility_label(label).disabled(isOff).when(isOff, (el) => el.opacity(0.45).cursor_default())
+        .on_click((_event, cx) => this.press(drawn, handlerOf(handler), { key: label }, cx)).child(label);
     };
-    return h_flex().role("navigation").accessibility_label("Pages").gap(SPACE_PX).items_center()
-      .child(step(given.onPrevious, "Previous", "p"))
+    return h_flex().role("navigation").accessibility_label("Pages").gap(UI.space.sm).items_center()
+      .child(step(given.onPrevious, "Previous"))
       .child(div().text_color(t.muted).child(`${given.page ?? 1} of ${given.pages ?? 1}`))
-      .child(step(given.onNext, "Next", "n"));
+      .child(step(given.onNext, "Next"));
   }
 
   progress(given, drawn, _path, t) {
     const value = typeof given.value === "number" ? Math.min(Math.max(given.value, 0), 100) : 0;
     const label = typeof given.label === "string" ? given.label : `${Math.round(value)}%`;
-    const width = typeof given.width === "number" ? given.width * CELL_PX : undefined;
+    const width = typeof given.width === "number" ? given.width * UI.cell : undefined;
     return Progress.new(`${drawn.key}:progress:${label}`).value(value).accessibility_label(label).flex().items_center().min_w(0).when(width === undefined, (el) => el.flex_1()).when(width !== undefined, (el) => el.w(width ?? 0))
       .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.border).overflow_hidden().child(ProgressIndicator.new().h_full().w(`${value}%`).rounded(3).bg(t.accent)));
   }
@@ -882,26 +887,26 @@ export default class Cmod extends View {
     const handler = handlerOf(given.onPress);
     const toggle = handlerOf(given.onToggle);
     const isTree = typeof given.depth === "number";
-    const dot = given.tone === undefined ? null : given.tone === "off" ? div().flex_none().w(8).h(8).rounded(4).border_1().border_color(t.dim) : div().flex_none().w(8).h(8).rounded(4).bg(toneOf(given.tone, t));
+    const dot = given.tone === undefined ? null : given.tone === "off" ? div().flex_none().size(UI.dot).rounded(UI.dot / 2).border_1().border_color(t.dim) : div().flex_none().size(UI.dot).rounded(UI.dot / 2).bg(toneOf(given.tone, t));
     const opener = !isTree
       ? null
       : typeof given.isOpen === "boolean" && toggle !== undefined
-        ? Button.new(`${drawn.key}:${key}:toggle`).role("disclosure_triangle").accessibility_label(given.isOpen ? `Close ${label}` : `Open ${label}`).flex_none().w(INDENT_PX).h(ITEM_PX).flex().items_center().justify_center().rounded(RADIUS.chip).cursor_pointer().text_size(TYPE.caption).text_color(t.dim).hover((el) => el.text_color(t.foreground))
-          .on_click((_event, cx) => this.press(drawn, toggle, { key: `${key}:toggle` }, cx)).child(given.isOpen ? "▾" : "▸")
-        : div().flex_none().w(INDENT_PX);
-    const content = (el) => el.flex_1().h(ITEM_PX).px(SPACE_PX).flex().items_center().gap(SPACE_PX).rounded(RADIUS.control).min_w(0).text_color(t.foreground)
+        ? Button.new(`${drawn.key}:${key}:toggle`).role("disclosure_triangle").accessibility_label(given.isOpen ? `Close ${label}` : `Open ${label}`).flex_none().size(UI.height.inline).flex().items_center().justify_center().rounded(UI.radius.pill).cursor_pointer().text_color(t.dim).hover((el) => el.bg(t.hover).text_color(t.foreground))
+          .on_click((_event, cx) => this.press(drawn, toggle, { key: `${key}:toggle` }, cx)).child(icon(given.isOpen ? "chevron-down" : "chevron-right"))
+        : div().flex_none().w(UI.height.inline);
+    const content = (el) => el.flex_1().min_w(0).h(UI.height.row).px(UI.space.sm).flex().items_center().gap(UI.space.sm).rounded(UI.radius.control).text_color(t.foreground)
       .when(isSelected, (e) => e.bg(t.selected).font_medium())
       .when(dot !== null, (e) => e.child(dot))
       .when(typeof given.leading === "string", (e) => e.child(div().flex_none().text_color(t.muted).child(given.leading ?? "")))
       .child(div().flex_1().min_w(0).truncate().child(label))
-      .when(typeof given.description === "string", (e) => e.child(div().flex_none().text_color(t.muted).child(given.description ?? "")))
-      .when(given.trailing !== undefined, (e) => e.child(h_flex().flex_none().gap(SPACE_PX / 2).items_center().children(this.nodes(given.trailing, drawn, `${path}.trailing`, t, false))));
+      .when(typeof given.description === "string", (e) => e.child(div().flex_none().text_size(UI.text.caption).text_color(t.muted).child(given.description ?? "")))
+      .when(given.trailing !== undefined, (e) => e.child(h_flex().flex_none().gap(UI.space.xs).items_center().children(this.nodes(given.trailing, drawn, `${path}.trailing`, t, false))));
     const row = handler === undefined
       ? content(div())
       : content(Button.new(`${drawn.key}:${key}`).selected(isSelected).accessibility_label(label).cursor_pointer().hover((el) => el.bg(isSelected ? t.selected : t.hover)))
         .on_click((_event, cx) => this.press(drawn, handler, { key }, cx));
-    return h_flex().min_w(0).items_center().role(isTree ? "tree_item" : "list_item").accessibility_label(label).aria_selected(isSelected)
-      .when(isTree, (el) => el.aria_level((given.depth ?? 0) + 1).pl((given.depth ?? 0) * INDENT_PX))
+    return h_flex().min_w(0).items_center().gap(2).role(isTree ? "tree_item" : "list_item").accessibility_label(label).aria_selected(isSelected)
+      .when(isTree, (el) => el.aria_level((given.depth ?? 0) + 1).pl((given.depth ?? 0) * UI.indent))
       .when(opener !== null, (el) => el.child(opener))
       .child(row);
   }
@@ -910,7 +915,7 @@ export default class Cmod extends View {
     const isToned = TONES[given.tone] !== undefined;
     const color = toneOf(given.tone, t);
     const words = textOf(given.children);
-    return div().flex_none().px(SPACE_PX * 0.75).h(20).flex().items_center().rounded(RADIUS.chip).text_size(TYPE.caption).font_medium()
+    return div().flex_none().px(6).h(UI.height.inline).flex().items_center().rounded(UI.radius.pill).text_size(UI.text.caption).font_medium()
       .text_color(isToned ? color : t.muted).bg((isToned ? tint(color, "26") : undefined) ?? t.raised)
       .role("label").accessibility_label(words ?? "").children(words === undefined ? this.nodes(given.children, drawn, `${path}.children`, t, false) : [words]);
   }
@@ -919,9 +924,9 @@ export default class Cmod extends View {
     const color = toneOf(given.tone, t);
     const title = typeof given.title === "string" ? given.title : undefined;
     const words = textOf(given.children);
-    return v_flex().min_w(0).gap(SPACE_PX).px(INSET_PX).py(SPACE_PX * 1.25).rounded(RADIUS.control).bg(tint(color, "1f") ?? t.raised).role("status").accessibility_label(title ?? words ?? "")
+    return v_flex().min_w(0).gap(UI.space.sm).px(UI.space.md).py(UI.space.sm + 2).rounded(UI.radius.control).bg(tint(color, "1f") ?? t.raised).role("status").accessibility_label(title ?? words ?? "")
       .when(title !== undefined, (el) => el.child(div().font_semibold().text_color(color).child(title ?? "")))
-      .when(given.children !== undefined, (el) => el.child(words === undefined ? v_flex().min_w(0).gap(SPACE_PX).children(this.nodes(given.children, drawn, `${path}.children`, t)) : div().text_color(t.foreground).child(words)))
-      .when(given.actions !== undefined, (el) => el.child(h_flex().flex_wrap().gap(SPACE_PX).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false))));
+      .when(given.children !== undefined, (el) => el.child(words === undefined ? v_flex().min_w(0).gap(UI.space.sm).children(this.nodes(given.children, drawn, `${path}.children`, t)) : div().text_color(t.foreground).child(words)))
+      .when(given.actions !== undefined, (el) => el.child(h_flex().flex_wrap().gap(UI.space.sm).children(this.nodes(given.actions, drawn, `${path}.actions`, t, false))));
   }
 }

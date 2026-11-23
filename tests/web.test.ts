@@ -291,14 +291,14 @@ test("Stop in the browser app aborts the session's running turn, and a prompt ty
   ])
 }, 30_000)
 
-test("the cmod plugin's Dashboard, History, and Settings are views cmod/UI lists, and Settings draws in the browser app", async () => {
+test("the cmod plugin's History and Settings are views cmod/UI lists, with no Dashboard while no widget is on it, and Settings lists the mods in the browser app", async () => {
   const { tab, close } = await browsed()
-  const settings = await tab('cmod/settings', 'Preferences')
+  const settings = await tab('cmod/settings', 'data-key="cmod/settings:mod:cmod"')
   close()
 
-  expect(settings.html).toContain('data-key="tab:cmod/dashboard"')
+  expect(settings.html).not.toContain('data-key="tab:cmod/dashboard"')
   expect(settings.html).toContain('data-key="tab:cmod/history"')
-  expect(settings.html).toContain('Mods')
+  expect(settings.html).toContain('aria-label="Mods"')
 }, 30_000)
 
 test("a mod's view only the browser app shows reads isShown true in the mod, and false once the browser's stream closes", async () => {

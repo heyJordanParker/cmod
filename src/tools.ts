@@ -1,5 +1,5 @@
 import { tool } from '../node_modules/@cmodjs/core/jobs/tool.js'
-import { commands, messageOf, Note, Prompt, providers, Session, sessions, type InterfaceProvider, type Message, type Mod, type Session as SessionOf } from '../node_modules/@cmodjs/core/mod.js'
+import { commands, messageOf, Note, Prompt, providers, Reply, Session, sessions, ToolCall, type InterfaceProvider, type Message, type Mod, type Session as SessionOf } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { searchText } from '../node_modules/@cmodjs/core/session/context/turn/message/message.js'
 import { firstLine } from '../node_modules/@cmodjs/core/utils/text.js'
@@ -12,6 +12,10 @@ const shownMessages = 30
 const foundMessages = 20
 
 const lineChars = 300
+
+const snippetBefore = 60
+
+const snippetAfter = 140
 
 const sessionId = { type: 'string', description: 'The id of the session, as list_sessions names it.' } as const
 
@@ -47,6 +51,28 @@ const onTerminal = async <Value>(session: string, run: (terminal: InterfaceProvi
 }
 
 const messageLine = (message: Message) => `${message.id}  ${message.at}  ${message.type}${message.task === undefined ? '' : ` in task ${message.task}`}: ${oneLine(searchText(message))}`
+
+const speakerOf = (message: Message) => (message.type === Prompt ? 'prompt' : message.type === Reply ? 'Claude' : message.type === ToolCall ? `${message.name} call` : message.type === Note ? 'note' : message.type)
+
+const snippetOf = (text: string, find: string) => {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const at = flat.toLowerCase().indexOf(find.toLowerCase())
+  if (at === -1) return oneLine(flat)
+  const start = Math.max(0, at - snippetBefore)
+  const end = Math.min(flat.length, at + find.length + snippetAfter)
+  return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`
+}
+
+const isSearchCall = (message: Message) => message.type === ToolCall && message.name.endsWith('search_sessions')
+
+const foundIn = (session: SessionOf | undefined, id: string, hits: readonly Message[], find: string) => {
+  const about = session === undefined ? [] : [`${session.project}${session.device === undefined ? '' : ` on ${session.device.name}`}`, session.isRunning ? 'running' : `ended, last active ${session.lastAt}`]
+  return [
+    `${session?.title || '(untitled)'}${about.map((part) => ` · ${part}`).join('')}`,
+    `  session ${id}`,
+    ...hits.map((message) => `  ${message.at}  ${message.task === undefined ? '' : `subagent ${message.task}, `}${speakerOf(message)}: ${snippetOf(searchText(message), find)}  (message ${message.id})`),
+  ].join('\n')
+}
 
 export function addClaudeTools(mod: Mod<CmodPluginState>): void {
   const { report } = engineOf(mod)
@@ -127,7 +153,7 @@ export function addClaudeTools(mod: Mod<CmodPluginState>): void {
   mod.use(
     tool({
       name: 'search_sessions',
-      description: 'Search the messages of Claude Code sessions for a text, newest first.',
+      description: 'Search the messages of Claude Code sessions for a text, newest first. Each session found shows its title, project, and state, then each message that holds the text with the words around it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -140,10 +166,14 @@ export function addClaudeTools(mod: Mod<CmodPluginState>): void {
       execute: async ({ text, everyProject }) => {
         const found: Message[] = []
         for await (const message of sessions.search(text, undefined, everyProject === undefined ? {} : { everyProject })) {
+          if (isSearchCall(message)) continue
           found.push(message)
           if (found.length === foundMessages) break
         }
-        return found.length === 0 ? `No message holds "${text}".` : found.map((message) => `${message.session}  ${messageLine(message)}`).join('\n')
+        if (found.length === 0) return `No message holds "${text}".`
+        const listed = await sessions.list(everyProject === undefined ? {} : { everyProject })
+        const ids = [...new Set(found.map((message) => message.session))]
+        return ids.map((id) => foundIn(listed.find((session) => session.id === id), id, found.filter((message) => message.session === id), text)).join('\n\n')
       },
     }),
   )

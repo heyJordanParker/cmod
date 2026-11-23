@@ -1,11 +1,7 @@
 import { AttachedFile, InstructionFile, Note, Prompt, Reply, Skill, ToolCall, ToolResult, messageOf, sessions, type Message, type Mod, type Session, type Task, type Turn } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
-import { Badge, List, ListItem } from '../node_modules/@cmodjs/core/ui/components.js'
-import { Box, Input, Select, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
-
-export type HistoryFilter = 'all' | 'prompts' | 'tools' | 'errors'
-
-export type HistoryLayout = 'tasks' | 'timeline'
+import { Badge, Banner, List, ListItem } from '../node_modules/@cmodjs/core/ui/components.js'
+import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
 type EntryKind = 'prompt' | 'reply' | 'tool' | 'skill' | 'file' | 'note' | 'task'
 
@@ -22,19 +18,17 @@ export type HistoryEntry = {
 }
 
 export type HistoryState = {
-  readonly session: { history: { find: string; filter: HistoryFilter; layout: HistoryLayout; toggled: readonly string[] } }
+  readonly session: { historyView: { find: string; opened: readonly string[]; shown: number } }
   readonly memory: { history: readonly HistoryEntry[] | null; historyError: string | null }
 }
 
-export const historySession: HistoryState['session'] = { history: { find: '', filter: 'all', layout: 'tasks', toggled: [] } }
+export const pageRows = 50
+
+export const historySession: HistoryState['session'] = { historyView: { find: '', opened: [], shown: pageRows } }
 
 export const historyMemory: HistoryState['memory'] = { history: null, historyError: null }
 
 export type HistoryView = { readonly title: string; draw(): JSX.Element; refresh(): void }
-
-const filters: readonly HistoryFilter[] = ['all', 'prompts', 'tools', 'errors']
-
-const filterLabels: Readonly<Record<HistoryFilter, string>> = { all: 'All', prompts: 'Prompts', tools: 'Tools', errors: 'Errors' }
 
 const reloadQuietMs = 1000
 
@@ -56,28 +50,11 @@ function timeOf(at: string): string {
   return Number.isNaN(date.getTime()) ? '' : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
-function counted(entry: HistoryEntry): { readonly tools: number; readonly failures: number } {
-  let tools = 0
-  let failures = 0
-  const visit = (each: HistoryEntry) => {
-    if (each.kind === 'tool') tools += 1
-    if (each.kind === 'tool' && each.isError) failures += 1
-    each.children.forEach(visit)
-  }
-  entry.children.forEach(visit)
-  return { tools, failures }
-}
-
-function matchesFilter(entry: HistoryEntry, filter: HistoryFilter): boolean {
-  if (filter === 'prompts') return entry.kind === 'prompt'
-  if (filter === 'tools') return entry.kind === 'tool'
-  if (filter === 'errors') return entry.isError
-  return true
-}
-
 function matchesFind(entry: HistoryEntry, find: string): boolean {
-  return find === '' || `${entry.name} ${entry.text}`.toLowerCase().includes(find)
+  return `${entry.name} ${entry.text}`.toLowerCase().includes(find)
 }
+
+const holdsMatch = (entry: HistoryEntry, find: string): boolean => matchesFind(entry, find) || entry.children.some((child) => holdsMatch(child, find))
 
 type Shown = { readonly entry: HistoryEntry; readonly depth: number; readonly isOpen: boolean }
 
@@ -194,92 +171,58 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
     void sessions.current.scrollTo(message, { block: 'start' }).catch((error: unknown) => report({ id: 'history:scroll', message: 'Could not scroll the conversation to that message', error }))
   }
 
+  const change = (next: Partial<HistoryState['session']['historyView']>) => void (mod.state.session.historyView = { ...mod.state.session.historyView, ...next })
+
   const toggle = (key: string) => {
-    const { toggled } = mod.state.session.history
-    mod.state.session.history = { ...mod.state.session.history, toggled: toggled.includes(key) ? toggled.filter((each) => each !== key) : [...toggled, key] }
+    const { opened } = mod.state.session.historyView
+    change({ opened: opened.includes(key) ? opened.filter((each) => each !== key) : [...opened, key] })
   }
 
-  const visible = (entries: readonly HistoryEntry[]): Shown[] => {
-    const { find, filter, toggled } = mod.state.session.history
+  const visible = (entries: readonly HistoryEntry[]): { readonly rows: readonly Shown[]; readonly earlier: number } => {
+    const { find, opened, shown: page } = mod.state.session.historyView
     const lowered = find.trim().toLowerCase()
-    const isNarrowed = lowered !== '' || filter === 'tools' || filter === 'errors'
-    const newest = entries.findLast((entry) => entry.kind === 'prompt')?.key
-    const isLive = (entry: HistoryEntry): boolean => entry.isRunning || entry.children.some(isLive)
-    const holdsMatch = (entry: HistoryEntry): boolean => (matchesFilter(entry, filter) && matchesFind(entry, lowered)) || entry.children.some(holdsMatch)
-    const shown: Shown[] = []
+    const isFinding = lowered !== ''
+    const newestFirst = entries.toReversed().filter((entry) => !isFinding || holdsMatch(entry, lowered))
+    const rows: Shown[] = []
     const walk = (list: readonly HistoryEntry[], depth: number) => {
       for (const entry of list) {
-        if (filter === 'prompts') {
-          if (entry.kind === 'prompt' && matchesFind(entry, lowered)) shown.push({ entry, depth, isOpen: false })
-          continue
-        }
-        if (isNarrowed && !holdsMatch(entry)) continue
-        const isOpenByDefault = entry.key === newest || isLive(entry)
-        const isOpen = entry.children.length > 0 && (isNarrowed || isOpenByDefault !== toggled.includes(entry.key))
-        shown.push({ entry, depth, isOpen })
+        if (isFinding && depth > 0 && !holdsMatch(entry, lowered)) continue
+        const isOpen = entry.children.length > 0 && (isFinding ? entry.children.some((child) => holdsMatch(child, lowered)) : opened.includes(entry.key))
+        rows.push({ entry, depth, isOpen })
         if (isOpen) walk(entry.children, depth + 1)
       }
     }
-    walk(entries, 0)
-    return shown
+    walk(newestFirst.slice(0, page), 0)
+    return { rows, earlier: Math.max(newestFirst.length - page, 0) }
   }
 
-  const timeline = (entries: readonly HistoryEntry[]): Shown[] => {
-    const { find, filter } = mod.state.session.history
-    const lowered = find.trim().toLowerCase()
-    const all: HistoryEntry[] = []
-    const walk = (list: readonly HistoryEntry[]) => {
-      for (const entry of list) {
-        all.push(entry)
-        walk(entry.children)
-      }
-    }
-    walk(entries)
-    return all
-      .filter((entry) => matchesFilter(entry, filter) && matchesFind(entry, lowered))
-      .toSorted((one, other) => one.at.localeCompare(other.at))
-      .map((entry) => ({ entry, depth: 0, isOpen: false }))
-  }
-
-  const row = ({ entry, depth, isOpen }: Shown): JSX.Element => {
-    const { tools, failures } = counted(entry)
-    const counts = entry.kind === 'prompt' || entry.kind === 'task' ? [tools > 0 ? `${tools} ${tools === 1 ? 'tool' : 'tools'}` : '', failures > 0 ? `${failures} failed` : ''].filter((part) => part !== '').join(' · ') : ''
-    const isRunning = entry.isRunning && entry.kind === 'task'
-    const status = isRunning ? 'running' : entry.isError ? 'failed' : counts
-    const isTree = mod.state.session.history.layout === 'tasks' && mod.state.session.history.filter !== 'prompts'
-    return ListItem({
+  const row = ({ entry, depth, isOpen }: Shown): JSX.Element =>
+    ListItem({
       key: `history:${entry.key}`,
-      leading: entry.name,
       label: entry.text,
-      ...(status === '' ? {} : { trailing: Badge({ tone: entry.isError || failures > 0 ? 'critical' : isRunning ? 'info' : 'neutral', children: status }) }),
-      ...(isTree ? { depth } : {}),
-      ...(isTree && entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {}),
+      depth,
+      ...(depth === 0 ? { description: timeOf(entry.at) } : { leading: entry.name }),
+      ...(entry.isError ? { tone: 'critical' as const } : {}),
+      ...(entry.isRunning ? { trailing: Badge({ tone: 'info', children: 'Working' }) } : {}),
+      ...(entry.children.length > 0 ? { isOpen, onOpenChange: () => toggle(entry.key) } : {}),
       onPress: () => scrollTo(entry.message ?? entry.children[0]?.message ?? null),
     })
-  }
 
   const draw = (): JSX.Element => {
     const { history: entries, historyError } = mod.state.memory
-    const { find, filter, layout } = mod.state.session.history
+    const { find, shown } = mod.state.session.historyView
     if (entries === null && historyError === null && loading === undefined) refresh()
-    const controls = Box({
-      columnGap: 2,
-      flexWrap: 'wrap',
-      children: [
-        Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'Find in the history', submitLabel: 'find', onInput: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }), onSubmit: (text: string) => void (mod.state.session.history = { ...mod.state.session.history, find: text }) }),
-        Select({ key: 'history:filter', label: 'Show', value: filter, options: filters.map((each) => ({ value: each, label: filterLabels[each] })), onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, filter: picked as HistoryFilter }) }),
-        Select({ key: 'history:layout', label: 'As', value: layout, options: [{ value: 'tasks', label: 'Tasks' }, { value: 'timeline', label: 'Timeline' }], onSelect: (picked: string) => void (mod.state.session.history = { ...mod.state.session.history, layout: picked === 'timeline' ? 'timeline' : 'tasks' }) }),
-      ],
-    })
+    const finder = Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'Find a prompt', submitLabel: 'find', onInput: (text: string) => change({ find: text }), onSubmit: (text: string) => change({ find: text }) })
     const body = (): JSX.Element => {
-      if (historyError !== null) return Text({ color: 'error', wrap: 'wrap', children: historyError })
+      if (historyError !== null) return Banner({ tone: 'critical', children: historyError })
       if (entries === null) return Text({ dimColor: true, children: 'Reading the conversation…' })
-      if (entries.length === 0) return Text({ dimColor: true, wrap: 'wrap', children: 'Nothing here yet. Each prompt you send shows here, with what Claude did for it.' })
-      const rows = layout === 'tasks' ? visible(entries) : timeline(entries)
-      if (rows.length === 0) return Text({ dimColor: true, children: 'No row matches.' })
-      return List({ label: 'History', children: rows.map(row) })
+      if (entries.length === 0) return Text({ dimColor: true, wrap: 'wrap', children: 'Each prompt you send shows here, with what Claude did for it.' })
+      const { rows, earlier } = visible(entries)
+      if (rows.length === 0) return Text({ dimColor: true, children: 'No prompt matches.' })
+      const more = earlier === 0 ? [] : [Button({ plain: true, dimColor: true, key: 'history:earlier', label: `Show ${Math.min(earlier, pageRows)} earlier`, onPress: () => change({ shown: shown + pageRows }) })]
+      return Box({ flexDirection: 'column', children: [List({ label: 'History', children: rows.map(row) }), ...more] })
     }
-    return Box({ flexDirection: 'column', gap: 1, children: [controls, body()] })
+    return Box({ flexDirection: 'column', gap: 1, children: [finder, body()] })
   }
 
   return { title: 'History', draw, refresh }

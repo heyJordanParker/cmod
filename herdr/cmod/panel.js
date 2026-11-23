@@ -45,8 +45,7 @@ export function shownParts(model, session = model.target) {
   const entry = entryOf(model, session);
   if (entry === undefined || entry.lists === null) return [];
   if (model.show === "widgets") return (entry.lists.widgets ?? []).filter((widget) => widget.areas.includes(model.area));
-  const view = shownView(model, entry);
-  return view === undefined ? [] : [view];
+  return entry.lists.views ?? [];
 }
 
 export function screen(model) {
@@ -59,8 +58,11 @@ export function screen(model) {
     if (!isLive && model.connection.attempt > 0) return { kind: "unreached", message: model.connection.error, problem: null };
     return { kind: "loading", isQuiet: model.now - (entry?.since ?? model.now) < QUIET_LOADING_MS, problem };
   }
-  const parts = shownParts(model).map((part) => ({ ...part, key: keyOf(part), drawn: entry.parts[keyOf(part)] ?? null }));
-  return { kind: "ready", views: entry.lists?.views ?? [], pages: entry.lists?.pages ?? [], shown: model.show === "views" ? shownView(model, entry) : undefined, parts, problem: problem ?? entry.refusal };
+  const withDrawn = (part) => ({ ...part, key: keyOf(part), drawn: entry.parts[keyOf(part)] ?? null });
+  const shown = model.show === "views" ? shownView(model, entry) : undefined;
+  const all = shownParts(model).map(withDrawn);
+  const parts = model.show === "views" ? all.filter((part) => shown !== undefined && part.key === keyOf(shown)) : all;
+  return { kind: "ready", views: entry.lists?.views ?? [], pages: entry.lists?.pages ?? [], shown, parts, all, problem: problem ?? entry.refusal };
 }
 
 const withEntry = (model, session, change) => {
@@ -89,10 +91,14 @@ function drawing(model, session, parts) {
   const effects = [];
   for (const part of parts) {
     const key = keyOf(part);
+    if (entryOf(next, session)?.parts[key]?.request != null) {
+      next = withEntry(next, session, (entry) => ({ ...entry, parts: { ...entry.parts, [key]: { ...entry.parts[key], isStale: true } } }));
+      continue;
+    }
     let request;
     [next, request] = nextRequest(next);
     const area = part.areas === undefined ? {} : { area: model.area };
-    next = withEntry(next, session, (entry) => ({ ...entry, parts: { ...entry.parts, [key]: { tree: null, error: null, ...entry.parts[key], request, isStale: false } } }));
+    next = withEntry(next, session, (entry) => ({ ...entry, parts: { ...entry.parts, [key]: { tree: null, error: null, ...entry.parts[key], part, request, isStale: false } } }));
     effects.push(call(`${UI}.draw`, [session, { mod: part.mod, id: part.id }, { columns: model.columns, surface: SURFACE, ...area }], { type: "drew", session, key, request }, { type: "drawFailed", session, key, request }));
   }
   return [next, effects];
@@ -189,8 +195,9 @@ export function update(model, message) {
     case "drawFailed": {
       const drawn = entryOf(at, message.session)?.parts[message.key];
       if (drawn?.request !== message.request) return [at, []];
-      const settled = message.type === "drew" ? { tree: message.result, error: null, request: null, isStale: false } : { ...drawn, error: message.error, request: null };
-      return [withEntry(at, message.session, (entry) => ({ ...entry, parts: { ...entry.parts, [message.key]: settled } })), []];
+      const settled = message.type === "drew" ? { ...drawn, tree: message.result, error: null, request: null } : { ...drawn, error: message.error, request: null };
+      const landed = withEntry(at, message.session, (entry) => ({ ...entry, parts: { ...entry.parts, [message.key]: settled } }));
+      return drawn.isStale && drawn.part !== undefined ? drawing(landed, message.session, [drawn.part]) : [landed, []];
     }
     case "pressFailed":
       return [withEntry(at, message.session, (entry) => ({ ...entry, parts: { ...entry.parts, [message.key]: { tree: null, request: null, ...entry.parts[message.key], error: message.error } } })), []];

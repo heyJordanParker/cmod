@@ -202,6 +202,7 @@ async function herdrWith(given: object, answer: Answer, { leftovers = [], tree =
     View: class {},
     div: element('div'),
     image: element('image'),
+    svg: element('svg'),
     v_flex: element('v_flex'),
     h_flex: element('h_flex'),
     Button: { new: element('Button') },
@@ -414,7 +415,7 @@ test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel
   expect(drawn.filter((each) => each.calls['role']?.[0] === 'heading').map((each) => each.nodes)).toEqual([['Mods']])
   expect(drawn.filter((each) => each.calls['role']?.[0] === 'region').map((each) => [each.calls['accessibility_label']?.[0], each.calls['border_1']])).toEqual([['Mods', undefined]])
   expect(drawn.filter((each) => each.calls['role']?.[0] === 'tree_item').map((each) => [each.calls['accessibility_label']?.[0], each.calls['aria_level']?.[0], each.calls['pl']?.[0]])).toEqual([['bun test', 2, 16]])
-  expect(drawn.filter((each) => each.calls['role']?.[0] === 'disclosure_triangle').map((each) => [each.calls['accessibility_label']?.[0], each.nodes])).toEqual([['Open bun test', ['▸']]])
+  expect(drawn.filter((each) => each.calls['role']?.[0] === 'disclosure_triangle').map((each) => [each.calls['accessibility_label']?.[0], each.nodes.map((node) => (node instanceof Element ? [node.kind, node.args[0]] : node))])).toEqual([['Open bun test', [['svg', 'mods/workspace-chrome/chevron-right.svg']]]])
   expect(drawn.filter((each) => each.nodes.includes('Bash') || each.nodes.includes('failed')).map((each) => [each.nodes[0], each.calls['text_color']?.[0]])).toEqual([
     ['Bash', '#muted'],
     ['failed', '#blocked'],
@@ -481,14 +482,14 @@ test("the dock of cmod's Herdr mod keeps its tabs on one row that scrolls, and l
   clicked(root, (each) => each.kind === 'Button' && each.calls['role']?.[0] === 'link', herdr.cx)
 
   expect([strip?.calls['overflow_x_scroll'], strip?.calls['flex_wrap']]).toEqual([[], undefined])
-  expect(found(root, (each) => each.kind === 'Tab').every((each) => each.calls['truncate'] !== undefined && each.calls['flex_none'] !== undefined)).toBe(true)
+  expect(found(root, (each) => each.kind === 'Tab').every((each) => each.calls['flex_none'] !== undefined)).toBe(true)
   expect(labelled(root).filter(([kind]) => kind === 'Button')).toEqual([['Button', 'Log, opens in its own tab']])
   expect(herdr.commands).toEqual([['tab.new', { name: 'Log', mod: 'cmod', props: { show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' } }]])
 })
 
 const tabsOf = (herdr: Herdr) => found(herdr.render(), (each) => each.kind === 'Tab').map((each) => [each.args[0], each.calls['selected']?.[0], each.nodes])
 
-test("the dock of cmod's Herdr mod shows the session's views as its tabs, in the order cmod/UI lists them, and draws the first one", async () => {
+test("the dock of cmod's Herdr mod shows the session's views as its tabs, in the order cmod/UI lists them, shows the first one, and draws every one so a switch shows at once", async () => {
   const herdr = await herdrWith({}, named)
 
   expect(tabsOf(herdr)).toEqual([
@@ -499,6 +500,7 @@ test("the dock of cmod's Herdr mod shows the session's views as its tabs, in the
     ['cmod/UI.views', ['worker']],
     ['cmod/UI.pages', ['worker']],
     ['cmod/UI.draw', ['worker', { mod: 'cmod', id: 'dashboard' }, { columns: 40, surface: 'herdr' }]],
+    ['cmod/UI.draw', ['worker', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'herdr' }]],
   ])
 })
 
@@ -544,11 +546,50 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
 test("cmod's Herdr mod centers a view that draws one sentence, in the muted color", async () => {
   const herdr = await herdrWith({}, listing(() => ({ $cmodElement: 'Text', props: { dimColor: true, children: 'Run /rulebook to check every Prompt in this project.' } }), { views: [{ mod: 'rulebook', id: 'results', title: 'rulebook' }], pages: [] }))
   const root = herdr.render()
-  const body = found(root, (each) => each.calls['id']?.[0] === 'cmod-body')[0]
+  const body = found(root, (each) => each.calls['id']?.[0] === 'cmod-note')[0]
   const note = found(root, (each) => each.nodes.includes('Run /rulebook to check every Prompt in this project.'))[0]
 
   expect([body?.calls['items_center'], body?.calls['justify_center']]).toEqual([[], []])
   expect([note?.calls['text_center'], note?.calls['text_color']]).toEqual([[], ['#muted']])
+})
+
+test("cmod's Herdr mod draws a mod's page as T3 Code's settings do: tabs in sentence case, a Panel with actions as a header with its title and buttons, a labelled field as a row with its label at the left, and a field with no label across the row", async () => {
+  const page = {
+    $cmodElement: 'Box',
+    props: {
+      flexDirection: 'column',
+      children: [
+        { $cmodElement: 'Input', props: { key: 'demo/page:find', placeholder: 'Find a prompt', value: '' } },
+        {
+          $cmodElement: 'Panel',
+          props: {
+            title: 'demo',
+            description: '0.2.0 · A demo mod',
+            actions: [{ $cmodElement: 'Button', props: { key: 'demo/page:turn', label: 'Turn off', onPress: { $cmodHandler: 1 } } }],
+            children: { $cmodElement: 'Panel', props: { title: 'Options', children: { $cmodElement: 'Input', props: { key: 'demo/page:option', label: 'Branch', value: 'main' } } } },
+          },
+        },
+      ],
+    },
+  }
+  const herdr = await herdrWith({}, listing(() => page, { views: [{ mod: 'demo', id: 'page', title: 'rulebook' }], pages: [] }))
+  const drawn = found(herdr.render(), () => true)
+  const headings = drawn.filter((each) => each.calls['role']?.[0] === 'heading').map((each) => [each.nodes[0], each.calls['text_size']?.[0], each.calls['text_color']?.[0]])
+  const fields = drawn.filter((each) => each.kind === 'Input').map((each) => [each.calls['accessibility_label']?.[0], each.calls['w']?.[0], each.calls['w_full']])
+  const row = drawn.find((each) => each.calls['id']?.[0] === 'demo/page:field:demo/page:option')
+
+  expect(tabsOf(herdr)).toEqual([['cmod-tab-demo/page', true, ['Rulebook']]])
+  expect(headings).toEqual([
+    ['demo', 14, '#foreground'],
+    ['Options', 12, '#muted'],
+  ])
+  expect(drawn.some((each) => each.nodes.includes('0.2.0 · A demo mod'))).toBe(true)
+  expect(drawn.filter((each) => each.kind === 'Button').map((each) => each.calls['accessibility_label']?.[0])).toContain('Turn off')
+  expect(fields).toEqual([
+    ['Find a prompt', undefined, []],
+    ['Branch', 220, undefined],
+  ])
+  expect(row?.nodes.filter((node) => node instanceof Element && node.nodes.includes('Branch'))).toHaveLength(1)
 })
 
 test("a Redraw draws again only the part it names in cmod's Herdr mod", async () => {
@@ -645,7 +686,7 @@ test("cmod's Herdr mod opens a page a mod opened as a Herdr tab, closes that tab
 
 const clientOf = (herdr: Herdr) => (calledWith(herdr, 'cmod/UI.show')[0] as readonly unknown[])[1] as string
 
-test("a window of cmod's Herdr mod tells cmod/UI show the view it shows as the session's host, again when its tab or focused session changes, renews it inside the lease, and clears it when it closes", async () => {
+test("a window of cmod's Herdr mod tells cmod/UI show every view of the session as shown, as the session's host, keeps that across tab switches, renews it inside the lease, tells it again when the focused session changes, and clears it when it closes", async () => {
   const herdr = await herdrWith({ show: 'views', overlay: 'o1' }, named)
   const client = clientOf(herdr)
 
@@ -663,12 +704,11 @@ test("a window of cmod's Herdr mod tells cmod/UI show the view it shows as the s
   expect(herdr.timers.map(([ms]) => ms < 16_000)).toEqual([true])
   expect(calledWith(herdr, 'cmod/UI.show')).toEqual([
     ['worker', client, [], { isHost: true }],
-    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }], { isHost: true }],
-    ['worker', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
-    ['worker', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['worker', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
     ['worker', client, []],
     ['other', client, [], { isHost: true }],
-    ['other', client, [{ mod: 'demo', id: 'runs' }], { isHost: true }],
+    ['other', client, [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], { isHost: true }],
     ['other', client, []],
   ])
 })

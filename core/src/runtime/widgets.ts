@@ -49,6 +49,7 @@ export type Widgets = {
   recheck(): Promise<void>
   rows(area: Area, at: StyledAt): RenderElement[]
   draw(area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]>
+  onChange(listener: () => void): void
 }
 
 export function layoutOf(value: unknown): WidgetLayout {
@@ -165,9 +166,12 @@ export function serveWidgets({
     return saving
   }
 
+  const listeners = new Set<() => void>()
+
   const place = () => {
     layout = withNewWidgets(stored)
     redraw()
+    for (const listener of listeners) listener()
   }
 
   const withNewWidgets = (current: WidgetLayout) =>
@@ -297,5 +301,6 @@ export function serveWidgets({
     recheck,
     rows,
     draw,
+    onChange: (listener) => void listeners.add(listener),
   }
 }

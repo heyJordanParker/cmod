@@ -64,10 +64,13 @@ test('a Button with children draws them in place of its label, and its label nam
   expect(html).toBe('<button type="button" class="button" aria-label="Open run 7" data-key="run-7" data-press="0">Run 7 <span class="t" style="color:color-mix(in srgb, var(--text) 55%, transparent)">2m</span></button>')
 })
 
-test('a Panel draws as a section headed by its title', () => {
+test('a Panel draws as a section headed by its title, with its actions beside the title and its description under it', () => {
   const { html } = drawn(Panel({ title: 'Runs', children: Text({ children: 'passed' }) }))
+  const headed = drawn(Panel({ title: 'demo', description: '0.2.0', actions: [Button({ key: 'turn', label: 'Turn off', onPress: () => undefined })] })).html
 
-  expect(html).toBe('<section class="panel"><h3 class="panel-title">Runs</h3><div class="panel-body"><span class="t">passed</span></div></section>')
+  expect(html).toBe('<section class="panel"><header class="panel-header"><h3 class="panel-title">Runs</h3></header><div class="panel-body"><span class="t">passed</span></div></section>')
+  expect(headed).toContain('<header class="panel-header"><h3 class="panel-title">demo</h3><div class="actions"><button type="button"')
+  expect(headed).toContain('Turn off</button></div></header><p class="panel-description">0.2.0</p>')
 })
 
 test('text a mod draws never becomes markup, and a style or color it names is dropped unless it is one the browser draws', () => {

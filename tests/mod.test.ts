@@ -185,7 +185,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, the Dashboard view, the History view, the Settings view, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, the History view, the Settings view, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -338,7 +338,7 @@ function testSettings(files: Readonly<Record<string, string>> = {}, projectRoot?
   return { tested, ran, called, declare, shown }
 }
 
-test("Settings lists each set-up mod with its views in Settings, options, and hotkeys, and the Sidebar's tabs", async () => {
+test("Settings opens a mod as one page: its version and description, its actions, then its views in Settings, Options, and Hotkeys as sections", async () => {
   const { tested, declare, shown } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
@@ -348,20 +348,16 @@ test("Settings lists each set-up mod with its views in Settings, options, and ho
   await shown()
   await tested.settle()
   const page = await shown()
-  await tested.shown.pane.press('tab:options')
-  const options = await shown()
-  await tested.shown.pane.press('tab:hotkeys')
-  const hotkeys = await shown()
 
   expect(tested.shown.pane.id).toBe('sidebar')
   expect(page).toContain('0: Dashboard')
-  expect(page).toContain('Settings')
-  expect(page).toContain('0.2.0  Turn off  Remove')
-  expect(page).toContain('A demo mod')
+  expect(page).toContain('← All mods')
+  expect(page).toContain('0.2.0 · A demo mod')
+  expect(page).toContain('Turn off  Remove')
   expect(page).not.toContain('Off:')
   expect(page).toContain('last run passed')
-  expect(options).toContain('Branch')
-  expect(hotkeys).toContain('│ Show the runs                  │\n              │ Combo ctrl+l                   │')
+  expect(page).toContain('Branch')
+  expect(page).toContain('Show the runs')
 })
 
 test('Settings draws no permission row for a mod that declares permissions', async () => {
@@ -371,7 +367,8 @@ test('Settings draws no permission row for a mod that declares permissions', asy
 
   const page = await shown()
 
-  expect(page).toContain('Options   Hotkeys')
+  expect(page).toContain('Options')
+  expect(page).toContain('Hotkeys')
   expect(page).not.toContain('Permissions')
   expect(page).not.toContain('api.github.com')
 })
@@ -433,7 +430,6 @@ test('an option saves through cmod options set, and a combo binds through cmod h
   await tested.settle()
 
   await tested.shown.pane.input('option:demo.branch', 'release')
-  await tested.shown.pane.press('tab:hotkeys')
   await tested.shown.pane.input('hotkey:runs', 'ctrl+shift+r')
   await tested.settle()
 
@@ -445,13 +441,12 @@ test('Settings lists a hotkey without a default as unbound, and a combo binds it
   await tested.type('/mods demo')
   await tested.settle()
 
-  await tested.shown.pane.press('tab:hotkeys')
   const hotkeys = await shown()
   await tested.shown.pane.input('hotkey:next', 'ctrl+shift+n')
   await tested.settle()
 
-  expect(hotkeys).toContain('│ Show the runs                  │\n              │ Combo ctrl+l                   │')
-  expect(hotkeys).toContain('│ Open the next run · unbound    │\n              │ Combo                          │')
+  expect(hotkeys).toContain('│ Show the runs ctrl+l')
+  expect(hotkeys).toMatch(/│ Open the next run +│/)
   expect(ran).toEqual([`${cmodProgram} hotkeys set demo next ctrl+shift+n`])
 })
 
@@ -465,7 +460,6 @@ test('Settings marks a mod turned off in Claude Code, and Turn on runs cmod enab
   await tested.shown.pane.press('turn')
   await tested.settle()
 
-  expect(lines).toContain('demo (off)')
   expect(lines).toContain('Off: Claude Code does not load it.')
   expect(lines).toContain('Turn on')
   expect(ran).toEqual([`${cmodProgram} enable demo`])
@@ -493,7 +487,6 @@ test('Settings shows a linked mod on while the copy cmod link turned off stays o
   await tested.settle()
   const lines = await shown()
 
-  expect(lines).not.toContain('demo (off)')
   expect(lines).not.toContain('Off: Claude Code does not load it.')
 })
 
@@ -792,7 +785,7 @@ test("a mod's view in Settings opens inside Settings, not as a Sidebar tab, and 
   const page = await shown()
 
   expect(page).not.toContain('1: Runs')
-  expect(page).toContain('0.2.0  Turn off  Remove')
+  expect(page).toContain('Turn off  Remove')
   expect(page).toContain('last run passed')
   expect(told).toContainEqual({ open: [], shown: 'runs', isFocused: true, inApps: [] })
 })
@@ -833,6 +826,7 @@ test("picking another mod in Settings draws that mod's view without the last mod
   draws.length = 0
   told.length = 0
 
+  await tested.shown.pane.press('back')
   await tested.shown.pane.press('mod:other')
   await tested.settle()
   await tested.shown.pane.lines()
@@ -863,7 +857,7 @@ test("a mod's view in Settings draws with the params it opened with, and closing
   await tested.settle()
 
   expect(draws).toContainEqual(expect.objectContaining({ page: 'runs', params: { run: 7 } }))
-  expect(tested.state.session.section).not.toBe('view:runs')
+  expect(tested.state.session.viewParams).toBeNull()
   expect(called).toContain('demo cmod:shown')
 })
 
@@ -920,8 +914,7 @@ test('the Sidebar hotkey shows the Dashboard, and the Settings hotkey switches t
   await tested.hotkey('settings')
 
   expect(dashboard).toContain('Nothing is on the Dashboard yet.')
-  expect(settings).toContain('● cmod')
-  expect(settings).toContain('Show or hide the Sidebar')
+  expect(settings.split('\n')).toContain('  cmod')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
@@ -997,25 +990,30 @@ async function historyLines(tested: ReturnType<typeof testMod>): Promise<string>
   return (await tested.shown.pane.lines()).join('\n')
 }
 
-test('/history opens History as a tab of the Sidebar: each prompt with its counts, the newest open with what Claude did, and a subagent under the call that started it, running', async () => {
+test('/history opens History as a tab of the Sidebar: the newest prompt first with its time, each closed to one line, and opening one shows what Claude did, with a subagent under the call that started it', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await conversationWithTask(tested)
 
   await tested.type('/history')
-  const shown = await historyLines(tested)
+  const closed = await historyLines(tested)
+  await tested.shown.pane.press('history:p2:toggle')
+  await historyLines(tested)
+  await tested.shown.pane.press('history:c3:toggle')
+  const opened = await historyLines(tested)
 
-  expect(shown).toContain('1: History  ×')
-  expect(shown).toMatch(/▸ \d\d:\d\d set up the auth tests/)
-  expect(shown).toMatch(/▾ \d\d:\d\d fix the login bug +4 tools · 1 failed/)
-  expect(shown).toContain('Read src/auth.ts')
-  expect(shown).toMatch(/Bash bun test +failed/)
-  expect(shown).toMatch(/▾ Explore find every caller of refreshToken +running/)
-  expect(shown).toContain('Grep refreshToken')
-  expect(shown).toContain('Claude Fixed the expired token check in auth.ts.')
-  expect(shown).not.toContain('Set up.')
+  const rows = closed.split('\n')
+  expect(closed).toContain('1: History  ×')
+  expect(rows.findIndex((row) => /▸ fix the login bug +10:05 Working/.test(row))).toBeLessThan(rows.findIndex((row) => /▸ set up the auth tests +10:00/.test(row)))
+  expect(closed).not.toContain('Read src/auth.ts')
+  expect(closed).not.toContain('tools')
+  expect(opened).toContain('Read src/auth.ts')
+  expect(opened).toContain('● Bash bun test')
+  expect(opened).toMatch(/▸ Explore find every caller of refreshToken +Working/)
+  expect(opened).toContain('Claude Fixed the expired token check in auth.ts.')
+  expect(opened).not.toContain('Set up.')
 })
 
-test('History shows a prompt the person sends while it is open', async () => {
+test('History shows a prompt the person sends while it is open, above the ones before it', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await conversationWithTask(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
@@ -1027,7 +1025,8 @@ test('History shows a prompt the person sends while it is open', async () => {
   const shown = await historyLines(tested)
 
   const rows = shown.split('\n')
-  expect(rows.findIndex((row) => /\d\d:\d\d add a regression test/.test(row))).toBeGreaterThan(rows.findIndex((row) => row.includes('Claude Fixed the expired token check')))
+  expect(rows.findIndex((row) => row.includes('add a regression test'))).toBeLessThan(rows.findIndex((row) => row.includes('fix the login bug')))
+  expect(rows.findIndex((row) => row.includes('add a regression test'))).toBeGreaterThan(-1)
 })
 
 test('History reads only the messages after the last one it holds when the conversation changes, so a long conversation is read once', async () => {
@@ -1037,6 +1036,8 @@ test('History reads only the messages after the last one it holds when the conve
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tested.type('/history')
+  await historyLines(tested)
+  await tested.shown.pane.press('history:p2:toggle')
   const before = await historyLines(tested)
 
   await prompt(tested, 'add a regression test')
@@ -1048,8 +1049,9 @@ test('History reads only the messages after the last one it holds when the conve
   expect(main.slice(0, 1).map((options) => options['after'])).toEqual([undefined])
   expect(main.slice(1).map((options) => options['after'])).toEqual(main.slice(1).map(() => last.id))
   expect(main.length).toBeGreaterThan(1)
-  expect(after).toMatch(/\d\d:\d\d add a regression test/)
-  expect(after.split('Read src/auth.ts').length).toBe(before.split('Read src/auth.ts').length)
+  expect(after).toContain('add a regression test')
+  expect(before.split('Read src/auth.ts').length).toBe(2)
+  expect(after.split('Read src/auth.ts').length).toBe(2)
 })
 
 test('pressing a row of History scrolls the conversation to that message', async () => {
@@ -1059,13 +1061,15 @@ test('pressing a row of History scrolls the conversation to that message', async
   const { read } = await conversationWithTask(tested)
   await tested.type('/history')
   await historyLines(tested)
+  await tested.shown.pane.press('history:p2:toggle')
+  await historyLines(tested)
 
   await tested.shown.pane.press(`history:${read.id}`)
 
   expect(scrolled).toEqual([{ to: { requestId: read.id }, block: 'start' }])
 })
 
-test('Find keeps the matching rows and opens the prompts and subagents that hold them, and Show picks prompts, tools, or errors', async () => {
+test('Find keeps the prompts that hold a match, and opens them down to the rows that match', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await conversationWithTask(tested)
   await tested.type('/history')
@@ -1073,39 +1077,40 @@ test('Find keeps the matching rows and opens the prompts and subagents that hold
 
   await tested.shown.pane.input('history:find', 'refreshtoken')
   const found = await historyLines(tested)
-  await tested.shown.pane.input('history:find', '')
-  await tested.shown.pane.select('history:filter', 'prompts')
-  const prompts = await historyLines(tested)
-  await tested.shown.pane.select('history:filter', 'errors')
-  const errors = await historyLines(tested)
+  await tested.shown.pane.input('history:find', 'nothing like this')
+  const none = await historyLines(tested)
 
+  expect(found).toContain('fix the login bug')
   expect(found).toContain('Explore find every caller of refreshToken')
   expect(found).toContain('Grep refreshToken')
   expect(found).not.toContain('set up the auth tests')
   expect(found).not.toContain('Read src/auth.ts')
-  expect(tested.state.session.history.filter).toBe('errors')
-  expect(prompts).toContain('set up the auth tests')
-  expect(prompts).toContain('fix the login bug')
-  expect(prompts).not.toContain('Read src/auth.ts')
-  expect(errors).toContain('Bash bun test')
-  expect(errors).not.toContain('Read src/auth.ts')
-  expect(errors).not.toContain('set up the auth tests')
+  expect(none).toContain('No prompt matches.')
 })
 
-test('the Timeline lists every row in the order it happened, with no nesting', async () => {
+test('History shows the newest 50 prompts, and Show earlier adds the ones before them', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
-  await conversationWithTask(tested)
+  const at = (minute: number) => new Date(2026, 10, 17, 10, minute).toISOString()
+  const prompts = Array.from({ length: 55 }, (_, index) => ({ id: `p${index}`, type: Prompt, at: at(index), context: 1, turn: `p${index}`, text: `prompt number ${index}`, from: { type: 'person' } }))
+  tested.fakes.serve.read = (_session, part, options) => {
+    if (part === 'turns') return options['task'] === undefined ? prompts.map((each) => ({ prompt: each, context: 1, openedAt: each.at, closedAt: each.at, answer: '' })) : []
+    if (part === 'messages') return options['task'] === undefined && options['after'] === undefined ? prompts : []
+    if (part === 'goal') return { text: '' }
+    return part === 'state' ? null : []
+  }
+  await tested.start()
   await tested.type('/history')
-  await historyLines(tested)
+  const first = await historyLines(tested)
 
-  await tested.shown.pane.select('history:layout', 'timeline')
-  const rows = (await historyLines(tested)).split('\n').map((line) => line.replace(/^[\s│]+|[\s│]+$/g, ''))
+  await tested.shown.pane.press('history:earlier')
+  const all = await historyLines(tested)
 
-  const order = ['set up the auth tests', 'Claude Set up.', 'fix the login bug', 'Read src/auth.ts', 'Bash bun test', 'Agent Find the callers', 'Explore find every caller', 'Grep refreshToken', 'Claude Fixed the expired']
-  const places = order.map((text) => rows.findIndex((row) => row.includes(text)))
-  expect(places.every((place) => place !== -1)).toBe(true)
-  expect(places).toEqual([...places].sort((one, other) => one - other))
-  expect(rows.some((row) => row.startsWith('▾') || row.startsWith('▸'))).toBe(false)
+  expect(first).toMatch(/prompt number 54 +10:54/)
+  expect(first).toMatch(/prompt number 5 +10:05/)
+  expect(first).not.toMatch(/prompt number 4 +10:04/)
+  expect(first).toContain('Show 5 earlier')
+  expect(all).toMatch(/prompt number 0 +10:00/)
+  expect(all).not.toContain('earlier')
 })
 
 test('the History hotkey opens History, and pressed again while it shows, closes its tab', async () => {
@@ -1149,7 +1154,6 @@ test("an empty Dashboard says what goes there, and Arrange widgets opens cmod's 
   ])
   expect(tested.state.session.shown).toBe('settings')
   expect(tested.state.session.selected).toBe('cmod')
-  expect(tested.state.session.section).toBe('widgets')
   expect((await tested.shown.pane.lines()).join('\n')).toContain('Above the prompt')
 })
 
@@ -1201,33 +1205,24 @@ test('Finish setup in Settings opens the install view the mod answers with', asy
   expect(await shown()).toContain('1: Install demo')
 })
 
-test('Settings draws a Mods panel with a status mark beside each mod, and a panel for the selected mod with its version and actions, then what it needs and its sections', async () => {
-  const { tested } = testSettings()
-  await tested.type('/mods demo')
+test('Settings lists the mods, marking only one that needs the person, and a press opens that mod as its own page, which All mods leaves', async () => {
+  const { tested, shown } = testSettings()
+  await tested.type('/mods')
   await tested.settle()
-  await tested.shown.pane.lines()
+  await shown()
   await tested.settle()
+  const list = await tested.shown.pane.lines()
 
-  expect(await tested.shown.pane.lines()).toEqual([
-    '▄'.repeat(80),
-    ` 0: Dashboard${' '.repeat(55)}9: Settings`,
-    '▀'.repeat(80),
-    '',
-    ' ╭─ Mods ───╮ ╭─ demo ─────────────────────────╮',
-    ' │  ● cmod  │ │ 0.2.0  Turn off  Remove        │',
-    ' │  ● demo  │ │ A demo mod                     │',
-    ' ╰──────────╯ │                                │',
-    '              │ Needs setup: Sign in to GitHub │',
-    '              │ Finish setup                   │',
-    '              │                                │',
-    '              │ Options   Hotkeys              │',
-    '              │                                │',
-    '              │ Branch                         │',
-    '              │ Value main                     │',
-    '              ╰────────────────────────────────╯',
-    '',
-    ' ↑↓ scroll  tab move  esc hide  open in browser',
-  ])
+  await tested.shown.pane.press('mod:demo')
+  const page = await shown()
+  await tested.shown.pane.press('back')
+  const back = await shown()
+
+  expect(list).toEqual(['▄'.repeat(80), ` 0: Dashboard${' '.repeat(55)}9: Settings`, '▀'.repeat(80), '', '  cmod', '  ● demo 0.2.0', '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
+  expect(page).toContain('0.2.0 · A demo mod')
+  expect(page).toContain('Needs setup: Sign in to GitHub')
+  expect(back).toContain('  ● demo 0.2.0')
+  expect(back).not.toContain('A demo mod')
 })
 
 test('Settings lists a loaded mod that told its parts and has no install record', async () => {
@@ -1240,7 +1235,7 @@ test('Settings lists a loaded mod that told its parts and has no install record'
   await shown()
   await tested.settle()
 
-  expect(await shown()).toContain('│  ● notes  │')
+  expect((await shown()).split('\n')).toContain('  ● notes')
 })
 
 test('Settings reads the mods when the session starts, so /mods draws them on its first frame with no loading line', async () => {
@@ -1252,27 +1247,7 @@ test('Settings reads the mods when the session starts, so /mods draws them on it
   const first = await shown()
 
   expect(first).not.toContain('Reading your mods')
-  expect(first).toContain('│  ● demo  │')
-})
-
-test('Settings stacks the Mods panel above the mod panel when the Sidebar is too narrow for both side by side', async () => {
-  const { tested } = testSettings()
-  await tested.type('/mods demo')
-  await tested.settle()
-  await tested.shown.pane.lines({ columns: 45 })
-  await tested.settle()
-
-  expect((await tested.shown.pane.lines({ columns: 45 })).slice(4, 13)).toEqual([
-    ' ╭─ Mods ──────────────────────────────────╮',
-    ' │  ● cmod                                 │',
-    ' │  ● demo                                 │',
-    ' ╰─────────────────────────────────────────╯',
-    '',
-    ' ╭─ demo ──────────────────────────────────╮',
-    ' │ 0.2.0                  Turn off  Remove │',
-    ' │ A demo mod                              │',
-    ' │                                         │',
-  ])
+  expect(first).toContain('  ● demo 0.2.0')
 })
 
 test('every Sidebar tab keeps its width whether it shows or not, so switching tabs moves no other tab', async () => {
@@ -1494,6 +1469,27 @@ test("the sessions service asks cmod serve with each request's options, and the 
   expect(spawned).toEqual([[cmodProgram, 'sessions', 'index']])
 })
 
+test('search_sessions names each session it finds by its title, project, and state, shows the words around each match, even deep in a tool call, and leaves out earlier searches', async () => {
+  const { tested } = cmodAnswering({})
+  const session = { id: 's1', title: 'Fix the CI lane', project: '/work/php', cwd: '/work/php', model: 'claude-opus-5-5', startedAt: '2026-11-23T15:00:00.000Z', lastAt: '2026-11-23T16:14:05.000Z', isRunning: true, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
+  const command = `cd /work/php && ${'echo warming up && '.repeat(8)}docker build -t php-sharp:dev . && docker run php-sharp:dev bun test`
+  tested.fakes.serve.sessions = () => [session]
+  tested.fakes.serve.read = (_id, part) => (part === 'state' ? null : [])
+  tested.fakes.serve.search = () => [
+    { id: 'm3', session: 's1', type: ToolCall, at: '2026-11-23T16:14:05.144Z', context: 1, turn: 'p1', callId: 'call-3', name: 'mcp__cmod__search_sessions', input: { text: 'docker build -t' } },
+    { id: 'm2', session: 's1', task: 'ac60737d', type: ToolCall, at: '2026-11-23T15:54:07.472Z', context: 1, turn: 'p1', callId: 'call-2', name: 'Bash', input: { description: 'Build the image', command } },
+  ]
+  await tested.start()
+
+  const { result } = (await tested.callTool('search_sessions', { text: 'docker build -t' })) as { readonly result: string }
+
+  expect(result.split('\n')).toEqual([
+    'Fix the CI lane · /work/php on test-computer · running',
+    '  session s1',
+    `  2026-11-23T15:54:07.472Z  subagent ac60737d, Bash call: …${command.slice(command.indexOf('docker build -t') - 60, command.indexOf('docker build -t'))}docker build -t php-sharp:dev . && docker run php-sharp:dev bun test  (message m2)`,
+  ])
+})
+
 test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
   const { tested, spawned } = cmodAnswering({}, { ...demoSetUp, [`${store}/consent.json`]: '{}' })
   await tested.start()
@@ -1648,7 +1644,6 @@ test('cmod:failed answers show for a mod run from the checkout this session work
 
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:log')
   const log = await shown()
   await tested.shown.pane.press('copy:other/session:onPrompt')
 
@@ -1692,7 +1687,6 @@ test('the Log keeps the failures of every session, and skips a session file that
 
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:log')
   const log = await shown()
 
   expect(log.indexOf("demo's onPrompt listener failed")).toBeLessThan(log.indexOf('The every 1000 ms timer failed'))
@@ -1714,7 +1708,6 @@ test('the Log keeps the failures of every session, and skips a session file that
   await tested.fakes.fs.write?.(`${store}/data/cmod/log/other-session.json`, '{}')
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:log')
   const skipped = await shown()
 
   expect(skipped).toContain("demo's onPrompt listener failed")
@@ -1733,7 +1726,6 @@ test('a warning lands in the Log as a warning with the versions it ran on, count
   const logged = (JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'demo')
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:log')
   const log = await shown()
 
   expect(answers).toEqual([{ value: { showsToast: false } }, { value: { showsToast: false } }])
@@ -1762,7 +1754,6 @@ test("another session's preference write reaches this session's Settings when st
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:preferences')
   const before = await shown()
 
   await writeStoreFile(tested, `${store}/preferences.json`, JSON.stringify({ showsInstalledModErrors: true }))
@@ -1777,7 +1768,6 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:preferences')
   const before = await shown()
   await tested.shown.pane.press('toggle:Show errors from installed mods')
   await tested.settle()
@@ -2730,10 +2720,9 @@ test('the Widgets section of cmod in Settings moves the picked widget, and hides
   const saved = async () => JSON.parse((await tested.fakes.fs.read?.(`${store}/widgets.json`)) ?? '{}') as typeof layout
   await tested.type('/mods cmod')
   await tested.settle()
-  await tested.shown.pane.press('tab:widgets')
   await tested.settle()
 
-  expect((await tested.shown.pane.lines()).join('\n')).toContain('Branch (git)')
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('Branch git')
   await tested.shown.pane.press('widget:git/branch')
   await tested.shown.pane.press('move:down')
   await tested.shown.pane.press('move:down')
@@ -2741,6 +2730,30 @@ test('the Widgets section of cmod in Settings moves the picked widget, and hides
   await tested.settle()
 
   expect(await saved()).toEqual({ ...layout, areas: { ...layout.areas, belowPrompt: [], working: [], dashboard: [{ left: ['git/branch'], right: [] }] }, hidden: ['git/branch'] })
+})
+
+test('the Dashboard is a view other apps list only while a running widget is on it', async () => {
+  const layout = { areas: { abovePrompt: [], belowPrompt: [{ left: ['git/branch'], right: [] }], working: [], turnEnd: [], dashboard: [] }, hidden: [] }
+  const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/widgets.json`]: JSON.stringify(layout) }, dependencies: { git: gitWidgets } })
+  const views = async () => {
+    const listed = (await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:parts', input: null, caller: 'cmod' } as never)) as { readonly value?: { readonly pages?: readonly { readonly id: string }[] } }
+    return (listed.value?.pages ?? []).map((view) => view.id)
+  }
+  await tested.type('/mods cmod')
+  await tested.settle()
+  const before = await views()
+
+  await tested.shown.pane.press('widget:git/branch')
+  await tested.shown.pane.press('move:down')
+  await tested.shown.pane.press('move:down')
+  await tested.settle()
+  const placed = await views()
+  await tested.shown.pane.press('hide')
+  await tested.settle()
+
+  expect(before).toEqual(['history', 'settings'])
+  expect(placed).toEqual(['history', 'settings', 'dashboard'])
+  expect(await views()).toEqual(['history', 'settings'])
 })
 
 async function settledUntil(tested: ReturnType<typeof testMod>, isDone: () => boolean) {

@@ -42,8 +42,15 @@ function shown(session: string, given: object = {}) {
   run.send({ type: 'focused', session, now: 0 })
   run.answer(run.pending('cmod/UI.views', session).at(-1) as Effect, views)
   run.answer(run.pending('cmod/UI.pages', session).at(-1) as Effect, [])
-  run.answer(run.pending('cmod/UI.draw', session).at(-1) as Effect, tree(`${session} dashboard`))
+  answerDraws(run, session)
   return run
+}
+
+function answerDraws(run: ReturnType<typeof driven>, session: string) {
+  for (const effect of run.pending('cmod/UI.draw', session)) {
+    const { id } = (effect.params as readonly unknown[])[1] as { readonly id: string }
+    run.answer(effect, tree(`${session} ${id}`))
+  }
 }
 
 test("a refusal an older session's request brings back after the panel moved on never shows over the session it shows now", () => {
@@ -57,16 +64,35 @@ test("a refusal an older session's request brings back after the panel moved on 
   expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ key: 'cmod/dashboard', drawn: { tree: tree('valid dashboard'), error: null } }] })
 })
 
-test('a reply to an earlier request for the same session changes nothing once a newer request for it went out', () => {
+test('redraws that come while a drawing is on its way ask once more after it lands, so a busy session never starves the view of a drawing', () => {
   const run = shown('valid')
+  const drawsBefore = run.calls('cmod/UI.draw').length
+  run.send({ type: 'heard', event: 'Redraw', payload: { session: 'valid', mod: 'cmod', id: 'dashboard' } })
   const first = run.pending('cmod/UI.draw', 'valid').at(-1) as Effect
   run.send({ type: 'heard', event: 'Redraw', payload: { session: 'valid', mod: 'cmod', id: 'dashboard' } })
-  const second = run.pending('cmod/UI.draw', 'valid').at(-1) as Effect
+  run.send({ type: 'heard', event: 'Redraw', payload: { session: 'valid', mod: 'cmod', id: 'dashboard' } })
+  const coalesced = run.calls('cmod/UI.draw').length
 
-  run.answer(second, tree('newer'))
   run.answer(first, tree('older'))
+  const landed = run.screen().parts?.[0]?.drawn?.tree
+  const second = run.pending('cmod/UI.draw', 'valid').at(-1) as Effect
+  run.answer(second, tree('newer'))
 
+  expect(coalesced).toBe(drawsBefore + 1)
+  expect(landed).toEqual(tree('older'))
+  expect(second).not.toBe(first)
+  expect(run.calls('cmod/UI.draw')).toHaveLength(drawsBefore + 2)
   expect(run.screen().parts?.[0]?.drawn?.tree).toEqual(tree('newer'))
+})
+
+test('the panel draws every view a session lists, so switching tabs shows the drawing at once with no request', () => {
+  const run = shown('valid')
+  const drawsBefore = run.calls('cmod/UI.draw').length
+
+  run.send({ type: 'select', key: 'cmod/settings' })
+
+  expect(run.calls('cmod/UI.draw')).toHaveLength(drawsBefore)
+  expect(run.screen()).toMatchObject({ kind: 'ready', parts: [{ key: 'cmod/settings', drawn: { tree: tree('valid settings') } }] })
 })
 
 test('a session the panel showed before shows its last drawing at once when the panel comes back to it, and draws it again behind it', () => {
@@ -90,9 +116,9 @@ test("a session refused because its cmod plugin was gone shows its views once th
   run.send({ type: 'heard', event: 'Change', payload: { session: 'reloaded', part: 'views' } })
   run.answer(run.pending('cmod/UI.views', 'reloaded').at(-1) as Effect, views)
   run.answer(run.pending('cmod/UI.pages', 'reloaded').at(-1) as Effect, [])
-  run.answer(run.pending('cmod/UI.draw', 'reloaded').at(-1) as Effect, tree('back'))
+  answerDraws(run, 'reloaded')
 
-  expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ drawn: { tree: tree('back') } }] })
+  expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ drawn: { tree: tree('reloaded dashboard') } }] })
 })
 
 test('a session the panel has never drawn shows nothing for the first 400 ms, then a loading state', () => {
@@ -108,14 +134,13 @@ test('a session the panel has never drawn shows nothing for the first 400 ms, th
 test('the selected tab stays selected across sessions that list it', () => {
   const run = shown('first')
   run.send({ type: 'select', key: 'cmod/settings' })
-  run.answer(run.pending('cmod/UI.draw', 'first').at(-1) as Effect, tree('first settings'))
 
   run.send({ type: 'focused', session: 'second', now: 10 })
   run.answer(run.pending('cmod/UI.views', 'second').at(-1) as Effect, views)
   run.answer(run.pending('cmod/UI.pages', 'second').at(-1) as Effect, [])
-  const drawn = run.pending('cmod/UI.draw', 'second').at(-1) as Effect
+  answerDraws(run, 'second')
 
-  expect((drawn.params as readonly unknown[])[1]).toEqual({ mod: 'cmod', id: 'settings' })
+  expect(run.screen()).toMatchObject({ kind: 'ready', parts: [{ key: 'cmod/settings', drawn: { tree: tree('second settings') } }] })
 })
 
 test('the panel tells cmod serve what it shows as the host of the session, and clears the last session when it moves', () => {
@@ -124,7 +149,7 @@ test('the panel tells cmod serve what it shows as the host of the session, and c
 
   expect(run.calls('cmod/UI.show').map((effect) => effect.params)).toEqual([
     ['first', 'herdr-test', [], { isHost: true }],
-    ['first', 'herdr-test', [{ mod: 'cmod', id: 'dashboard' }], { isHost: true }],
+    ['first', 'herdr-test', [{ mod: 'cmod', id: 'dashboard' }, { mod: 'cmod', id: 'settings' }], { isHost: true }],
     ['first', 'herdr-test', []],
     ['second', 'herdr-test', [], { isHost: true }],
   ])

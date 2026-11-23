@@ -313,6 +313,8 @@ textarea.input{resize:vertical}
 .tab:hover,.tab:focus-visible{color:var(--text);outline:none}
 .split{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:1ch}
 .panel{border:1px solid var(--subtle);border-radius:6px;padding:calc(var(--row)/2) 1ch;gap:calc(var(--row)/2);flex:1}
+.panel-header{display:flex;justify-content:space-between;align-items:center;gap:2ch;flex-wrap:wrap}
+.panel-description{margin:0;color:var(--inactive)}
 .panel-title,.dialog-title{font:inherit;font-weight:700;margin:0}
 .panel-body,.dialog-body,.banner-body{display:flex;flex-direction:column;min-width:0}
 .switch{font:inherit;color:inherit;background:none;border:0;padding:0;display:inline-flex;gap:1ch;align-items:center;cursor:pointer;align-self:flex-start}
@@ -340,6 +342,7 @@ button.opener::before{content:"▸"}button.opener[aria-expanded="true"]::before{
 .opener:hover,.opener:focus-visible{color:var(--text);outline:none}
 .leading{color:var(--inactive);font-weight:400;flex:0 0 auto}
 .trailing{margin-left:auto;flex:0 0 auto;padding-left:1ch}
+.tree-row .description{margin-left:auto;flex:0 0 auto;padding-left:1ch;color:var(--inactive)}
 .list-item.selected{background:var(--userMessageBackground);color:var(--text);font-weight:700}
 button.list-item:hover,button.list-item:focus-visible{background:var(--userMessageBackground);color:var(--text);outline:none}
 .item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

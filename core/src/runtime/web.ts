@@ -151,7 +151,11 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
     return `<div class="tabs"><div role="tablist" class="tablist">${buttons.join('')}</div><div role="tabpanel" class="tabpanel">${nodeHtml(props['children'], drawing)}</div></div>`
   },
   Split: (props, drawing) => `<div class="split">${(Array.isArray(props['children']) ? props['children'] : [props['children']]).map((child: unknown) => `<div class="split-part">${nodeHtml(child, drawing)}</div>`).join('')}</div>`,
-  Panel: (props, drawing) => `<section class="panel"><h3 class="panel-title">${escaped(textOr(props['title'], ''))}</h3><div class="panel-body">${nodeHtml(props['children'], drawing)}</div></section>`,
+  Panel: (props, drawing) => {
+    const description = typeof props['description'] === 'string' ? `<p class="panel-description">${escaped(props['description'])}</p>` : ''
+    const actions = props['actions'] === undefined ? '' : `<div class="actions">${nodeHtml(props['actions'], drawing)}</div>`
+    return `<section class="panel"><header class="panel-header"><h3 class="panel-title">${escaped(textOr(props['title'], ''))}</h3>${actions}</header>${description}<div class="panel-body">${nodeHtml(props['children'], drawing)}</div></section>`
+  },
   Toggle: (props) => {
     const label = textOr(props['label'], '')
     return `<button type="button" role="switch" class="switch" aria-checked="${props['checked'] === true}"${attribute('data-key', `${textOr(props['key'], '')}toggle:${label}`)}${handlerAttribute('data-press', props['onToggle'])}><span class="switch-track"></span>${escaped(label)}</button>`

@@ -39,18 +39,22 @@ export const Split = hostComponent(
   },
 )
 
+type PanelProps = { readonly title: string; readonly description?: string; readonly actions?: JSX.Children; readonly children?: JSX.Children }
+
 export const Panel = hostComponent(
   'Panel',
-  ({ title, children }: { readonly title: string; readonly children?: JSX.Children }) => ({ title, ...(children === undefined ? {} : { children }) }),
-  ({ title, children }: { readonly title: string; readonly children?: JSX.Children }) =>
-    Box({
+  ({ title, description, actions, children }: PanelProps): PanelProps => ({ title, ...(description === undefined ? {} : { description }), ...(actions === undefined ? {} : { actions }), ...(children === undefined ? {} : { children }) }),
+  ({ title, description, actions, children }: PanelProps) => {
+    const header = description === undefined && actions === undefined ? [] : [Box({ justifyContent: 'space-between', columnGap: 2, flexWrap: 'wrap', children: [Text({ dimColor: true, wrap: 'wrap', children: description ?? '' }), ...(actions === undefined ? [] : [Box({ gap: 2, flexShrink: 0, children: actions })])] })]
+    return Box({
       flexDirection: 'column',
       flexGrow: 1,
       children: [
-        Box({ flexDirection: 'column', flexGrow: 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children }),
+        Box({ flexDirection: 'column', flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children: [...header, children] }),
         Box({ position: 'absolute', top: 0, left: 2, children: Text({ bold: true, wrap: 'truncate-end', children: ` ${title} ` }) }),
       ],
-    }),
+    })
+  },
 )
 
 export const Toggle = hostComponent(
@@ -136,12 +140,13 @@ type ListItemData = ListItemShared & { readonly onToggle?: Pressed }
 
 const statusOf = (tone: ListItemProps['tone']) => (tone === undefined ? [] : [tone === 'off' ? Text({ dimColor: true, children: '○ ' }) : Text({ ...textOf(tone), children: '● ' })])
 
-function treeRow({ key, label, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }: ListItemData): JSX.Element {
+function treeRow({ key, label, description, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }: ListItemData): JSX.Element {
   const opener = isOpen !== undefined && onToggle !== undefined ? Button({ plain: true, key: `${key}:toggle`, onPress: onToggle, children: Text({ dimColor: true, children: isOpen ? '▾' : '▸' }) }) : Text({ children: ' ' })
   const shown = Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: [...statusOf(tone), ...(leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })]), label] })
-  const row = Box({ columnGap: 1, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] })
-  if (trailing === undefined) return Box({ paddingLeft: depth * 2, children: row })
-  return Box({ width: '100%', paddingLeft: depth * 2, columnGap: 1, justifyContent: 'space-between', children: [row, Box({ flexShrink: 0, children: trailing })] })
+  const row = Box({ columnGap: 1, minWidth: 0, children: [opener, onPress === undefined ? shown : Button({ plain: true, key, onPress, children: shown })] })
+  const end = [...(description === undefined ? [] : [Text({ dimColor: true, children: description })]), ...(trailing === undefined ? [] : [trailing])]
+  if (end.length === 0) return Box({ paddingLeft: depth * 2, children: row })
+  return Box({ width: '100%', paddingLeft: depth * 2, columnGap: 1, justifyContent: 'space-between', children: [row, Box({ flexShrink: 0, columnGap: 1, children: end })] })
 }
 
 export const ListItem = hostComponent(
