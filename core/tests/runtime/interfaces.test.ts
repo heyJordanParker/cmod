@@ -606,6 +606,20 @@ test('a poll its client abandons drops its connection at once: cmod serve forget
   expect((await asked('GET', `/rpc/${id}`)).status).toBe(410)
 })
 
+test('a client that died between two polls drops its connection once a message waits a poll time for it, so a call to it fails instead of waiting out its deadline', async () => {
+  const closed: string[] = []
+  const routes = rpcRoutes({ handle: () => async () => null, onClose: (connection) => void closed.push(connection.id), now: () => Date.now(), pollMs: 20 })
+  const asked = (method: string, path: string) => routes.route({ method, path, signal: new AbortController().signal, json: async () => [] }) as Promise<RpcHttpAnswer>
+  const id = ((await asked('POST', '/rpc/connect')).json as { readonly connection: string }).connection
+  const [connection] = routes.connections()
+
+  const call = await connection?.request('$/ping').catch((error: unknown) => (error as Error).message)
+
+  expect(call).toBe('The connection closed: no poll for 0.02 s while a message waited')
+  expect(closed).toEqual([id])
+  expect(routes.connections()).toEqual([])
+})
+
 test('a listener added before its program answers reports nothing, and hears the program once it connects', async () => {
   const server = interfaceServer({ implementations: { 'demo/Platform': { machines: () => [] } } })
   const routes = rpcRoutes({ handle: (connection) => server.handler(connection), now: () => Date.now() })

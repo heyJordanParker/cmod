@@ -189,6 +189,7 @@ type Held = {
   poll: ((messages: RpcMessage[]) => void) | undefined
   chars: number | undefined
   seenAt: number
+  unpolled?: unknown
 }
 
 export type RpcHttpRequest = { readonly method: string; readonly path: string; readonly signal: AbortSignal; json(): Promise<unknown> }
@@ -223,6 +224,7 @@ export function rpcRoutes({
     const each = held.get(id)
     if (each === undefined) return
     held.delete(id)
+    timers.clearTimeout(each.unpolled)
     each.poll?.([])
     each.connection.close(new Error(reason))
     onClose?.(each.connection)
@@ -236,7 +238,10 @@ export function rpcRoutes({
       send: (message) => {
         if (entry === undefined) return
         outbox.push(message)
-        if (entry.poll === undefined) return
+        if (entry.poll === undefined) {
+          entry.unpolled ??= timers.setTimeout(() => drop(id, `no poll for ${pollMs / 1000} s while a message waited`), pollMs)
+          return
+        }
         const poll = entry.poll
         entry.poll = undefined
         poll(takenWithin(outbox, entry.chars))
@@ -264,6 +269,8 @@ export function rpcRoutes({
   const poll = (each: Held, signal: AbortSignal, chars: number | undefined) =>
     new Promise<RpcMessage[]>((resolve) => {
       each.poll?.([])
+      timers.clearTimeout(each.unpolled)
+      each.unpolled = undefined
       each.chars = chars
       if (each.outbox.length > 0) return resolve(takenWithin(each.outbox, chars))
       const timer = timers.setTimeout(() => answer([]), pollMs)

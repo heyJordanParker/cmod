@@ -16,6 +16,7 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 - A visit reaches the device that serves the session, so every device reads one `visitedAt`.
 - A press in Settings answers once its change is made, so a draw right after it, through `cmod ui` or an app, shows the change.
 - The Herdr panel finds the focused session when Claude Code left bytes after the JSON of its record.
+- A call to a program that died between two of its polls fails within 8 seconds, where it waited out its 30 second deadline, because cmod serve held the dead connection until then.
 
 ### Added
 - `cmod/Sessions` answers `session(id)`, one session by its id.
