@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.8.2] - 2026-11-24
+
+### Fixed
+- The test kit puts the notes a mod gives beside a `UserPromptSubmit` or `PostToolBatch` the test fires into `shown.notes`, as Claude reads them, so a test of a `prompt` that follows the state fires a prompt and reads `shown.notes`, as testing.md shows. Since 8.8.0 such a note comes only at the next prompt or tool batch, and `shown.notes` stayed empty.
+
 ## [8.8.1] - 2026-11-24
 
 ### Fixed

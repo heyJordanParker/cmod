@@ -109,15 +109,13 @@ test('a prompt with no trigger gives Claude its latest text once, at the next pr
   }
   const waited = [...tested.shown.notes]
 
-  const prompted = await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Go on' })
-  const again = await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'And on' })
+  await tested.fire('UserPromptSubmit', { prompt: 'Go on' })
+  await tested.fire('UserPromptSubmit', { prompt: 'And on' })
   tested.state.session.mode = 'review'
-  const batched = await claudeCodeOf(tested).fire('PostToolBatch', { tool_calls: [] })
+  await tested.fire('PostToolBatch', { tool_calls: [] })
 
   expect(waited).toEqual([])
-  expect(prompted.additionalContext).toEqual(['<demo_mod>\n# Mode\nYou are in build mode.\n</demo_mod>'])
-  expect(again.additionalContext).toBeUndefined()
-  expect(batched.additionalContext).toEqual(['<demo_mod>\n# Mode\nYou are in review mode.\n</demo_mod>'])
+  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.', '# Mode\nYou are in review mode.'])
 })
 
 test('after a resume, a prompt with no trigger gives Claude its text at the next prompt after the first change', async () => {

@@ -404,7 +404,7 @@ type ShownPart = {
 type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 ```
 
-What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, and the `beforePrompt` notes a subagent reads as it starts from a spawn the test fires, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
+What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send`, those it gave beside a `UserPromptSubmit` or `PostToolBatch` the test fires, such as a `prompt` that follows the state, and the `beforePrompt` notes a subagent reads as it starts from a spawn the test fires, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
 The test kit keeps no Log, so every error cmod catches for the mod shows in `toasts` ([ui.md](ui.md#toasts)).
 
@@ -414,7 +414,7 @@ test('the Mode prompt follows the mode', async () => {
   await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })
 
   tested.state.session.mode = 'build'
-  await tested.settle()
+  await tested.fire('UserPromptSubmit', { prompt: 'Go on' })
 
   expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
 })

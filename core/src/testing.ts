@@ -715,6 +715,11 @@ export function testMod<State extends object, Declared extends Options = Options
     return answer
   }
 
+  const noted = <Answer extends { readonly additionalContext?: readonly string[] }>(answer: Answer) => {
+    fake.shown.notes.push(...(answer.additionalContext ?? []).map(untagged))
+    return answer
+  }
+
   const fire = ((event: string, input: object, below?: unknown, signal?: AbortSignal) => {
     if (event.includes('.')) return route(event as RoutedEvent, input, below, signal)
     if (event === 'SessionStart') {
@@ -740,6 +745,7 @@ export function testMod<State extends object, Declared extends Options = Options
       return source === 'startup' || source === 'clear' ? started : started.then(async (answer) => (await tellHeldColor(), answer))
     }
     if (event === 'ConfigChange') return route('classic.ConfigChange', filled, below, signal).then(loadSettings)
+    if (event === 'UserPromptSubmit' || event === 'PostToolBatch') return route(`classic.${event}`, filled, below, signal).then(noted)
     if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below, signal)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as ClaudeCode['fire']
