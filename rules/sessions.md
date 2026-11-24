@@ -11,3 +11,7 @@ Example:
   const worker = await sessions.get(Bun.argv[2])
   const [last] = await worker.messages({ last: 1 })
   if (last?.type === 'reply' && last.text.includes('tests fail')) await worker.send({ type: Prompt, text: 'Fix the failing tests.' })
+
+### Change cmod and its mods yourself
+`cmod options set`, `cmod hotkeys set`, `cmod enable`, `cmod disable`, `cmod install`, `cmod update`, and `cmod remove` change mods. `cmod ui draw <session> <mod> <id>` prints any view, Settings included, with a number on each control, and `cmod ui press <session> <number>` presses it, as the person's click does.
+Never: send the person to Settings, ask them to edit a cmod or mod file by hand, or ask them to press a control you can press.

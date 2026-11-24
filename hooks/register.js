@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.7.1";
+var coreVersion = "8.8.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -1203,6 +1203,12 @@ function placedMessage(where, unplaced, task, isInTurn = true, agentType = task 
 var searchLimit = 50;
 var agentTools = ["Agent", "Task"];
 var asyncLaunch = "Async agent launched";
+var stopTool = "TaskStop";
+function endedStatusOf(told) {
+  if (told === "completed" || told === "failed" || told === "killed")
+    return told;
+  return told === "stopped" ? "killed" : undefined;
+}
 function emptyConversation(session) {
   return { session, context: 0, contextOpenedAt: "", agentCalls: [], endedCalls: {}, tasks: {}, taskTurns: {} };
 }
@@ -1244,7 +1250,14 @@ function createConversation(start) {
     turn = undefined;
     return [{ type: TurnEnd2, turn: ended }];
   };
-  const endCall = (call, at, only) => {
+  const close = (task, at, status) => {
+    if (task.closedAt !== undefined)
+      return [];
+    const ended = { ...task, closedAt: at, ...status === undefined ? {} : { status } };
+    tasks.set(task.id, ended);
+    return [...endTaskTurn(task.id, at), { type: TaskEnd, task: ended }];
+  };
+  const endCall = (call, at, only, status) => {
     const opened = [...tasks.values()].filter((each) => each.openedBy === call && (only === undefined || each.id === only));
     if (opened.length === 0) {
       if (agentCalls.has(call))
@@ -1253,13 +1266,20 @@ function createConversation(start) {
     }
     if (only === undefined)
       agentCalls.delete(call);
-    return opened.flatMap((task) => {
-      if (task.closedAt !== undefined)
-        return [];
-      const ended = { ...task, closedAt: at };
-      tasks.set(task.id, ended);
-      return [...endTaskTurn(task.id, at), { type: TaskEnd, task: ended }];
-    });
+    return opened.flatMap((task) => close(task, at, status));
+  };
+  const notified = (text, at) => {
+    const call = tagOf(text, "tool-use-id");
+    const id = tagOf(text, "task-id");
+    const told = tagOf(text, "status");
+    const status = told === undefined ? undefined : endedStatusOf(told);
+    if (told !== undefined && status === undefined)
+      return [];
+    const byCall = call !== undefined && agentCalls.has(call) ? endCall(call, at, id, status) : [];
+    if (byCall.length > 0 || id === undefined)
+      return byCall;
+    const task = tasks.get(id);
+    return task === undefined ? [] : close(task, at, status);
   };
   const changeGoal = (text) => {
     goal = text;
@@ -1312,12 +1332,14 @@ function createConversation(start) {
         if (placed.type === ToolCall && agentTools.includes(placed.name))
           agentCalls.add(placed.callId);
         if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch))
-          changes.push(...endCall(placed.callId, row.at));
-        if (placed.type === Note && placed.from.type === Task) {
-          const call = tagOf(textOf(row.content), "tool-use-id");
-          if (call !== undefined && agentCalls.has(call))
-            changes.push(...endCall(call, row.at, tagOf(textOf(row.content), "task-id")));
+          changes.push(...endCall(placed.callId, row.at, undefined, placed.isError ? "failed" : "completed"));
+        if (placed.type === ToolResult && placed.name === stopTool && !placed.isError && typeof placed.input["task_id"] === "string") {
+          const stopped = tasks.get(placed.input["task_id"]);
+          if (stopped !== undefined)
+            changes.push(...close(stopped, row.at, "killed"));
         }
+        if (placed.type === Note && placed.from.type === Task)
+          changes.push(...notified(textOf(row.content), row.at));
       }
       return changes;
     },
@@ -4128,7 +4150,8 @@ var sessionActs = {
   changed: "$/changed",
   status: "$/status",
   ui: "$/ui",
-  uiEvent: "$/uiEvent"
+  uiEvent: "$/uiEvent",
+  tasks: "$/tasks"
 };
 var providersInterface = "cmod/Providers";
 var interfaceMethods = { providers: "cmod:providers", provider: "cmod:provider", provided: "cmod:provided", listen: "cmod:listenProvided", unlisten: "cmod:unlistenProvided", tell: "cmod:tellProvided", ask: "cmod:askProvided", heard: "cmod:heard" };
@@ -6701,10 +6724,21 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   const call = (address) => addressCall((url, init) => claude.http.fetch(url, init), address);
   const held = interfaceListeners({ report: (error) => report("listen", "Missed a change a sessions provider told", error) });
   let ui = {};
+  const liveTasksOver = async (saved, request) => {
+    await starting;
+    const kept = liveTasks().filter((task) => request["all"] === true || task.parent === request["task"]);
+    const running = await claude.agent.list().catch((error) => (claude.ui.warn("tasks:status", `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []));
+    const background = saved.flatMap(({ id, status, isBackground }) => status === undefined || isBackground !== true ? [] : [{ id, status }]);
+    return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
+  };
   const handle = async (method, params, signal) => {
     const answered = await held.handler(method, params, signal);
     if (answered !== undefined)
       return answered.result;
+    if (method === sessionActs.tasks) {
+      const { saved, options } = isObject(params) ? params : {};
+      return liveTasksOver(Array.isArray(saved) ? saved : [], isObject(options) ? options : {});
+    }
     if (method === sessionActs.act) {
       const { action, input, caller, task } = params;
       if (!isAct(action))
@@ -6856,6 +6890,8 @@ ${program ?? ""}`;
     return;
   };
   const dispatch = (changes) => {
+    if (session !== "" && changes.some((change) => change.type === TaskStart || change.type === TaskEnd))
+      local.client.notify(sessionActs.changed, { session, part: "tasks" });
     for (const change of changes) {
       if ((change.type === TurnStart || change.type === TurnEnd2) && change.turn.prompt.task === undefined)
         lastTurn = change.turn;
@@ -7355,6 +7391,7 @@ ${target}`;
     openedBy: task.openedBy,
     openedAt: task.openedAt,
     ...task.closedAt === undefined ? {} : { closedAt: task.closedAt },
+    ...task.status === undefined ? {} : { status: task.status },
     ...task.parent === undefined ? {} : { parent: task.parent },
     ...task.forkedFrom === undefined ? {} : { forkedFrom: task.forkedFrom },
     ...task.isBackground === true ? { isBackground: true } : {}
@@ -7377,9 +7414,17 @@ ${target}`;
     },
     async[conversationMethods.session](request) {
       const id = String(request["session"]);
-      const found = (await listAll({ project: project(), everyProject: true })).find((each) => each.id === id);
-      if (found === undefined)
-        throw new Error(`no session ${id} on any of your devices.`);
+      const lookedUp = (client) => client.request(`${sessionsInterface}.session`, [id]).catch(async (error) => {
+        if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound))
+          throw error;
+        const listed = (await client.request(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id);
+        if (listed === undefined)
+          throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`);
+        return listed;
+      });
+      const found = await firstHolding(lookedUp).catch((error) => {
+        throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
+      });
       return found.id === session ? { ...found, isRunning: true } : found;
     },
     async[conversationMethods.search](request) {
@@ -7426,15 +7471,7 @@ ${target}`;
     },
     async[conversationMethods.tasks](request) {
       const id = String(request["session"]);
-      const isNested = request["all"] === true;
-      const saved = await read(id, "tasks", isNested ? { all: true } : fields(request, ["task"]));
-      if (id !== session)
-        return saved;
-      await starting;
-      const kept = liveTasks().filter((task) => isNested || task.parent === request["task"]);
-      const running = await claude.agent.list().catch((error) => (claude.ui.warn("tasks:status", `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []));
-      const background = saved.flatMap(({ id, status }) => status === undefined ? [] : [{ id, status }]);
-      return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
+      return read(id, "tasks", request["all"] === true ? { all: true } : fields(request, ["task"]));
     },
     async[conversationMethods.goal](request) {
       const id = String(request["session"]);
@@ -12226,7 +12263,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12375,8 +12412,8 @@ function widgetsLayout(current, widgets) {
       columnGap: 2,
       flexWrap: "wrap",
       children: [
-        ...area === undefined ? [] : moves.map(({ move, hotkey, label }) => Button({ plain: true, key: `move:${move}`, hotkey, label, onPress: () => void widgets.change((now) => moved(now, widgetFor(selected, area), move)) })),
-        Button({ plain: true, key: "hide", hotkey: "x", label: layout.hidden.includes(selected) ? "Show" : "Hide", onPress: () => void widgets.change((now) => toggled(now, selected)) })
+        ...area === undefined ? [] : moves.map(({ move, hotkey, label }) => Button({ plain: true, key: `move:${move}`, hotkey, label, onPress: () => widgets.change((now) => moved(now, widgetFor(selected, area), move)) })),
+        Button({ plain: true, key: "hide", hotkey: "x", label: layout.hidden.includes(selected) ? "Show" : "Hide", onPress: () => widgets.change((now) => toggled(now, selected)) })
       ]
     })
   ];
@@ -12444,7 +12481,7 @@ function settings2(mod) {
       await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed("The preferences"));
     };
     refresh();
-    const act = (task) => void task().then((notice) => {
+    const act = (task) => task().then((notice) => {
       mod.state.session.notice = notice ?? null;
       return refresh();
     }).catch((error) => void (mod.state.session.notice = messageOf(error)));
@@ -12624,7 +12661,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12813,7 +12850,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13153,7 +13190,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13414,7 +13451,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13444,7 +13481,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13947,7 +13984,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-t5oKYV/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-jWg0RP/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

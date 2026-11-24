@@ -4,6 +4,24 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.8.0] - 2026-11-24
+
+### Fixed
+- A message to another session never starts a second copy of it. A session Claude Code still runs is never resumed, where one cmod read as ended was resumed with `claude --bg --resume`, which copies a running session. When no cmod plugin in it reaches `cmod serve`, the message is refused with the reason and nothing starts.
+- A message reaches its session in milliseconds. `sessions.get` and `message_session` look the session up by its id, where they listed every session of every device first, which took seconds under load and ran past the 10 s a hook has.
+- A running session lists as running with its status even when Claude Code left bytes after the JSON of its session record, and a `running` list counts each session a cmod plugin holds. The status a session's cmod plugin heard last wins over an older one in Claude Code's record.
+- A task's `closedAt` and `status` follow its agent. A notification that a subagent waits on its own background work no longer closes it, a notification closes the task it names even when its Agent call is gone, a `TaskStop` closes its task as `killed`, and a subagent whose Claude Code ended or restarted closes as `killed`. A task that ended reads `completed`, `failed`, or `killed`.
+- The tasks of every running session read their live `status`, through that session's own cmod plugin, and `cmod/Sessions` tells a `Change` of `part: 'tasks'` each time a session's task starts or ends.
+- A `prompt` job gives Claude one note with its latest text, at the next prompt or tool batch after the state changes, where it added a note for every change, and a row while the session waited, which made the conversation jump.
+- A visit reaches the device that serves the session, so every device reads one `visitedAt`.
+- A press in Settings answers once its change is made, so a draw right after it, through `cmod ui` or an app, shows the change.
+- The Herdr panel finds the focused session when Claude Code left bytes after the JSON of its record.
+- A call to a program that died between two of its polls fails within 8 seconds, where it waited out its 30 second deadline, because cmod serve held the dead connection until then.
+
+### Added
+- `cmod/Sessions` answers `session(id)`, one session by its id.
+- cmod's rule tells agents to change cmod and its mods themselves, with cmod's commands and `cmod ui`, and never send the person to Settings.
+
 ## [8.7.1] - 2026-11-23
 
 ### Fixed
