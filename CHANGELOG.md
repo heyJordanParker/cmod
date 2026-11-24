@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.8.1] - 2026-11-24
+
+### Fixed
+- A message to a session Claude Code runs whose cmod plugin does not reach `cmod serve` is refused with that reason, `Session <id> runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.`, where another device answered `No session <id> on this computer.` for it. No copy of the session starts either way.
+
 ## [8.8.0] - 2026-11-24
 
 ### Fixed

@@ -63,7 +63,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
   const resume = async (session: string, project: string, input: unknown) => {
     const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
     if (text.trim() === '') throw new Error('send needs text.')
-    if ((await activeSessions()).has(session)) throw runsUnreached(session)
+    if ((await activeSessions()).has(session)) throw runsUnreached(session, 'send')
     const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
     return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
   }
@@ -158,7 +158,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       async unheld(session, action, input, context, holding) {
         const named = action === 'startTask' ? await deviceNamedBy(input) : undefined
         if (named !== undefined) return startTaskOn(named, session, input as TaskStartArgs, projectOf(session, context, holding))
-        if (runningEntries().some((entry) => entry.session === session)) throw runsUnreached(session)
+        if (runningEntries().some((entry) => entry.session === session)) throw runsUnreached(session, action)
         const project = projectOf(session, context, holding)
         if (!hasTranscript(session, project)) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
         if (action === 'usage') return readUsage({ session, project, ...taskOf(context) })
@@ -226,8 +226,8 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
   }
 }
 
-function runsUnreached(session: string): RpcError {
-  return new RpcError(rpcCodes.notHeld, `Session ${session} runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.`)
+function runsUnreached(session: string, action: string): Error {
+  return new Error(`Session ${session} runs, but no cmod plugin in it reaches cmod serve, so it takes no ${action}, and cmod starts no copy of it. Run /reload-plugins in it.`)
 }
 
 function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'status' | 'waitingFor'> {

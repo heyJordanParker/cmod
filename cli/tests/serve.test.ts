@@ -3,7 +3,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
+import { connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { scripts, version } from '../package.json'
 import { cmod, cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
@@ -142,14 +142,15 @@ test.concurrent('cmod serve resumes an ended session in the background on a mess
   expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/visited.json'), 'utf8'))).toEqual({})
 }, 30_000)
 
-test.concurrent('cmod serve sends no message to a session Claude Code still runs, so a message never starts a second copy of it, even while no record or cmod plugin says it runs', async () => {
+test.concurrent('cmod serve sends no message to a session Claude Code still runs, so a message never starts a second copy of it, even while no record or cmod plugin says it runs, and its refusal is final, so no other device answers for the session', async () => {
   const { home, folder, act, stop } = await servedHome()
   await writeFiles(home, { [`${folder}/alive.jsonl`]: transcript('alive', project(home)) })
 
-  const refused = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' }).catch((error: unknown) => (error as Error).message)
+  const refused = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' }).catch((error: unknown) => error as RpcError)
   stop()
 
-  expect(refused).toBe('Session alive runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.')
+  expect(refused).toBeInstanceOf(RpcError)
+  expect([(refused as RpcError).message, (refused as RpcError).code === rpcCodes.notHeld]).toEqual(['Session alive runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.', false])
   expect(existsSync(join(home, 'bg-args'))).toBe(false)
 }, 30_000)
 
@@ -189,7 +190,7 @@ test.concurrent('cmod serve refuses an action on a session no transcript names, 
   stop()
 
   expect(unknown).toBe('No session gone on this computer.')
-  expect(older).toBe('Session older runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.')
+  expect(older).toBe('Session older runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.')
   expect(running).toBe('session older runs, so it stays. End it first.')
   expect(ended).toBe('session ended has ended, so it takes no abort. Message it to resume it.')
   expect(elsewhere).toBe('No session gone on this computer.')
