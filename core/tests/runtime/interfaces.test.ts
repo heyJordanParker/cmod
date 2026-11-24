@@ -22,6 +22,7 @@ type Rules = { readonly mod: string; beforeCheck(listener: (check: { readonly to
 
 const noSessions: SessionComputer = {
   sessions: () => [],
+  session: () => undefined,
   search: () => [],
   read: () => [],
   unheld: () => Promise.reject(new Error('no session')),

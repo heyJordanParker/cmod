@@ -7,7 +7,7 @@ import { createConversation, emptyConversation, ownerOfSpawn, tasksWithAgents, t
 import { Session, UsageChange, type BeforeEvent, type Surface, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
 import { GoalChange } from '../session/goal/goal.js'
 import { TurnEnd, TurnStart } from '../session/context/turn/turn.js'
-import { TaskStart } from '../session/goal/task.js'
+import { TaskEnd, TaskStart } from '../session/goal/task.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { resolve } from '../vendor.js'
 import { ifMissing } from '../utils/paths.js'
@@ -211,9 +211,21 @@ export function serveConversations({
 
   let ui: Implementation = {}
 
+  const liveTasksOver = async (saved: readonly TaskData[], request: Readonly<Record<string, unknown>>): Promise<TaskData[]> => {
+    await starting
+    const kept = liveTasks().filter((task) => request['all'] === true || task.parent === request['task'])
+    const running = await claude.agent.list().catch((error: unknown) => (claude.ui.warn('tasks:status', `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []))
+    const background = saved.flatMap(({ id, status, isBackground }) => (status === undefined || isBackground !== true ? [] : [{ id, status }]))
+    return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background])
+  }
+
   const handle = async (method: string, params: unknown, signal: AbortSignal): Promise<unknown> => {
     const answered = await held.handler(method, params, signal)
     if (answered !== undefined) return answered.result
+    if (method === sessionActs.tasks) {
+      const { saved, options } = (isObject(params) ? params : {}) as { readonly saved?: unknown; readonly options?: unknown }
+      return liveTasksOver(Array.isArray(saved) ? (saved as TaskData[]) : [], isObject(options) ? options : {})
+    }
     if (method === sessionActs.act) {
       const { action, input, caller, task } = params as { readonly action: string; readonly input: unknown; readonly caller?: string; readonly task?: string }
       if (!isAct(action)) throw new RpcError(rpcCodes.methodNotFound, (await unknownTo(`"${action}" action`)).message)
@@ -360,6 +372,7 @@ export function serveConversations({
   const closings = new Map<string, TurnData>()
   let onTurnClosed: (turn: TurnData) => void = () => undefined
   const dispatch = (changes: readonly SessionChange[]) => {
+    if (session !== '' && changes.some((change) => change.type === TaskStart || change.type === TaskEnd)) local.client.notify(sessionActs.changed, { session, part: 'tasks' })
     for (const change of changes) {
       if ((change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.task === undefined) lastTurn = change.turn
       if (change.type === Message && !liveIds.has(change.message.id)) {
@@ -842,6 +855,7 @@ export function serveConversations({
       openedBy: task.openedBy,
       openedAt: task.openedAt,
       ...(task.closedAt === undefined ? {} : { closedAt: task.closedAt }),
+      ...(task.status === undefined ? {} : { status: task.status }),
       ...(task.parent === undefined ? {} : { parent: task.parent }),
       ...(task.forkedFrom === undefined ? {} : { forkedFrom: task.forkedFrom }),
       ...(task.isBackground === true ? { isBackground: true as const } : {}),
@@ -869,8 +883,16 @@ export function serveConversations({
     },
     async [conversationMethods.session](request) {
       const id = String(request['session'])
-      const found = (await listAll({ project: project(), everyProject: true })).find((each) => each.id === id)
-      if (found === undefined) throw new Error(`no session ${id} on any of your devices.`)
+      const lookedUp = (client: Pick<RpcClient, 'request'>) =>
+        client.request<SessionData>(`${sessionsInterface}.session`, [id]).catch(async (error: unknown) => {
+          if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound)) throw error
+          const listed = (await client.request<SessionData[]>(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id)
+          if (listed === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`)
+          return listed
+        })
+      const found = await firstHolding(lookedUp).catch((error: unknown) => {
+        throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error
+      })
       return found.id === session ? { ...found, isRunning: true } : found
     },
     async [conversationMethods.search](request) {
@@ -911,14 +933,7 @@ export function serveConversations({
     },
     async [conversationMethods.tasks](request) {
       const id = String(request['session'])
-      const isNested = request['all'] === true
-      const saved = await read<TaskData[]>(id, 'tasks', isNested ? { all: true } : fields(request, ['task']))
-      if (id !== session) return saved
-      await starting
-      const kept = liveTasks().filter((task) => isNested || task.parent === request['task'])
-      const running = await claude.agent.list().catch((error: unknown) => (claude.ui.warn('tasks:status', `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []))
-      const background = saved.flatMap(({ id, status }) => (status === undefined ? [] : [{ id, status }]))
-      return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background])
+      return read<TaskData[]>(id, 'tasks', request['all'] === true ? { all: true } : fields(request, ['task']))
     },
     async [conversationMethods.goal](request) {
       const id = String(request['session'])

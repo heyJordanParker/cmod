@@ -206,8 +206,8 @@ function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets
             columnGap: 2,
             flexWrap: 'wrap',
             children: [
-              ...(area === undefined ? [] : moves.map(({ move, hotkey, label }) => Button({ plain: true, key: `move:${move}`, hotkey, label, onPress: () => void widgets.change((now) => moved(now, widgetFor(selected, area), move)) }))),
-              Button({ plain: true, key: 'hide', hotkey: 'x', label: layout.hidden.includes(selected) ? 'Show' : 'Hide', onPress: () => void widgets.change((now) => toggled(now, selected)) }),
+              ...(area === undefined ? [] : moves.map(({ move, hotkey, label }) => Button({ plain: true, key: `move:${move}`, hotkey, label, onPress: () => widgets.change((now) => moved(now, widgetFor(selected, area), move)) }))),
+              Button({ plain: true, key: 'hide', hotkey: 'x', label: layout.hidden.includes(selected) ? 'Show' : 'Hide', onPress: () => widgets.change((now) => toggled(now, selected)) }),
             ],
           }),
         ]
@@ -280,8 +280,8 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     void refresh()
 
-    const act = (task: () => Promise<string | undefined>) =>
-      void task()
+    const act = (task: () => Promise<string | undefined>): Promise<void> =>
+      task()
         .then((notice) => {
           mod.state.session.notice = notice ?? null
           return refresh()

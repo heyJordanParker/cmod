@@ -1,10 +1,10 @@
 import type { Database } from 'bun:sqlite'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { followSessions, listSessions, openHistory, readContexts, readGoal, readMessages, readState, readTasks, readTurns, removeSession, searchMessages, type IndexAnswer, type IndexCall } from './history.js'
+import { followSessions, getSession, listSessions, openHistory, readContexts, readGoal, readMessages, readState, readTasks, readTurns, removeSession, searchMessages, type IndexAnswer, type IndexCall } from './history.js'
 
 declare const self: Worker
 
-const methods = { listSessions, searchMessages, readMessages, readTurns, readContexts, readTasks, readGoal, readState, removeSession }
+const methods = { listSessions, getSession, searchMessages, readMessages, readTurns, readContexts, readTasks, readGoal, readState, removeSession }
 
 export type IndexMethods = typeof methods
 

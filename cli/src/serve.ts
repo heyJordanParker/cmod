@@ -5,11 +5,11 @@ import { join } from 'node:path'
 import { dataFolder, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
 import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { MissingMachineId, readDevice } from '@cmodjs/core/src/runtime/device.js'
-import { routeSessions, type HoldingOf, type SessionContext, type SessionRouting, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
+import { routeSessions, type HoldingOf, type SessionContext, type SessionRouting, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
 import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
-import type { SessionData } from '@cmodjs/core/src/session/conversation.js'
+import type { SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
-import { startBackground, startTask, withBackgroundStatus } from './claude.js'
+import { activeSessions, startBackground, startTask, withBackgroundStatus } from './claude.js'
 import { ifMissing, readJson, writeAtomically } from './files.js'
 import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
@@ -63,9 +63,33 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
   const resume = async (session: string, project: string, input: unknown) => {
     const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
     if (text.trim() === '') throw new Error('send needs text.')
-    const cwd = (await index.listSessions({ project, everyProject: true, since: undefined })).find((each) => each.id === session)?.cwd ?? project
+    if ((await activeSessions()).has(session)) throw runsUnreached(session)
+    const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
     return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
   }
+
+  const statusOf = (entry: RunningEntry | undefined, told: ToldAt, session: string) => {
+    const toldAt = told.get(session)
+    return toldAt !== undefined && toldAt > (entry?.statusAt ?? 0) ? {} : recordedStatus(entry)
+  }
+
+  const sessionData = (session: SessionData, here: Pick<SessionData, 'device'>, visits: VisitedAt, records: ReadonlyMap<string, RunningEntry>, told: ToldAt): SessionData => ({
+    ...session,
+    ...here,
+    isRunning: session.isRunning || told.has(session.id),
+    ...(visits[session.id] === undefined ? {} : { visitedAt: visits[session.id] }),
+    ...statusOf(records.get(session.id), told, session.id),
+  })
+
+  const diedAt = async (session: string, project: string, holding: HoldingOf): Promise<string | undefined> => {
+    const record = runningEntries().find((entry) => entry.session === session)
+    if (record !== undefined) return record.startedAt === undefined ? undefined : new Date(record.startedAt).toISOString()
+    if (holding(session) !== undefined) return undefined
+    return (await index.getSession({ session, project, held: [] }))?.lastAt
+  }
+
+  const withDeadTasks = (tasks: readonly TaskData[], died: string | undefined): TaskData[] =>
+    tasks.map((task) => (died === undefined || task.closedAt !== undefined || task.isBackground === true || task.openedAt > died ? task : { ...task, closedAt: died, status: 'killed' }))
 
   const startTaskOn = async (here: { readonly name: string }, session: string, task: TaskStartArgs, project: string) => {
     const cwd = task.cwd ?? project
@@ -90,13 +114,18 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       wait: (ms) => Bun.sleep(ms),
     },
     computer: {
-      async sessions(scope, _holding, held) {
+      async sessions(scope, _holding, told) {
         const [visits, here] = await Promise.all([readVisits(), device])
         const project = typeof scope['project'] === 'string' ? scope['project'] : undefined
         const records = new Map(runningEntries().map((entry) => [entry.session, entry]))
-        return (await index.listSessions({ project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) })).map(
-          (session): SessionData => ({ ...session, ...here, isRunning: session.isRunning || held.has(session.id), ...(visits[session.id] === undefined ? {} : { visitedAt: visits[session.id] }), ...recordedStatus(records.get(session.id)) }),
-        )
+        const listed = await index.listSessions({ project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, held: [...told.keys()], ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) })
+        return listed.map((session) => sessionData(session, here, visits, records, told))
+      },
+      async session(session, holding, told) {
+        const [visits, here] = await Promise.all([readVisits(), device])
+        const found = await index.getSession({ session, project: holding(session)?.project ?? '', held: [...told.keys()] })
+        if (found === undefined) return undefined
+        return sessionData(found, here, visits, new Map(runningEntries().map((entry) => [entry.session, entry])), told)
       },
       search(text, options) {
         const project = typeof options['project'] === 'string' ? options['project'] : undefined
@@ -120,7 +149,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         if (part === 'messages') return index.readMessages({ session, project, ...task, ...text('turn', options), ...text('after', options), ...count('last', options) })
         if (part === 'turns') return index.readTurns({ session, project, ...task, ...count('context', options), ...count('last', options) })
         if (part === 'contexts') return index.readContexts({ session, project, ...task })
-        if (part === 'tasks') return withBackgroundStatus(await index.readTasks({ session, project, ...task, ...(options['all'] === true ? { isNested: true } : {}) }), (error) => report('lists the background tasks with no status', error))
+        if (part === 'tasks') return withDeadTasks(await withBackgroundStatus(await index.readTasks({ session, project, ...task, ...(options['all'] === true ? { isNested: true } : {}) }), (error) => report('lists the background tasks with no status', error)), await diedAt(session, project, holding))
         if (part === 'goal') return index.readGoal({ session, project, ...task })
         if (part === 'usage') return readUsage({ session, project, ...task })
         if (part === 'state') return index.readState({ session, project })
@@ -129,7 +158,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       async unheld(session, action, input, context, holding) {
         const named = action === 'startTask' ? await deviceNamedBy(input) : undefined
         if (named !== undefined) return startTaskOn(named, session, input as TaskStartArgs, projectOf(session, context, holding))
-        if (runningEntries().some((entry) => entry.session === session)) throw new RpcError(rpcCodes.notHeld, `Session ${session} runs a cmod plugin from before 7.0.0, so it takes no ${action}. Reload it with /reload-plugins.`)
+        if (runningEntries().some((entry) => entry.session === session)) throw runsUnreached(session)
         const project = projectOf(session, context, holding)
         if (!hasTranscript(session, project)) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
         if (action === 'usage') return readUsage({ session, project, ...taskOf(context) })
@@ -138,10 +167,12 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         if (action === 'send') return resume(session, project, input)
         throw new Error(`session ${session} has ended, so it takes no ${action}. Message it to resume it.`)
       },
-      visit: (session, at) =>
-        writeVisits((visits) => {
+      async visit(session, at, holding) {
+        if (holding(session) === undefined && !hasTranscript(session, '')) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+        await writeVisits((visits) => {
           visits[session] = at
-        }),
+        })
+      },
       async remove(session, context, holding) {
         if (runningEntries().some((entry) => entry.session === session)) throw new Error(`session ${session} runs, so it stays. End it first.`)
         if (!hasTranscript(session, projectOf(session, context, holding))) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
@@ -193,6 +224,10 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       routing.close()
     },
   }
+}
+
+function runsUnreached(session: string): RpcError {
+  return new RpcError(rpcCodes.notHeld, `Session ${session} runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.`)
 }
 
 function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'status' | 'waitingFor'> {

@@ -331,7 +331,7 @@ export default class Cmod extends View {
   async sessionOf({ address, pid }) {
     if (pid === null || address.includes("/")) return null;
     const record = await readTextFile(`${(await this.homesOf()).claude}/sessions/${pid}.json`);
-    return record === null ? null : JSON.parse(record).sessionId ?? null;
+    return record === null ? null : /"sessionId"\s*:\s*"([^"]+)"/.exec(record)?.[1] ?? null;
   }
 
   prepareShown(cx) {

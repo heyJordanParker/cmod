@@ -296,6 +296,26 @@ test('every task a workflow call started ends when the call returns, and a notif
   expect(notified.flatMap((change) => (change.type === TaskEnd ? [change.task.id] : []))).toEqual(['watcher-2'])
 })
 
+test("an async task ends only at a notification whose status ends it, found by its task id when the call is gone, and a TaskStop ends it as killed", () => {
+  const notification = (task: string, status: string, call?: string) => line({ type: 'user', isMeta: true, message: { role: 'user', content: `<task-notification><task-id>${task}</task-id>${call === undefined ? '' : `<tool-use-id>${call}</tool-use-id>`}<status>${status}</status><summary>Agent "${task}" ${status}</summary></task-notification>` } })
+  const endedIn = (changes: readonly SessionChange[]) => changes.flatMap((change) => (change.type === TaskEnd ? [[change.task.id, change.task.status]] : []))
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Run the lanes'))
+  for (const id of ['laws', 'speed', 'engine']) {
+    conversation.add(said({ type: 'tool_use', id: `call-${id}`, name: 'Agent', input: { prompt: id, run_in_background: true } }))
+    conversation.startTask({ id, title: id, agentType: 'claude', openedBy: `call-${id}`, openedAt: '2026-10-13T10:01:00.000Z' })
+    conversation.add(answered(`call-${id}`, 'Async agent launched successfully.'))
+  }
+
+  const waiting = conversation.add(notification('laws', 'waiting', 'call-laws'))
+  const finished = conversation.add(notification('laws', 'completed'))
+  const failed = conversation.add(notification('speed', 'failed', 'call-speed'))
+  conversation.add(said({ type: 'tool_use', id: 'stop-1', name: 'TaskStop', input: { task_id: 'engine' } }))
+  const stopped = conversation.add(answered('stop-1', 'Stopped engine.'))
+
+  expect([endedIn(waiting), endedIn(finished), endedIn(failed), endedIn(stopped)]).toEqual([[], [['laws', 'completed']], [['speed', 'failed']], [['engine', 'killed']]])
+})
+
 test('a conversation restarted from its saved state keeps its open turn, goal, and tasks', () => {
   const first = createConversation(emptyConversation('s1'))
   first.add(typed('Find the pane'))

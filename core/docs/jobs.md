@@ -263,10 +263,10 @@ prompt<State>(options: {
 
 | Options | When Claude reads the text |
 | --- | --- |
-| no `after` | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again whenever `mod.state` changes and the text differs from what Claude last got. |
+| no `after` | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again at the next prompt or tool batch after `mod.state` changes, when the text differs from what Claude last got. |
 | `after` | After each call that matches a target and succeeds, with the call's result, under the heading `# <name>`. `input.call` is the matched call, with its `folder` as `permissions` gives it. |
 
-- Without `after`, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a `Note` Claude reads on its next call to the model, as `sessions.current.send` does ([session.md](session.md#act-on-a-session)). Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
+- Without `after`, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again at the main agent's next prompt or batch of tool results, and when the text differs from what Claude last got, it gives `# <name>` and the new text beside that prompt or those results, which Claude reads on its next call to the model. So any number of changes in between give one note with the last text, and a session waiting for its person gets no row. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
 - A `prompt` function that returns `undefined` or `''` adds nothing. One that throws adds nothing, and the error goes to Claude Code's debug log.
 - `name` cannot be blank. Two prompts with one name in a mod throw.
 - Text for the prompts that match a pattern is a `beforePrompt` note: `sessions.current.beforePrompt({ text: /\bmigrat/i }, () => ({ note: 'Every migration has a down step.' }))` ([session.md](session.md#change-what-happens)).

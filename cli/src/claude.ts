@@ -254,6 +254,12 @@ export async function backgroundAgents(): Promise<{ readonly id: string; readonl
   return entries.filter(isObject).flatMap((entry) => (typeof entry['sessionId'] === 'string' ? [{ id: String(entry['id']), sessionId: entry['sessionId'], status: String(entry['status']) }] : []))
 }
 
+export async function activeSessions(): Promise<ReadonlySet<string>> {
+  const entries = parse(await run([claudeCode(), 'agents', '--json']), 'claude agents --json')
+  if (!Array.isArray(entries)) throw new Error('claude agents --json printed no list. Update Claude Code to 2.1.308 or later.')
+  return new Set(entries.filter(isObject).flatMap((entry) => (typeof entry['sessionId'] === 'string' ? [entry['sessionId']] : [])))
+}
+
 const taskStatuses: ReadonlySet<string> = new Set(['pending', 'running', 'waiting', 'idle', 'completed', 'failed', 'killed'] satisfies TaskStatus[])
 
 export async function withBackgroundStatus(tasks: readonly TaskData[], report: (error: unknown) => void): Promise<TaskData[]> {

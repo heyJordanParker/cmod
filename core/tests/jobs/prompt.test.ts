@@ -90,7 +90,7 @@ test('a prompt callback that passes its 5 s deadline adds nothing, and the mod l
   expect(tested.shown.debug).toContain('demo: prompt "history" added nothing: the history prompt passed the 5 s deadline of prompt')
 })
 
-test('a prompt with no trigger gives Claude its new text once each time the state it reads changes it', async () => {
+test('a prompt with no trigger gives Claude its latest text once, at the next prompt or tool batch after the state changes it, and adds nothing while the session waits', async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
@@ -101,21 +101,26 @@ test('a prompt with no trigger gives Claude its new text once each time the stat
     }),
   )
   await tested.start()
+  expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [{ name: 'Mode', text: 'You are in propose mode.' }] })
+  for (const mode of ['review', 'build', 'plan', 'build']) {
+    tested.state.session.mode = mode
+    tested.state.session.presses += 1
+    await tested.settle()
+  }
+  const waited = [...tested.shown.notes]
+
+  const prompted = await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Go on' })
+  const again = await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'And on' })
   tested.state.session.mode = 'review'
-  await tested.settle()
-  expect(tested.shown.notes).toEqual([])
+  const batched = await claudeCodeOf(tested).fire('PostToolBatch', { tool_calls: [] })
 
-  expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [{ name: 'Mode', text: 'You are in review mode.' }] })
-  tested.state.session.mode = 'build'
-  tested.state.session.presses = 1
-  await tested.settle()
-  tested.state.session.presses = 2
-  await tested.settle()
-
-  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
+  expect(waited).toEqual([])
+  expect(prompted.additionalContext).toEqual(['<demo_mod>\n# Mode\nYou are in build mode.\n</demo_mod>'])
+  expect(again.additionalContext).toBeUndefined()
+  expect(batched.additionalContext).toEqual(['<demo_mod>\n# Mode\nYou are in review mode.\n</demo_mod>'])
 })
 
-test('after a resume, a prompt with no trigger gives Claude its text on the first change', async () => {
+test('after a resume, a prompt with no trigger gives Claude its text at the next prompt after the first change', async () => {
   const tested = testMod(
     defineMod({
       name: 'demo',
@@ -129,7 +134,7 @@ test('after a resume, a prompt with no trigger gives Claude its text on the firs
   tested.state.session.mode = 'build'
   await tested.settle()
 
-  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
+  expect((await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Go on' })).additionalContext).toEqual(['<demo_mod>\n# Mode\nYou are in build mode.\n</demo_mod>'])
 })
 
 test('a prompt with a name and a text and no trigger adds one prompt.context block', async () => {

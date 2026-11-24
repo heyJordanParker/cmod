@@ -916,6 +916,27 @@ test('a clone runs cmod task start with --clone and none of the owner a listener
   expect(spawned).toEqual([{ prompt: 'Write tests for it.', description: 'Write the tests', subagentType: 'fork' }])
 })
 
+test('a lookup of one session asks cmod serve for that id and lists no session, because a list of every session on every device took seconds under load', async () => {
+  let lists = 0
+  const worker = { id: 'worker', title: 'Worker', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '', lastAt: '', isRunning: true }
+  const serve = fakeServe(() => ({ sessions: () => ((lists += 1), []), session: (id) => (id === 'worker' ? worker : undefined) }), { device: async () => testDevice })
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.http.fetch = serve.fetch
+  fake.fakes.process.spawn = () => printed('[]')
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
+  const ask = (session: string) => served.answer({ to: 'cmod', method: conversationMethods.session, input: { session }, caller: 'demo' })
+
+  const found = await ask('worker')
+  const missing = await ask('gone')
+
+  expect(found).toEqual({ value: worker })
+  expect(missing).toEqual({ deny: 'no session gone on any of your devices.' })
+  expect(lists).toBe(0)
+})
+
 test("a background session's cmod plugin records its task's answer at the session's first stop, and the session that started it closes the task", async () => {
   const disk = fakeFiles({})
   const saved = async (session: string) => Promise.all((await disk.list(`/store/data/cmod/tasks/${session}`).catch(ifMissing([]))).map(async (file) => JSON.parse(await disk.read(`/store/data/cmod/tasks/${session}/${file.name}`)) as unknown))

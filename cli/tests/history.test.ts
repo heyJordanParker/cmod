@@ -129,7 +129,7 @@ test.concurrent('readers of a session longer than several write batches, running
     }
   })
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-13.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-14.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -235,7 +235,7 @@ test.concurrent('turns, contexts, tasks, and goal read the shape of a conversati
   ])
   expect(await json(home, 'read', 'turns', 's1', '--project', project, '--last', '1')).toEqual([{ prompt: mainMessages(project)[4], context: 1, openedAt: at(6) }])
   expect(await json(home, 'read', 'contexts', 's1', '--project', project)).toEqual([{ number: 1, openedAt: at(0) }])
-  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', agentType: 'explorer', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5) }])
+  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', agentType: 'explorer', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5), status: 'completed' }])
   expect(await json(home, 'read', 'goal', 's1', '--project', project)).toEqual({ text: 'Rename the tree pane' })
 })
 
@@ -492,7 +492,7 @@ test.concurrent("a fork Claude's Agent tool started reads as a task forked from 
   const { project } = await writeHistory(home)
   await writeFiles(home, { [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'fork', isFork: true, description: 'Find the pane', toolUseId: 'toolu_1' }) })
 
-  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', forkedFrom: 's1', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5) }])
+  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', forkedFrom: 's1', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5), status: 'completed' }])
 })
 
 test.concurrent('two reads started together on a new transcript save each message once', async () => {
@@ -547,15 +547,15 @@ test.concurrent('sessions leaves out a session no one prompted, and lists one wh
   expect(await json(home, 'list', '--project', project)).toEqual([late])
 })
 
-test.concurrent('an index made by an older cmod is deleted, and the index is history-13.sqlite', async () => {
+test.concurrent('an index made by an older cmod is deleted, and the index is history-14.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite']
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite', 'history-12.sqlite', 'history-13.sqlite']
   await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'list', '--project', project)
 
-  expect([...older, 'history-13.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
+  expect([...older, 'history-14.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
 })
 
 test.concurrent('the README names the conversation index cmod writes', async () => {
@@ -632,7 +632,7 @@ test.concurrent('a transcript rewritten under the index returns its new messages
   await writeFiles(home, { [`${projectFolder(project)}/s1.jsonl`]: lines([...rewritten, ...conversation(project)]) })
 
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project))).toEqual(['u1', 'a1:0', 'a1:1', 'r1', 'p1', 'n1'])
-  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', agentType: 'explorer', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5) }])
+  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', agentType: 'explorer', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5), status: 'completed' }])
 })
 
 test('a search with many matches walks the time order of its scope and never sorts every match', async () => {

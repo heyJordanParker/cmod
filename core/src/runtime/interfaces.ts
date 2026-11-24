@@ -41,6 +41,7 @@ export const sessionActs = {
   status: '$/status',
   ui: '$/ui',
   uiEvent: '$/uiEvent',
+  tasks: '$/tasks',
 } as const
 
 export const terminalInterface = 'cmod/Terminal'
@@ -313,12 +314,15 @@ export type SessionContext = Readonly<Record<string, unknown>>
 
 export type HoldingOf = (session: string) => HeldSession | undefined
 
+export type ToldAt = ReadonlyMap<string, number>
+
 export type SessionComputer = {
-  sessions(scope: Readonly<Record<string, unknown>>, holding: HoldingOf, held: ReadonlySet<string>): readonly SessionData[] | Promise<readonly SessionData[]>
+  sessions(scope: Readonly<Record<string, unknown>>, holding: HoldingOf, told: ToldAt): readonly SessionData[] | Promise<readonly SessionData[]>
+  session(session: string, holding: HoldingOf, told: ToldAt): SessionData | undefined | Promise<SessionData | undefined>
   search(text: string, options: Readonly<Record<string, unknown>>): unknown
   read(session: string, part: string, options: Readonly<Record<string, unknown>>, holding: HoldingOf): unknown
   unheld(session: string, action: string, input: unknown, context: SessionContext, holding: HoldingOf): Promise<unknown>
-  visit(session: string, at: string): Promise<void>
+  visit(session: string, at: string, holding: HoldingOf): Promise<void>
   remove(session: string, context: SessionContext, holding: HoldingOf): Promise<void>
 }
 
@@ -356,9 +360,10 @@ export function routeSessions({
   readonly programs?: ProgramReach
   readonly terminals?: SessionTerminals
 }): SessionRouting {
-  type Holder = HeldSession & { readonly connection: Pick<Peer, 'request' | 'notify'>; readonly told: HeldStatus }
+  type Holder = HeldSession & { readonly connection: Pick<Peer, 'request' | 'notify'>; readonly told: HeldStatus; readonly toldAt: number }
   const holders = new Map<Pick<Peer, 'request' | 'notify'>, Holder>()
   const holderOf = (session: string) => [...holders.values()].find((holder) => holder.session === session)
+  const toldAt = (): ToldAt => new Map([...holders.values()].map((holder) => [holder.session, holder.toldAt]))
   const holding: HoldingOf = (session) => {
     const holder = holderOf(session)
     return holder === undefined ? undefined : { session: holder.session, project: holder.project, cwd: holder.cwd }
@@ -372,7 +377,7 @@ export function routeSessions({
   const call = async (session: string, action: string, input: unknown, context: SessionContext = {}): Promise<unknown> => {
     if (!(sessionActions as readonly string[]).includes(action)) throw new RpcError(rpcCodes.methodNotFound, `A session takes no ${action}.`)
     if (action === 'visit') {
-      await computer.visit(session, typeof input === 'string' ? input : new Date(now()).toISOString())
+      await computer.visit(session, typeof input === 'string' ? input : new Date(now()).toISOString(), holding)
       changed({ session, part: 'visit' })
       return null
     }
@@ -396,19 +401,29 @@ export function routeSessions({
   }
 
   const implementation: Implementation = {
-    sessions: async (scope: Readonly<Record<string, unknown>> = {}) => {
-      const told = new Map([...holders.values()].map((holder) => [holder.session, holder.told]))
-      return (await computer.sessions(scope, holding, new Set(told.keys()))).map((listed) => withStatus(listed, told.get(listed.id)))
+    sessions: async (scope: Readonly<Record<string, unknown>> = {}) => (await computer.sessions(scope, holding, toldAt())).map((listed) => withStatus(listed, holderOf(listed.id)?.told)),
+    session: async (session: string) => {
+      const found = await computer.session(session, holding, toldAt())
+      if (found === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+      return withStatus(found, holderOf(session)?.told)
     },
     search: (text: string, options: Readonly<Record<string, unknown>> = {}) => computer.search(text, options),
-    read: (session: string, part: string, options: Readonly<Record<string, unknown>> = {}) => computer.read(session, part, options, holding),
+    read: async (session: string, part: string, options: Readonly<Record<string, unknown>> = {}) => {
+      const saved = await computer.read(session, part, options, holding)
+      const holder = holderOf(session)
+      if (part !== 'tasks' || holder === undefined) return saved
+      return holder.connection.request(sessionActs.tasks, { saved, options }).catch((error: unknown) => {
+        if (error instanceof RpcError && error.code === rpcCodes.methodNotFound) return saved
+        throw error
+      })
+    },
     ...Object.fromEntries(sessionActions.map((action) => [action, (session: string, input?: unknown, context?: unknown) => call(session, action, input ?? null, isObject(context) ? context : {})])),
   }
 
   const showing = async (session: string) => {
     const holder = holderOf(session)
     if (holder !== undefined) return holder.connection
-    const isRunning = (await computer.sessions({ running: true }, holding, new Set())).some((listed) => listed.id === session)
+    const isRunning = (await computer.sessions({ running: true }, holding, new Map())).some((listed) => listed.id === session)
     throw new RpcError(rpcCodes.notHeld, isRunning ? `Session ${session} runs here, but no cmod plugin of 7.0.0 or later in it reaches cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.` : `No session ${session} runs on this computer, so it shows no UI.`)
   }
 
@@ -511,7 +526,7 @@ export function routeSessions({
         const { session, project, cwd, herdrTerminal } = params as HeldSession
         const known = holders.get(connection)
         for (const [each, holder] of holders) if (holder.session === session && each !== connection) holders.delete(each)
-        holders.set(connection, { session, project, cwd, ...(isObject(herdrTerminal) && typeof herdrTerminal.id === 'string' && typeof herdrTerminal.socket === 'string' ? { herdrTerminal: { id: herdrTerminal.id, socket: herdrTerminal.socket } } : {}), connection, told: known?.session === session ? known.told : {} })
+        holders.set(connection, { session, project, cwd, ...(isObject(herdrTerminal) && typeof herdrTerminal.id === 'string' && typeof herdrTerminal.socket === 'string' ? { herdrTerminal: { id: herdrTerminal.id, socket: herdrTerminal.socket } } : {}), connection, ...(known?.session === session ? { told: known.told, toldAt: known.toldAt } : { told: {}, toldAt: 0 }) })
         changed({ session, part: 'running' })
         relisted(session)
         toldShown.delete(session)
@@ -526,7 +541,8 @@ export function routeSessions({
         const holder = holders.get(connection)
         const { session, ...told } = (isObject(params) ? params : {}) as HeldStatus & { readonly session?: unknown }
         if (holder === undefined || holder.session !== session || JSON.stringify(told) === JSON.stringify(holder.told)) return { result: null }
-        holders.set(connection, { ...holder, told })
+        const isMoved = told.status !== holder.told.status || JSON.stringify(told.waitingFor) !== JSON.stringify(holder.told.waitingFor)
+        holders.set(connection, { ...holder, told, toldAt: isMoved ? now() : holder.toldAt })
         changed({ session: holder.session, part: 'status' })
         return { result: null }
       }

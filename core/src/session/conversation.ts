@@ -110,6 +110,15 @@ const agentTools: readonly string[] = ['Agent', 'Task']
 
 const asyncLaunch = 'Async agent launched'
 
+const stopTool = 'TaskStop'
+
+type EndedStatus = Extract<TaskStatus, 'completed' | 'failed' | 'killed'>
+
+function endedStatusOf(told: string): EndedStatus | undefined {
+  if (told === 'completed' || told === 'failed' || told === 'killed') return told
+  return told === 'stopped' ? 'killed' : undefined
+}
+
 export function emptyConversation(session: string): ConversationState {
   return { session, context: 0, contextOpenedAt: '', agentCalls: [], endedCalls: {}, tasks: {}, taskTurns: {} }
 }
@@ -155,19 +164,33 @@ export function createConversation(start: ConversationState): Conversation {
     return [{ type: TurnEnd, turn: ended }]
   }
 
-  const endCall = (call: string, at: string, only?: string): SessionChange[] => {
+  const close = (task: RunningTask, at: string, status: EndedStatus | undefined): SessionChange[] => {
+    if (task.closedAt !== undefined) return []
+    const ended = { ...task, closedAt: at, ...(status === undefined ? {} : { status }) }
+    tasks.set(task.id, ended)
+    return [...endTaskTurn(task.id, at), { type: TaskEnd, task: ended }]
+  }
+
+  const endCall = (call: string, at: string, only?: string, status?: EndedStatus): SessionChange[] => {
     const opened = [...tasks.values()].filter((each) => each.openedBy === call && (only === undefined || each.id === only))
     if (opened.length === 0) {
       if (agentCalls.has(call)) endedCalls.set(call, at)
       return []
     }
     if (only === undefined) agentCalls.delete(call)
-    return opened.flatMap((task) => {
-      if (task.closedAt !== undefined) return []
-      const ended = { ...task, closedAt: at }
-      tasks.set(task.id, ended)
-      return [...endTaskTurn(task.id, at), { type: TaskEnd, task: ended }]
-    })
+    return opened.flatMap((task) => close(task, at, status))
+  }
+
+  const notified = (text: string, at: string): SessionChange[] => {
+    const call = tagOf(text, 'tool-use-id')
+    const id = tagOf(text, 'task-id')
+    const told = tagOf(text, 'status')
+    const status = told === undefined ? undefined : endedStatusOf(told)
+    if (told !== undefined && status === undefined) return []
+    const byCall = call !== undefined && agentCalls.has(call) ? endCall(call, at, id, status) : []
+    if (byCall.length > 0 || id === undefined) return byCall
+    const task = tasks.get(id)
+    return task === undefined ? [] : close(task, at, status)
   }
 
   const changeGoal = (text: string): SessionChange[] => {
@@ -211,11 +234,12 @@ export function createConversation(start: ConversationState): Conversation {
         } as Message
         changes.push({ type: Message, message: placed })
         if (placed.type === ToolCall && agentTools.includes(placed.name)) agentCalls.add(placed.callId)
-        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch)) changes.push(...endCall(placed.callId, row.at))
-        if (placed.type === Note && placed.from.type === Task) {
-          const call = tagOf(textOf(row.content), 'tool-use-id')
-          if (call !== undefined && agentCalls.has(call)) changes.push(...endCall(call, row.at, tagOf(textOf(row.content), 'task-id')))
+        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch)) changes.push(...endCall(placed.callId, row.at, undefined, placed.isError ? 'failed' : 'completed'))
+        if (placed.type === ToolResult && placed.name === stopTool && !placed.isError && typeof placed.input['task_id'] === 'string') {
+          const stopped = tasks.get(placed.input['task_id'])
+          if (stopped !== undefined) changes.push(...close(stopped, row.at, 'killed'))
         }
+        if (placed.type === Note && placed.from.type === Task) changes.push(...notified(textOf(row.content), row.at))
       }
       return changes
     },

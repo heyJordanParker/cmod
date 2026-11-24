@@ -38,6 +38,7 @@ const notHere = (session: string) => new RpcError(rpcCodes.notHeld, `No session 
 
 const unfaked: SessionComputer = {
   sessions: () => [],
+  session: () => undefined,
   search: () => [],
   read: (_session, part) => (part === 'goal' ? { text: '' } : part === 'state' ? null : []),
   unheld: (session) => Promise.reject(notHere(session)),
@@ -73,6 +74,11 @@ export function fakeServe(
     },
     computer: {
       sessions: (...args) => answer('sessions')(...args),
+      session: async (session, holding, told) => {
+        const own = fakes().session
+        if (own !== undefined) return own(session, holding, told)
+        return (await answer('sessions')({ everyProject: true }, holding, told)).find((each) => each.id === session)
+      },
       search: (...args) => answer('search')(...args),
       read: (...args) => answer('read')(...args),
       unheld: (...args) => answer('unheld')(...args),

@@ -55,11 +55,10 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
 }
 
 function addKeptCurrent<State extends object>(job: JobContext<State>, name: string, textFor: () => Promise<string | undefined>, log: (reason: string) => void): Subscription {
-  const { claude, router } = engineOf(job.mod)
+  const { router } = engineOf(job.mod)
   let given: string | undefined
   let hasStarted = false
-  let isQueued = false
-  let updates = Promise.resolve()
+  let isChanged = false
 
   const starting = router.add('classic.SessionStart', (e, next) => {
     hasStarted = e.source === 'resume' || e.source === 'compact'
@@ -77,25 +76,24 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
     return given === undefined ? below : { ...below, blocks: [...below.blocks, { name, text: given }] }
   })
 
-  const update = async () => {
-    isQueued = false
-    if (!hasStarted) return
+  const handedOver = async <Below,>(below: Below): Promise<Below> => {
+    if (!hasStarted || !isChanged) return below
+    isChanged = false
     const value = await textFor()
-    if (value === undefined || value === given) return
+    if (value === undefined || value === given) return below
     given = value
-    await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: modNote(job.mod.name, `# ${name}\n${value}`) }] } }).then((added) => {
-      if (added.deny !== undefined) log(`Claude Code refused the new text: ${added.deny}`)
-    })
+    const fields = (below ?? {}) as Readonly<Record<string, unknown>>
+    return { ...fields, additionalContext: [...((fields['additionalContext'] as readonly string[] | undefined) ?? []), modNote(job.mod.name, `# ${name}\n${value}`)] } as Below
   }
-  const following = onStateChange(job.mod.state, () => {
-    if (isQueued) return
-    isQueued = true
-    updates = updates.then(update).catch((error: unknown) => log(messageOf(error)))
-  })
+  const prompted = router.add('classic.UserPromptSubmit', async (e, next) => handedOver(await next(e)))
+  const batched = router.add('classic.PostToolBatch', async (e, next) => (e.agent_id === undefined ? handedOver(await next(e)) : next(e)))
+  const following = onStateChange(job.mod.state, () => void (isChanged = true))
   return {
     remove() {
       starting.remove()
       adding.remove()
+      prompted.remove()
+      batched.remove()
       following.remove()
     },
   }

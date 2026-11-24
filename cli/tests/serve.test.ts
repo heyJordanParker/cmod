@@ -27,7 +27,7 @@ const transcript = (session: string, folder: string) =>
 const backgroundClaude = `#!/bin/sh
 case "$1" in
   --bg) printf '%s\\n' "$@" > "$HOME/bg-args"; echo 'backgrounded · ended00' ;;
-  agents) echo '[{"pid":4242,"id":"ended00","cwd":"/work","kind":"background","sessionId":"ended","name":"Fix","status":"running","state":"working"}]' ;;
+  agents) if [ "$3" = "--all" ]; then echo '[{"pid":4242,"id":"ended00","cwd":"/work","kind":"background","sessionId":"ended","name":"Fix","status":"running","state":"working"}]'; else echo '[{"pid":4243,"cwd":"/work","kind":"interactive","sessionId":"alive","name":"Alive","status":"idle"}]'; fi ;;
   *) exit 1 ;;
 esac
 `
@@ -142,6 +142,31 @@ test.concurrent('cmod serve resumes an ended session in the background on a mess
   expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/visited.json'), 'utf8'))).toEqual({})
 }, 30_000)
 
+test.concurrent('cmod serve sends no message to a session Claude Code still runs, so a message never starts a second copy of it, even while no record or cmod plugin says it runs', async () => {
+  const { home, folder, act, stop } = await servedHome()
+  await writeFiles(home, { [`${folder}/alive.jsonl`]: transcript('alive', project(home)) })
+
+  const refused = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' }).catch((error: unknown) => (error as Error).message)
+  stop()
+
+  expect(refused).toBe('Session alive runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.')
+  expect(existsSync(join(home, 'bg-args'))).toBe(false)
+}, 30_000)
+
+test.concurrent('cmod serve reads a session record Claude Code left with bytes after its JSON, so a running session lists as running, and finds one session by its id', async () => {
+  const { home, client, stop } = await servedHome()
+  await writeFiles(home, { '.claude/sessions/1.json': `${olderRecord(home, { status: 'idle' })}}` })
+
+  const running = await client.request<readonly { readonly id: string; readonly status?: string }[]>('cmod/Sessions.sessions', [{ project: project(home), running: true }])
+  const found = await client.request<{ readonly id: string; readonly isRunning: boolean; readonly status?: string }>('cmod/Sessions.session', ['older'])
+  const missing = await client.request('cmod/Sessions.session', ['gone']).catch((error: unknown) => (error as Error).message)
+  stop()
+
+  expect(running.map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'older', status: 'idle' }])
+  expect({ id: found.id, isRunning: found.isRunning, status: found.status }).toEqual({ id: 'older', isRunning: true, status: 'idle' })
+  expect(missing).toBe('No session gone on this computer.')
+}, 30_000)
+
 test.concurrent('cmod serve keeps the replies cmod web serve before 7.0.0 marked read as the visits of their sessions', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/web-read.json': JSON.stringify({ s1: '2026-11-18T09:00:00.000Z' }) })
@@ -153,26 +178,28 @@ test.concurrent('cmod serve keeps the replies cmod web serve before 7.0.0 marked
   expect(existsSync(join(home, '.local/share/cmod/web-read.json'))).toBe(false)
 }, 30_000)
 
-test.concurrent('cmod serve refuses an action on a session no transcript names, on a session an older cmod plugin runs, and the delete of a running session', async () => {
+test.concurrent('cmod serve refuses an action on a session no transcript names, on a session an older cmod plugin runs, the delete of a running session, and the visit of a session another device serves', async () => {
   const { act, stop } = await servedHome()
 
   const unknown = await act('abort', 'gone').catch((error: unknown) => (error as Error).message)
   const older = await act('send', 'older', { type: 'prompt', text: 'Go on' }).catch((error: unknown) => (error as Error).message)
   const running = await act('delete', 'older').catch((error: unknown) => (error as Error).message)
   const ended = await act('abort', 'ended').catch((error: unknown) => (error as Error).message)
+  const elsewhere = await act('visit', 'gone', '2026-11-19T11:00:00.000Z').catch((error: unknown) => (error as Error).message)
   stop()
 
   expect(unknown).toBe('No session gone on this computer.')
-  expect(older).toBe('Session older runs a cmod plugin from before 7.0.0, so it takes no send. Reload it with /reload-plugins.')
+  expect(older).toBe('Session older runs, but no cmod plugin in it reaches cmod serve, so cmod did not deliver the message and started no copy of the session. Run /reload-plugins in it.')
   expect(running).toBe('session older runs, so it stays. End it first.')
   expect(ended).toBe('session ended has ended, so it takes no abort. Message it to resume it.')
+  expect(elsewhere).toBe('No session gone on this computer.')
 }, 30_000)
 
 test.concurrent("cmod serve answers every connection and every call outside the conversation index while another process holds the index's write lock, and answers the index read once the lock is free", async () => {
   const { home, folder, client, stop } = await servedHome()
   const read = () => client.request<readonly { readonly id: string; readonly text?: string }[]>('cmod/Sessions.read', ['ended', 'messages', { project: project(home) }])
   const before = await read()
-  const holder = new Database(join(home, '.local/share/cmod/history-13.sqlite'))
+  const holder = new Database(join(home, '.local/share/cmod/history-14.sqlite'))
   holder.exec('begin immediate')
   await appendFile(join(home, folder, 'ended.jsonl'), `${JSON.stringify({ type: 'assistant', uuid: 'ended-b', sessionId: 'ended', timestamp: '2026-11-19T10:00:04.000Z', cwd: project(home), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Ran it again.' }] } })}\n`)
   const reading = read()

@@ -11,7 +11,7 @@ import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
-import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
+import { TaskEnd, TaskStart, type TaskStatus } from '@cmodjs/core/src/session/goal/task.js'
 import { UsageChange, type Usage } from '@cmodjs/core/src/session/session.js'
 import { createConversation, emptyConversation, ownerOfSpawn, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine } from '@cmodjs/core/src/utils/text.js'
@@ -33,7 +33,7 @@ type Meta = { readonly task: string; readonly title: string; readonly agentType:
 
 type Step = { readonly transcript: Transcript; readonly line: Line; readonly raw: Raw; readonly changes: readonly SessionChange[] }
 
-export type Scope = { readonly project: string; readonly everyProject: boolean; readonly since: string | undefined; readonly running?: boolean }
+export type Scope = { readonly project: string; readonly everyProject: boolean; readonly since: string | undefined; readonly running?: boolean; readonly held?: readonly string[] }
 
 const schema = `
 create table files (id integer primary key, path text not null unique, session text not null, task text not null, offset integer not null);
@@ -47,13 +47,13 @@ create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
 create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, device text, primary key (session, prompt));
 create table contexts (session text not null, task text not null default '', number integer not null, opened_at text not null, closed_at text, primary key (session, task, number));
-create table tasks (session text not null, id text not null, title text not null, agent_type text, forked_from text, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
+create table tasks (session text not null, id text not null, title text not null, agent_type text, forked_from text, model text, opened_by text not null, opened_at text not null, closed_at text, status text, parent text, context integer not null, primary key (session, id));
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-13.sqlite'
+const indexFile = 'history-14.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite', 'history-12.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite', 'history-12.sqlite', 'history-13.sqlite']
 
 const chunkBytes = 65_536
 
@@ -129,6 +129,7 @@ export function openIndex(): HistoryIndex {
   const read = <Method extends keyof IndexMethods>(method: Method) => ((...args: readonly unknown[]) => ask(method, args).answer) as IndexReads[Method]
   return {
     listSessions: read('listSessions'),
+    getSession: read('getSession'),
     searchMessages: read('searchMessages'),
     readMessages: read('readMessages'),
     readTurns: read('readTurns'),
@@ -189,7 +190,22 @@ export function runningFolder(): string {
   return join(configRoot(), 'sessions')
 }
 
-export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: SessionData['status']; readonly waitingFor?: string }
+export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: SessionData['status']; readonly waitingFor?: string; readonly statusAt?: number; readonly startedAt?: number }
+
+export function leadingJson(text: string): unknown {
+  let depth = 0
+  let isInString = false
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at]
+    if (isInString) {
+      if (char === '\\') at += 1
+      else if (char === '"') isInString = false
+    } else if (char === '"') isInString = true
+    else if (char === '{' || char === '[') depth += 1
+    else if ((char === '}' || char === ']') && --depth === 0) return parsedRow(text.slice(0, at + 1))
+  }
+  return undefined
+}
 
 const recordedStatuses: readonly unknown[] = ['busy', 'shell', 'idle', 'waiting'] satisfies SessionData['status'][]
 
@@ -218,7 +234,8 @@ export function runningEntries(): RunningEntry[] {
 function registryRecordOf(path: string, known: RegistryRecord | undefined): RegistryRecord {
   const { mtimeNs, size } = statSync(path, { bigint: true })
   if (known?.changedAt === mtimeNs && known.size === size) return known
-  const row = parsedRow(readFileSync(path, 'utf8'))
+  const read = leadingJson(readFileSync(path, 'utf8'))
+  const row = isObject(read) ? read : undefined
   if (typeof row?.['pid'] !== 'number' || typeof row['sessionId'] !== 'string') return { changedAt: mtimeNs, size, entry: undefined, procStart: undefined }
   return {
     changedAt: mtimeNs,
@@ -231,6 +248,8 @@ function registryRecordOf(path: string, known: RegistryRecord | undefined): Regi
       ...(typeof row['name'] === 'string' && row['name'] !== '' ? { name: row['name'] } : {}),
       ...(recordedStatuses.includes(row['status']) ? { status: row['status'] as SessionData['status'] } : {}),
       ...(typeof row['waitingFor'] === 'string' ? { waitingFor: row['waitingFor'] } : {}),
+      ...(typeof row['statusUpdatedAt'] === 'number' ? { statusAt: row['statusUpdatedAt'] } : {}),
+      ...(typeof row['startedAt'] === 'number' ? { startedAt: row['startedAt'] } : {}),
     },
     procStart: typeof row['procStart'] === 'string' ? row['procStart'].replace(/\s+/g, ' ') : undefined,
   }
@@ -468,7 +487,7 @@ function saveChanges(db: Database, place: { readonly session: string; readonly f
       const { task } = change
       db.query('insert or replace into tasks (session, id, title, agent_type, forked_from, model, opened_by, opened_at, parent, context) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(session, task.id, task.title, task.agentType ?? null, task.forkedFrom ?? null, task.model ?? null, task.openedBy, task.openedAt, task.parent ?? null, task.context)
     } else if (change.type === TaskEnd) {
-      db.query('update tasks set closed_at = ? where session = ? and id = ?').run(change.task.closedAt ?? null, session, change.task.id)
+      db.query('update tasks set closed_at = ?, status = ? where session = ? and id = ?').run(change.task.closedAt ?? null, change.task.status ?? null, session, change.task.id)
     }
   }
 }
@@ -656,23 +675,32 @@ export function indexedProjects(db: Database): string[] {
   }
 }
 
+type SessionRow = { id: string; folder: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; color: string | null; agent_type: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }
+
+const sessionColumns = `id, folder, project, cwd, model, title, custom_title, nullif(color, 'default') as color, agent_type, started_at, last_at, forked_from, is_fork_checked,
+  case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed`
+
+function sessionDataOf(db: Database, row: SessionRow, running: ReadonlySet<string>): SessionData {
+  const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
+  return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, transcriptPath: join(row.folder, `${row.id}.jsonl`), model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(row.agent_type === null ? {} : { agentType: row.agent_type }), isRunning: running.has(row.id) }
+}
+
 export function listSessions(db: Database, scope: Scope): SessionData[] {
   const folders = foldersIn(scope)
-  const running = runningSessions()
+  const running = new Set([...runningSessions(), ...(scope.held ?? [])])
   readFolders(db, folders, false, scope.running === true ? running : undefined)
   const rows = db
-    .query<{ id: string; folder: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; color: string | null; agent_type: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
-      `select id, folder, project, cwd, model, title, custom_title, nullif(color, 'default') as color, agent_type, started_at, last_at, forked_from, is_fork_checked,
-         case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed
-       from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`,
-    )
+    .query<SessionRow, string[]>(`select ${sessionColumns} from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`)
     .all(...folders, scope.since ?? '')
-  return rows
-    .filter((row) => scope.running !== true || running.has(row.id))
-    .map((row) => {
-      const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
-      return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, transcriptPath: join(row.folder, `${row.id}.jsonl`), model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(row.agent_type === null ? {} : { agentType: row.agent_type }), isRunning: running.has(row.id) }
-    })
+  return rows.filter((row) => scope.running !== true || running.has(row.id)).map((row) => sessionDataOf(db, row, running))
+}
+
+export function getSession(db: Database, request: { readonly session: string; readonly project: string; readonly held: readonly string[] }): SessionData | undefined {
+  const folder = sessionFolder(request.session, request.project)
+  if (folder === undefined) return undefined
+  readFolders(db, [folder], false, new Set([request.session]))
+  const row = db.query<SessionRow, [string]>(`select ${sessionColumns} from sessions where id = ?`).get(request.session)
+  return row === null ? undefined : sessionDataOf(db, row, new Set([...runningSessions(), ...request.held]))
 }
 
 function foundParent(db: Database, session: string, startedAt: string): string | undefined {
@@ -757,8 +785,8 @@ export function readTasks(db: Database, request: { readonly session: string; rea
   readSession(db, sessionTranscripts(request.session, request.project))
   const under = request.isNested === true ? '' : 'and parent is ?2'
   const indexed = db
-    .query<{ id: string; title: string; agent_type: string | null; forked_from: string | null; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, (string | null)[]>(
-      `select id, title, agent_type, forked_from, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 ${under} order by opened_at`,
+    .query<{ id: string; title: string; agent_type: string | null; forked_from: string | null; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; status: string | null; parent: string | null }, (string | null)[]>(
+      `select id, title, agent_type, forked_from, model, opened_by, opened_at, closed_at, status, parent from tasks where session = ?1 ${under} order by opened_at`,
     )
     .all(request.session, ...(request.isNested === true ? [] : [request.task ?? null]))
     .map((row) => ({
@@ -770,6 +798,7 @@ export function readTasks(db: Database, request: { readonly session: string; rea
       openedBy: row.opened_by,
       openedAt: row.opened_at,
       ...(row.closed_at === null ? {} : { closedAt: row.closed_at }),
+      ...(row.status === null ? {} : { status: row.status as TaskStatus }),
       ...(row.parent === null ? {} : { parent: row.parent }),
     }))
   const background = request.task === undefined || request.isNested === true ? backgroundTasks(request.session) : []
