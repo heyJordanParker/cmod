@@ -453,4 +453,4 @@ A job of your own matches calls against targets through the `permissions`, `chec
 
 ## Test a job
 
-`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.shown.notes` holds the note a `prompt` gives at the `UserPromptSubmit` or `PostToolBatch` a test fires after a state change. [testing.md](testing.md) covers each.
+`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.shown.notes` holds the note a `prompt` gives at the `UserPromptSubmit` or `PostToolBatch` a test fires with `claudeCodeOf(tested).fire` after a state change. [testing.md](testing.md) covers each.

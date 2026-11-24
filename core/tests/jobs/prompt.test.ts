@@ -109,10 +109,10 @@ test('a prompt with no trigger gives Claude its latest text once, at the next pr
   }
   const waited = [...tested.shown.notes]
 
-  await tested.fire('UserPromptSubmit', { prompt: 'Go on' })
-  await tested.fire('UserPromptSubmit', { prompt: 'And on' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Go on' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'And on' })
   tested.state.session.mode = 'review'
-  await tested.fire('PostToolBatch', { tool_calls: [] })
+  await claudeCodeOf(tested).fire('PostToolBatch', { tool_calls: [] })
 
   expect(waited).toEqual([])
   expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.', '# Mode\nYou are in review mode.'])
