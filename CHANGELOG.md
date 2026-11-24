@@ -4,6 +4,16 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.8.3] - 2026-11-24
+
+### Fixed
+- `read_screen`, `press_keys`, and `show_session` reach every session that runs in a Herdr terminal, found by its process, so a session whose cmod plugin stopped reaching `cmod serve` can still be read and sent `/reload-plugins`. Before, cmod found a session's terminal only through its cmod plugin.
+- A `cmod run` script reads the messages of a session that called a tool. Before, it failed with `a cmod run script has no claude.env.home`.
+- A `cmod run` script that fails exits at once with its error. Before, it hung until something killed it.
+- Finding one session answers while a search of every project indexes the conversations. After an update rebuilt the index, a lookup waited behind that search for up to 10 minutes.
+- Settings shows the Log 10 failures a page, with Previous and Next. The Log drew all of its newest 100 failures at once, about 900 elements, which slowed Herdr's window to about one frame a second while Settings showed.
+- Herdr draws a line of block or box-drawing characters made of several styled pieces, such as a usage chart, in the terminal font on one line. Before, the pieces wrapped apart and mixed fonts, so the chart broke out of line.
+
 ## [8.8.2] - 2026-11-24
 
 ### Fixed

@@ -245,8 +245,7 @@ export function serveConversations({
 
   const holdHere = async (client: RpcClient) => {
     if (session === '') return
-    const [cwd, terminal, socket] = await Promise.all([claude.session.cwd(), claude.env.herdrTerminal(), claude.env.herdrSocket()])
-    await client.request(sessionActs.hold, { session, project: project(), cwd, ...(terminal && socket ? { herdrTerminal: { id: terminal, socket } } : {}) } satisfies HeldSession)
+    await client.request(sessionActs.hold, { session, project: project(), cwd: await claude.session.cwd() } satisfies HeldSession)
   }
 
   let serveChanges: Registered | undefined

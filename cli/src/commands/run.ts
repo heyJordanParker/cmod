@@ -71,9 +71,12 @@ export async function run(argv: string[]): Promise<number> {
   }
   bind(importsOnly({ sessions: client.sessions, provide: (named, methods) => conversations.provide(named, methods), providers: (named) => provided.providers(named) as never }, 'a cmod run script'))
   Bun.plugin({ name: 'cmod run', setup: (build) => void build.module(coreModule, () => ({ exports: core, loader: 'object' })) })
-  await import(path)
-  await new Promise((done) => setTimeout(done, 0))
-  await conversations.close()
+  try {
+    await import(path)
+    await new Promise((done) => setTimeout(done, 0))
+  } finally {
+    await conversations.close()
+  }
   return 0
 }
 
@@ -115,6 +118,12 @@ function scriptClaude(name: string, call: (input: { readonly to: string; readonl
     session: {
       id: async () => '',
       cwd: async () => process.cwd(),
+    },
+    env: {
+      home: async () => process.env['HOME'],
+      dataHome: async () => process.env['XDG_DATA_HOME'],
+      cacheHome: async () => process.env['XDG_CACHE_HOME'],
+      configHome: async () => process.env['CLAUDE_CONFIG_DIR'],
     },
     settings: { read: async () => ({}) },
     agent: { list: async () => [] },

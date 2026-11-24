@@ -114,8 +114,6 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       sshConnection: () => $.env.get('SSH_CONNECTION'),
       display: () => $.env.get('DISPLAY'),
       waylandDisplay: () => $.env.get('WAYLAND_DISPLAY'),
-      herdrTerminal: () => $.env.get('HC_TERMINAL_ID'),
-      herdrSocket: () => $.env.get('HC_TERMINAL_SOCKET'),
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) },

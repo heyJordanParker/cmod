@@ -538,6 +538,7 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
       flexDirection: 'column',
       children: [
         { $cmodElement: 'Box', props: { gap: 2, children: [{ $cmodElement: 'Text', props: { children: 'jarvis          ' } }, { $cmodElement: 'Text', props: { color: 'inactive', children: '███' } }] } },
+        { $cmodElement: 'Text', props: { children: ['jordan2   ', { $cmodElement: 'Text', props: { color: 'subtle', children: '██████' } }, { $cmodElement: 'Text', props: { dimColor: true, children: '╌╌╌' } }, ' 14% left'] } },
         { $cmodElement: 'Box', props: { columnGap: 2, flexWrap: 'wrap', children: [{ $cmodElement: 'Input', props: { key: 'demo/usage:find', label: 'Find', value: '' } }, { $cmodElement: 'Button', props: { plain: true, key: 'demo/usage:filter', label: 'Show: All', onPress: { $cmodHandler: 3 } } }] } },
       ],
     },
@@ -548,6 +549,8 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
 
   expect(drawn.find((each) => each.nodes.includes('███'))?.calls['font_family']).toEqual(['JetBrains Mono'])
   expect(drawn.find((each) => each.nodes.includes('jarvis          '))?.calls['font_family']).toEqual(['JetBrains Mono'])
+  const chartRow = drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.nodes.includes('jordan2   ')))
+  expect([chartRow?.calls['font_family'], chartRow?.calls['whitespace_nowrap'], chartRow?.calls['flex_wrap']]).toEqual([['JetBrains Mono'], [], undefined])
   expect([row?.calls['items_center'], row?.calls['gap_y']]).toEqual([[], [8]])
 })
 

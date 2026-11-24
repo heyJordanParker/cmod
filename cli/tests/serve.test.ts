@@ -168,6 +168,30 @@ test.concurrent('cmod serve reads a session record Claude Code left with bytes a
   expect(missing).toBe('No session gone on this computer.')
 }, 30_000)
 
+test.concurrent("cmod serve reads and types into the herdr-core terminal that runs a session's process, though no cmod plugin in the session reaches it, and answers not held for a session no terminal of this computer runs", async () => {
+  const { home, client, stop } = await servedHome()
+  await writeFiles(home, {
+    'bin/hc': `#!/bin/sh
+[ "$1" = connect ] || exit 2
+read -r line
+case "$line" in
+  *terminal.list*) echo '{"jsonrpc":"2.0","id":1,"result":{"terminals":[{"address":"mac-studio/t9","pid":${process.pid}},{"address":"t2","pid":1},{"address":"t4","pid":7,"foreground":{"pid":${process.pid}}}]}}' ;;
+  *terminal.read*) echo '{"jsonrpc":"2.0","id":1,"result":{"text":"the screen"}}'; echo "$line" >> "$HOME/hc-calls" ;;
+  *terminal.keys*) echo '{"jsonrpc":"2.0","id":1,"result":{}}'; echo "$line" >> "$HOME/hc-calls" ;;
+esac
+`,
+  })
+
+  const screen = await client.request('cmod/Terminal.screen', ['older'])
+  await client.request('cmod/Terminal.press', ['older', '1\r'])
+  const ended = await client.request('cmod/Terminal.screen', ['ended']).catch((error: unknown) => error as RpcError)
+  stop()
+
+  expect(screen).toBe('the screen')
+  expect(readFileSync(join(home, 'hc-calls'), 'utf8').trimEnd().split('\n').map((line) => (JSON.parse(line) as { readonly params: unknown }).params)).toEqual([{ terminal: 't4' }, { terminal: 't4', keys: ['1', 'enter'] }])
+  expect([(ended as RpcError).message, (ended as RpcError).code]).toEqual(['No session ended runs in a herdr-core terminal on this computer.', rpcCodes.notHeld])
+}, 30_000)
+
 test.concurrent('cmod serve keeps the replies cmod web serve before 7.0.0 marked read as the visits of their sessions', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/web-read.json': JSON.stringify({ s1: '2026-11-18T09:00:00.000Z' }) })
@@ -218,6 +242,24 @@ test.concurrent("cmod serve answers every connection and every call outside the 
   expect(isWaiting).toBe(true)
   expect(after.length).toBe(before.length + 1)
   expect(after.at(-1)?.text).toBe('Ran it again.')
+}, 30_000)
+
+test.concurrent('cmod serve finds one session while a search of every project waits on the conversation index, so a lookup never queues behind a whole-index read', async () => {
+  const { home, folder, client, stop } = await servedHome()
+  await client.request('cmod/Sessions.session', ['older'])
+  const holder = new Database(join(home, '.local/share/cmod/history-14.sqlite'))
+  holder.exec('begin immediate')
+  await appendFile(join(home, folder, 'ended.jsonl'), `${JSON.stringify({ type: 'assistant', uuid: 'ended-b', sessionId: 'ended', timestamp: '2026-11-19T10:00:04.000Z', cwd: project(home), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Ran it again.' }] } })}\n`)
+  const searching = client.request('cmod/Sessions.search', ['again', { everyProject: true }])
+
+  const found = await client.request<{ readonly id: string }>('cmod/Sessions.session', ['older'])
+  const isSearchWaiting = await Promise.race([searching.then(() => false), Promise.resolve(true)])
+  holder.exec('commit')
+  holder.close()
+  await searching
+  stop()
+
+  expect([found.id, isSearchWaiting]).toEqual(['older', true])
 }, 30_000)
 
 test('the build compiles each worker the cmod program starts, because a compiled cmod loads no file its build did not name', async () => {

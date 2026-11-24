@@ -72,6 +72,8 @@ const textOf = (children) => {
   return all.every((each) => typeof each === "string" || typeof each === "number") ? all.join("") : undefined;
 };
 
+const wordsIn = (children) => [children].flat(Infinity).map((each) => (typeof each === "string" || typeof each === "number" ? String(each) : each?.$cmodElement === "Text" ? wordsIn(each.props?.children) : "")).join("");
+
 const across = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * UI.cell : undefined);
 const down = (value) => (typeof value === "string" && value.endsWith("%") ? value : typeof value === "number" ? value * UI.line : undefined);
 const spaceOf = (value) => (typeof value === "number" ? value : SPACES[value]);
@@ -692,7 +694,8 @@ export default class Cmod extends View {
 
   text(given, drawn, path, t) {
     const words = textOf(given.children);
-    if (words === undefined) return this.styled(h_flex().flex_wrap().min_w(0), given, t).children(this.nodes(given.children, drawn, `${path}.children`, t, false));
+    const row = CELL_TEXT.test(wordsIn(given.children)) ? h_flex().min_w(0).font_family(terminalFont()).whitespace_nowrap() : h_flex().flex_wrap().min_w(0);
+    if (words === undefined) return this.styled(row, given, t).children(this.nodes(given.children, drawn, `${path}.children`, t, false));
     let el = this.styled(div().role("label").accessibility_label(words.trim()), given, t).child(words);
     if (CELL_TEXT.test(words)) el = el.font_family(terminalFont()).whitespace_nowrap();
     return el;

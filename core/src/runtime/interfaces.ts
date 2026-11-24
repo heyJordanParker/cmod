@@ -52,8 +52,6 @@ export type ProvidersChange = { readonly interface: string; readonly device: Pic
 
 type ChangedProviders = (name: string | undefined, device: Pick<Device, 'id' | 'name'> | undefined) => void
 
-export type HerdrTerminal = { readonly id: string; readonly socket: string }
-
 export type TerminalPlace = 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'
 
 export const terminalPlaces: readonly TerminalPlace[] = ['focus', 'peek', 'tab', 'right', 'down', 'hide']
@@ -61,12 +59,12 @@ export const terminalPlaces: readonly TerminalPlace[] = ['focus', 'peek', 'tab',
 const terminalEvents: readonly string[] = ['Shown', 'Pressed']
 
 export type SessionTerminals = {
-  screen(terminal: HerdrTerminal): Promise<string>
-  press(terminal: HerdrTerminal, keys: string): Promise<void>
-  show(terminal: HerdrTerminal, place: TerminalPlace): Promise<void>
+  screen(session: string): Promise<string>
+  press(session: string, keys: string): Promise<void>
+  show(session: string, place: TerminalPlace): Promise<void>
 }
 
-export type HeldSession = { readonly session: string; readonly project: string; readonly cwd: string; readonly herdrTerminal?: HerdrTerminal }
+export type HeldSession = { readonly session: string; readonly project: string; readonly cwd: string }
 
 export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPercent' | 'lastTurn'>
 
@@ -477,26 +475,20 @@ export function routeSessions({
     for (const part of uiParts) interfaces.emit(uiInterface, 'Change', { session, part }, [session])
   }
 
-  const heldTerminal = (session: string) => {
-    const terminal = holderOf(session)?.herdrTerminal
-    if (terminal === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
-    return terminal
-  }
-
   const terminal: Implementation | undefined =
     terminals === undefined
       ? undefined
       : {
-          screen: (session: string) => terminals.screen(heldTerminal(session)),
+          screen: (session: string) => terminals.screen(session),
           press: async (session: string, keys: unknown) => {
             if (typeof keys !== 'string') throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.press takes the keys as one string, such as "1\\r".`)
-            await terminals.press(heldTerminal(session), keys)
+            await terminals.press(session, keys)
             interfaces.emit(terminalInterface, 'Pressed', { session }, [session])
             return null
           },
           show: async (session: string, place: unknown) => {
             if (!terminalPlaces.includes(place as TerminalPlace)) throw new RpcError(rpcCodes.invalidParams, `${terminalInterface}.show takes a place: ${terminalPlaces.join(', ')}.`)
-            await terminals.show(heldTerminal(session), place as TerminalPlace)
+            await terminals.show(session, place as TerminalPlace)
             interfaces.emit(terminalInterface, 'Shown', { session, place }, [session])
             return null
           },
@@ -523,10 +515,10 @@ export function routeSessions({
         return { result: null }
       }
       if (method === sessionActs.hold) {
-        const { session, project, cwd, herdrTerminal } = params as HeldSession
+        const { session, project, cwd } = params as HeldSession
         const known = holders.get(connection)
         for (const [each, holder] of holders) if (holder.session === session && each !== connection) holders.delete(each)
-        holders.set(connection, { session, project, cwd, ...(isObject(herdrTerminal) && typeof herdrTerminal.id === 'string' && typeof herdrTerminal.socket === 'string' ? { herdrTerminal: { id: herdrTerminal.id, socket: herdrTerminal.socket } } : {}), connection, ...(known?.session === session ? { told: known.told, toldAt: known.toldAt } : { told: {}, toldAt: 0 }) })
+        holders.set(connection, { session, project, cwd, connection, ...(known?.session === session ? { told: known.told, toldAt: known.toldAt } : { told: {}, toldAt: 0 }) })
         changed({ session, part: 'running' })
         relisted(session)
         toldShown.delete(session)

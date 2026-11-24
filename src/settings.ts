@@ -8,7 +8,7 @@ import { cmodError, cmodStore, newestCmodVersion } from '../node_modules/@cmodjs
 import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
-import { Badge, Banner, List, ListItem, Panel, Toggle } from '../node_modules/@cmodjs/core/ui/components.js'
+import { Badge, Banner, List, ListItem, Pagination, Panel, Toggle } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Input, Markdown, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { changelogSections, unreleased, type ChangelogSection } from '../node_modules/@cmodjs/core/utils/changelog.js'
 import { ifMissing, relativePath } from '../node_modules/@cmodjs/core/utils/paths.js'
@@ -17,12 +17,12 @@ import type { SettingsView } from './sidebar.js'
 
 export type SettingsState = {
   readonly memory: { removing: string | null; views: readonly ModView[]; log: readonly LogEntry[]; reporting: string | null; preferences: Preferences }
-  readonly session: { selected: string | null; viewParams: unknown; notice: string | null; widget: string | null }
+  readonly session: { selected: string | null; viewParams: unknown; notice: string | null; widget: string | null; logPage: number }
 }
 
 export const settingsMemory: SettingsState['memory'] = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, 'preferences.json') }
 
-export const settingsSession: SettingsState['session'] = { selected: null, viewParams: null, notice: null, widget: null }
+export const settingsSession: SettingsState['session'] = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 }
 
 const areaTitles: Readonly<Record<Area, string>> = {
   [AbovePrompt]: 'Above the prompt',
@@ -55,6 +55,8 @@ export type ModView = {
 }
 
 type WebAppView = { readonly name: string; readonly url: string | null; readonly reason: string | null }
+
+const logPageSize = 10
 
 const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
@@ -331,10 +333,13 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
           await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, logReport(entry)), asUser: true })
           return undefined
         })
+      const pages = Math.ceil(log.length / logPageSize)
+      const page = Math.min(Math.max(mod.state.session.logPage, 1), pages)
       return Box({
         flexDirection: 'column',
         gap: 1,
-        children: log.map((entry) => {
+        children: [
+          ...log.slice((page - 1) * logPageSize, page * logPageSize).map((entry) => {
           const key = `${entry.mod}/${entry.id}`
           const choices =
             reporting === key
@@ -364,7 +369,9 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
               Box({ gap: 2, flexWrap: 'wrap', children: choices }),
             ],
           })
-        }),
+          }),
+          ...(pages > 1 ? [Pagination({ page, pages, onPage: (next) => void (mod.state.session.logPage = next) })] : []),
+        ],
       })
     }
 

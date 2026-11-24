@@ -378,16 +378,18 @@ test("cmod serve's cmod/Providers tells a session a program on another device th
   await devices.close()
 })
 
-test("cmod serve provides cmod/Terminal ahead of every program for each session held in a herdr-core terminal, and answers not held for any other, so the next provider is asked", async () => {
+test("cmod serve provides cmod/Terminal ahead of every program for each session its computer's terminals run, and passes their not held on, so the next provider is asked", async () => {
   const done: string[] = []
+  const inTerminal = (session: string) => {
+    if (session !== 's1') throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
+    return 't7'
+  }
   const terminals: SessionTerminals = {
-    screen: async ({ id }) => `the screen of ${id}`,
-    press: async ({ id, socket }, keys) => void done.push(`${socket} ${id} pressed ${JSON.stringify(keys)}`),
-    show: async ({ id }, place) => void done.push(`${id} shown at ${place}`),
+    screen: async (session) => `the screen of ${inTerminal(session)}`,
+    press: async (session, keys) => void done.push(`${inTerminal(session)} pressed ${JSON.stringify(keys)}`),
+    show: async (session, place) => void done.push(`${inTerminal(session)} shown at ${place}`),
   }
   const { serve, connect, reported } = servedComputer({}, {}, { terminals })
-  const plugin = connect('cmod')
-  await plugin.client.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app', herdrTerminal: { id: 't7', socket: '/hc.sock' } })
   const anyhost = connect('anyhost', { mod: 'anyhost', program: 'anyhost' })
   anyhost.served.provide('cmod/Terminal', { screen: () => 'anyhost', press: () => null, show: () => null })
   await anyhost.client.request('$/providers', { interface: 'cmod/Terminal' })
@@ -407,14 +409,14 @@ test("cmod serve provides cmod/Terminal ahead of every program for each session 
 
   expect(found.map((each) => each.mod)).toEqual(['cmod', 'anyhost'])
   expect(screen).toBe('the screen of t7')
-  expect(done).toEqual(['/hc.sock t7 pressed "1\\r"', 't7 shown at peek'])
+  expect(done).toEqual(['t7 pressed "1\\r"', 't7 shown at peek'])
   expect(heard).toEqual([
     ['Pressed', { session: 's1' }],
     ['Shown', { session: 's1', place: 'peek' }],
   ])
   expect(elsewhere).toContain('No session s2 runs in a herdr-core terminal on this computer.')
   expect(reported).toEqual([])
-  await Promise.all([plugin.client.close(), anyhost.client.close(), caller.client.close()])
+  await Promise.all([anyhost.client.close(), caller.client.close()])
   serve.close()
 })
 

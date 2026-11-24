@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isObject } from '@cmodjs/core/src/records.js'
-import type { HerdrTerminal, SessionTerminals } from '@cmodjs/core/src/runtime/interfaces.js'
+import type { SessionTerminals } from '@cmodjs/core/src/runtime/interfaces.js'
+import { RpcError, rpcCodes } from '@cmodjs/core/src/runtime/rpc.js'
+import { runningEntries } from './history.js'
 import { capture } from './process.js'
 import mainJs from '../../herdr/cmod/main.js' with { type: 'text' }
 import modJson from '../../herdr/cmod/mod.json' with { type: 'json' }
@@ -71,53 +73,57 @@ export function keyNamesOf(typed: string): string[] {
   return keys
 }
 
-async function herdrCore<Result>({ socket }: HerdrTerminal, method: string, params: Readonly<Record<string, unknown>>): Promise<Result> {
-  const answered = Promise.withResolvers<Result>()
-  let received = ''
-  const connection = await Bun.connect({
-    unix: socket,
-    socket: {
-      data(_socket, data) {
-        received += data.toString()
-        const line = received.split('\n').find((each) => each.includes('"id":1'))
-        if (line === undefined) return
-        const answer = JSON.parse(line) as { readonly result?: Result; readonly error?: { readonly message: string } }
-        if (answer.error === undefined) answered.resolve(answer.result as Result)
-        else answered.reject(new Error(`herdr-core's ${method}: ${answer.error.message}`))
-      },
-      close: () => answered.reject(new Error(`herdr-core closed ${socket} before it answered ${method}.`)),
-      error: (_socket, error) => answered.reject(error),
-    },
-  })
-  const timer = setTimeout(() => answered.reject(new Error(`herdr-core did not answer ${method} within ${herdrCallMs / 1000} s.`)), herdrCallMs)
+type CoreTerminal = { readonly address: string; readonly pid?: number | null; readonly foreground?: { readonly pid?: number | null } | null }
+
+function installed(program: string): string | undefined {
+  return Bun.which(program, { PATH: `${process.env['PATH'] ?? ''}:${join(home(), '.local', 'bin')}` }) ?? undefined
+}
+
+async function herdrCore<Result>(method: string, params: Readonly<Record<string, unknown>>): Promise<Result> {
+  const hc = installed('hc')
+  if (hc === undefined) throw new Error('herdr-core is not installed on this computer.')
+  const child = Bun.spawn([hc, 'connect'], { stdin: Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`), stdout: 'pipe', stderr: 'pipe' })
+  const timer = setTimeout(() => child.kill(), herdrCallMs)
   try {
-    connection.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`)
-    return await answered.promise
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+    const line = stdout.split('\n').find((each) => each.includes('"id":1'))
+    if (line === undefined) throw new Error(`herdr-core did not answer ${method}${child.signalCode === null ? `: ${(stderr || stdout).trim()}` : ` within ${herdrCallMs / 1000} s`}.`)
+    const answer = JSON.parse(line) as { readonly result?: Result; readonly error?: { readonly message: string } }
+    if (answer.error !== undefined) throw new Error(`herdr-core's ${method}: ${answer.error.message}`)
+    return answer.result as Result
   } finally {
     clearTimeout(timer)
-    connection.end()
   }
 }
 
+async function terminalOf(session: string): Promise<string> {
+  const pid = runningEntries().find((entry) => entry.session === session)?.pid
+  const listed = pid === undefined || installed('hc') === undefined ? [] : (await herdrCore<{ readonly terminals: readonly CoreTerminal[] }>('terminal.list', {})).terminals
+  const found = listed.find((terminal) => !terminal.address.includes('/') && (terminal.pid === pid || terminal.foreground?.pid === pid))
+  if (found === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
+  return found.address
+}
+
 async function herdrApp(...args: string[]): Promise<string> {
-  const app = Bun.which('herdr-app', { PATH: `${process.env['PATH'] ?? ''}:${join(home(), '.local', 'bin')}` })
-  if (app === null) throw new Error('The Herdr app is not installed on this computer, so no Herdr window shows the session.')
+  const app = installed('herdr-app')
+  if (app === undefined) throw new Error('The Herdr app is not installed on this computer, so no Herdr window shows the session.')
   const { exitCode, stdout, stderr } = await capture([app, ...args])
   if (exitCode !== 0) throw new Error(`herdr-app ${args.join(' ')} exited ${exitCode}: ${(stderr || stdout).trim()}`)
   return stdout
 }
 
 export const herdrTerminals: SessionTerminals = {
-  screen: async (terminal) => (await herdrCore<{ readonly text: string }>(terminal, 'terminal.read', { terminal: terminal.id })).text,
-  press: async (terminal, keys) => void (await herdrCore(terminal, 'terminal.keys', { terminal: terminal.id, keys: keyNamesOf(keys) })),
-  async show(terminal, place) {
+  screen: async (session) => (await herdrCore<{ readonly text: string }>('terminal.read', { terminal: await terminalOf(session) })).text,
+  press: async (session, keys) => void (await herdrCore('terminal.keys', { terminal: await terminalOf(session), keys: keyNamesOf(keys) })),
+  async show(session, place) {
+    const terminal = await terminalOf(session)
     const say = (command: string, args: Readonly<Record<string, unknown>>) => herdrApp('do', command, JSON.stringify(args))
     const shown = JSON.parse(await herdrApp('ls')) as { readonly spaces: readonly { readonly tabs: readonly { readonly terminals: readonly { readonly terminal: string; readonly pane: string | null }[] }[] }[] }
-    const pane = shown.spaces.flatMap(({ tabs }) => tabs).flatMap(({ terminals }) => terminals).find((each) => each.terminal === terminal.id)?.pane ?? null
-    if (place === 'peek') return void (await say('terminal.peek', { terminal: terminal.id }))
-    if (place === 'hide') return void (pane === null ? undefined : await say('terminal.park', { terminal: terminal.id }))
-    if (pane === null) return void (await say('terminal.keep', { terminal: terminal.id, place: place === 'focus' ? 'tab' : place }))
-    await say('agent.focus', { terminal: terminal.id })
+    const pane = shown.spaces.flatMap(({ tabs }) => tabs).flatMap(({ terminals }) => terminals).find((each) => each.terminal === terminal)?.pane ?? null
+    if (place === 'peek') return void (await say('terminal.peek', { terminal }))
+    if (place === 'hide') return void (pane === null ? undefined : await say('terminal.park', { terminal }))
+    if (pane === null) return void (await say('terminal.keep', { terminal, place: place === 'focus' ? 'tab' : place }))
+    await say('agent.focus', { terminal })
   },
 }
 

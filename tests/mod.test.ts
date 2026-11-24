@@ -1716,6 +1716,22 @@ test('the Log keeps the failures of every session, and skips a session file that
   expect(tested.shown.debug).toContain(`cmod: the Log skips a file: ${store}/data/cmod/log/other-session.json is not a list of mod failures. Delete it, and cmod starts it again.`)
 })
 
+test('the Log shows 10 failures a page, newest first, and steps through the rest, so Settings stays small for any app that lays it out', async () => {
+  const failures = Array.from({ length: 25 }, (_, index) => ({ mod: 'other', id: `timer-${index}`, message: `Failure ${index}`, details: 'other 1.0.0', at: `2026-10-25T08:${String(index).padStart(2, '0')}:00.000Z` }))
+  const { tested, shown } = testSettings({ [`${store}/data/cmod/log/other-session.json`]: JSON.stringify(failures) })
+  await tested.start()
+
+  await tested.type('/mods cmod')
+  await tested.settle()
+  const first = await shown()
+  await tested.shown.pane.press('Next')
+  const second = await shown()
+
+  const failuresIn = (lines: string) => [...lines.matchAll(/Failure (\d+)/g)].map((found) => Number(found[1]))
+  expect([failuresIn(first)[0], failuresIn(first).length <= 10, first.includes('1 of 3')]).toEqual([24, true, true])
+  expect([failuresIn(second).length <= 10, failuresIn(second).every((each) => each < Math.min(...failuresIn(first))), second.includes('2 of 3')]).toEqual([true, true, true])
+})
+
 test('a warning lands in the Log as a warning with the versions it ran on, counts each repeat, and never shows a toast', async () => {
   const { tested, shown } = testSettings()
   await tested.start()

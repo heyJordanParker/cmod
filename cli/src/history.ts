@@ -96,7 +96,9 @@ export type HistoryIndex = IndexReads & {
   close(): Promise<void>
 }
 
-export function openIndex(): HistoryIndex {
+type IndexWorker = { ask(method: string, args: readonly unknown[], onChange?: (followed: FollowedChange) => void): { readonly id: number; readonly answer: Promise<unknown> }; close(): Promise<void> }
+
+function startIndexWorker(): IndexWorker {
   const worker = new Worker(new URL('./history-worker.ts', import.meta.url).href, { env: SHARE_ENV })
   type Waiting = { resolve(value: unknown): void; reject(error: Error): void; onChange?: (followed: FollowedChange) => void }
   const waiting = new Map<number, Waiting>()
@@ -126,11 +128,17 @@ export function openIndex(): HistoryIndex {
       }),
     }
   }
-  const read = <Method extends keyof IndexMethods>(method: Method) => ((...args: readonly unknown[]) => ask(method, args).answer) as IndexReads[Method]
+  return { ask, close: async () => void (await ask('close', []).answer.finally(() => worker.terminate())) }
+}
+
+export function openIndex(): HistoryIndex {
+  const reads = startIndexWorker()
+  const scans = startIndexWorker()
+  const read = <Method extends keyof IndexMethods>(method: Method, worker = reads) => ((...args: readonly unknown[]) => worker.ask(method, args).answer) as IndexReads[Method]
   return {
     listSessions: read('listSessions'),
     getSession: read('getSession'),
-    searchMessages: read('searchMessages'),
+    searchMessages: read('searchMessages', scans),
     readMessages: read('readMessages'),
     readTurns: read('readTurns'),
     readContexts: read('readContexts'),
@@ -139,14 +147,14 @@ export function openIndex(): HistoryIndex {
     readState: read('readState'),
     removeSession: read('removeSession'),
     async follow(sessions, project, onChange, signal) {
-      const { id, answer } = ask('follow', [sessions, project], onChange)
-      const unfollow = () => void ask('unfollow', [id]).answer
+      const { id, answer } = reads.ask('follow', [sessions, project], onChange)
+      const unfollow = () => void reads.ask('unfollow', [id]).answer
       if (signal.aborted) unfollow()
       else signal.addEventListener('abort', unfollow, { once: true })
       await answer.finally(() => signal.removeEventListener('abort', unfollow))
     },
     async close() {
-      await ask('close', []).answer.finally(() => worker.terminate())
+      await Promise.all([reads.close(), scans.close()])
     },
   }
 }
