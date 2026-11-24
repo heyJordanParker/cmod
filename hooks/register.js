@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.8.2";
+var coreVersion = "8.8.3";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -6762,8 +6762,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   const holdHere = async (client) => {
     if (session === "")
       return;
-    const [cwd, terminal, socket] = await Promise.all([claude.session.cwd(), claude.env.herdrTerminal(), claude.env.herdrSocket()]);
-    await client.request(sessionActs.hold, { session, project: project(), cwd, ...terminal && socket ? { herdrTerminal: { id: terminal, socket } } : {} });
+    await client.request(sessionActs.hold, { session, project: project(), cwd: await claude.session.cwd() });
   };
   let serveChanges;
   let isUnreached = false;
@@ -11858,9 +11857,7 @@ async function startMod($, eventInput, passOn) {
       browser: () => $.env.get("BROWSER"),
       sshConnection: () => $.env.get("SSH_CONNECTION"),
       display: () => $.env.get("DISPLAY"),
-      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY"),
-      herdrTerminal: () => $.env.get("HC_TERMINAL_ID"),
-      herdrSocket: () => $.env.get("HC_TERMINAL_SOCKET")
+      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY")
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) }
@@ -12263,9 +12260,9 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
-var settingsSession = { selected: null, viewParams: null, notice: null, widget: null };
+var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
   [AbovePrompt]: "Above the prompt",
   [BelowPrompt]: "Below the prompt",
@@ -12279,6 +12276,7 @@ var moves = [
   { move: "up", hotkey: "k", label: "↑ up" },
   { move: "right", hotkey: "l", label: "→ right" }
 ];
+var logPageSize = 10;
 var preferenceTitles = {
   showsInstalledModErrors: "Show errors from installed mods",
   servesWebUi: "Show the Sidebar in your browser",
@@ -12518,37 +12516,42 @@ function settings2(mod) {
         await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, logReport(entry)), asUser: true });
         return;
       });
+      const pages = Math.ceil(log.length / logPageSize);
+      const page = Math.min(Math.max(mod.state.session.logPage, 1), pages);
       return Box({
         flexDirection: "column",
         gap: 1,
-        children: log.map((entry) => {
-          const key = `${entry.mod}/${entry.id}`;
-          const choices = reporting === key ? [
-            Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
-            ...entry.contact === undefined ? [] : [reportLink(`report-link:${key}`, entry.contact, entry.mod, entry.message, logReport(entry))],
-            Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
-          ] : [
-            Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
-            Button({ plain: true, key: `report:${key}`, label: "Report", onPress: () => void (mod.state.memory.reporting = key) })
-          ];
-          return Box({
-            key: `log:${key}`,
-            flexDirection: "column",
-            children: [
-              Text({
-                wrap: "truncate-end",
-                children: [
-                  Text({ bold: true, children: entry.mod }),
-                  ...entry.level === "warning" ? [" ", Badge({ tone: "warning", children: "warning" })] : [],
-                  Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
-                ]
-              }),
-              Text({ wrap: "wrap", children: entry.message }),
-              ...entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: "truncate-end", children: versionsLine(entry.versions) })],
-              Box({ gap: 2, flexWrap: "wrap", children: choices })
-            ]
-          });
-        })
+        children: [
+          ...log.slice((page - 1) * logPageSize, page * logPageSize).map((entry) => {
+            const key = `${entry.mod}/${entry.id}`;
+            const choices = reporting === key ? [
+              Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
+              ...entry.contact === undefined ? [] : [reportLink(`report-link:${key}`, entry.contact, entry.mod, entry.message, logReport(entry))],
+              Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
+            ] : [
+              Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
+              Button({ plain: true, key: `report:${key}`, label: "Report", onPress: () => void (mod.state.memory.reporting = key) })
+            ];
+            return Box({
+              key: `log:${key}`,
+              flexDirection: "column",
+              children: [
+                Text({
+                  wrap: "truncate-end",
+                  children: [
+                    Text({ bold: true, children: entry.mod }),
+                    ...entry.level === "warning" ? [" ", Badge({ tone: "warning", children: "warning" })] : [],
+                    Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
+                  ]
+                }),
+                Text({ wrap: "wrap", children: entry.message }),
+                ...entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: "truncate-end", children: versionsLine(entry.versions) })],
+                Box({ gap: 2, flexWrap: "wrap", children: choices })
+              ]
+            });
+          }),
+          ...pages > 1 ? [Pagination({ page, pages, onPage: (next) => void (mod.state.session.logPage = next) })] : []
+        ]
       });
     };
     const section = (key, title, children) => Box({ key: `section:${key}`, flexDirection: "column", children: Panel({ title, children }) });
@@ -12661,7 +12664,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12850,7 +12853,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13190,7 +13193,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13451,7 +13454,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13481,7 +13484,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13984,7 +13987,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-fPYkE5/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
