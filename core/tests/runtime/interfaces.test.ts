@@ -768,8 +768,8 @@ const macDevice = { id: 'mac-id', name: 'mac' }
 
 const devboxDevice = { id: 'devbox-id', name: 'devbox' }
 
-function linkedDevices(devboxComputer: SessionComputer = noSessions) {
-  const mac = servedComputer({}, {}, { device: macDevice })
+function linkedDevices(devboxComputer: SessionComputer = noSessions, macComputer: SessionComputer = noSessions) {
+  const mac = servedComputer({}, {}, { device: macDevice, computer: macComputer })
   const devbox = servedComputer({}, {}, { device: devboxDevice, computer: devboxComputer })
   const sent: { readonly from: string; readonly message: unknown }[] = []
   const carriers = new Map<string, { readonly served: ServedProviders; flush(): Promise<unknown> }>()
@@ -869,6 +869,21 @@ test("a session lists another device's sessions over the message channel, and a 
   expect(listed?.map((each) => [each.id, each.device])).toEqual([['devbox-1', devboxDevice]])
   expect(started).toEqual([['devbox-1', 'send', { type: 'prompt', text: 'Run it again' }]])
   expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  await devices.close()
+})
+
+test('cmod serve acts on no session it does not hold while another device runs it, so a message never starts a second copy there, and acts on one no device runs', async () => {
+  const resumed: unknown[] = []
+  const running = { id: 'shared', title: 'Release', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning: true, device: devboxDevice }
+  const devices = linkedDevices({ ...noSessions, session: (id) => (id === 'shared' ? running : undefined) }, { ...noSessions, unheld: async (session, action) => void resumed.push([session, action]) })
+  const session = devices.connect(devices.mac, 'boat')
+  await devices.linked()
+
+  const shared = await session.client.request('cmod/Sessions.send', ['shared', { type: 'prompt', text: 'Go on' }, {}]).catch((error: unknown) => error as RpcError)
+  await session.client.request('cmod/Sessions.send', ['ended', { type: 'prompt', text: 'Go on' }, {}])
+
+  expect([(shared as RpcError).code, (shared as RpcError).message]).toEqual([rpcCodes.notHeld, 'Session shared runs on devbox, so this computer takes no send for it.'])
+  expect(resumed).toEqual([['ended', 'send']])
   await devices.close()
 })
 

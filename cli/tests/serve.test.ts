@@ -26,8 +26,8 @@ const transcript = (session: string, folder: string) =>
 
 const backgroundClaude = `#!/bin/sh
 case "$1" in
-  --bg) printf '%s\\n' "$@" > "$HOME/bg-args"; echo 'backgrounded · ended00' ;;
-  agents) if [ "$3" = "--all" ]; then echo '[{"pid":4242,"id":"ended00","cwd":"/work","kind":"background","sessionId":"ended","name":"Fix","status":"running","state":"working"}]'; else echo '[{"pid":4243,"cwd":"/work","kind":"interactive","sessionId":"alive","name":"Alive","status":"idle"}]'; fi ;;
+  --bg) printf '%s\\n' "$@" >> "$HOME/bg-args"; echo 'backgrounded · ended00' ;;
+  agents) if [ "$3" = "--all" ]; then echo '[{"pid":4242,"id":"ended00","cwd":"/work","kind":"background","sessionId":"ended","name":"Fix","status":"running","state":"working"}]'; elif [ -f "$HOME/bg-args" ]; then echo '[{"pid":4243,"cwd":"/work","kind":"interactive","sessionId":"alive","name":"Alive","status":"idle"},{"pid":4242,"cwd":"/work","kind":"background","sessionId":"ended","name":"Fix","status":"running"}]'; else echo '[{"pid":4243,"cwd":"/work","kind":"interactive","sessionId":"alive","name":"Alive","status":"idle"}]'; fi ;;
   *) exit 1 ;;
 esac
 `
@@ -152,6 +152,17 @@ test.concurrent('cmod serve sends no message to a session Claude Code still runs
   expect(refused).toBeInstanceOf(RpcError)
   expect([(refused as RpcError).message, (refused as RpcError).code === rpcCodes.notHeld]).toEqual(['Session alive runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.', false])
   expect(existsSync(join(home, 'bg-args'))).toBe(false)
+}, 30_000)
+
+test.concurrent('two messages that reach an ended session at once resume it once, and the later one is refused because the resumed copy runs', async () => {
+  const { home, act, stop } = await servedHome()
+
+  const [first, second] = await Promise.allSettled([act('send', 'ended', { type: 'prompt', text: 'Run it again' }), act('send', 'ended', { type: 'prompt', text: 'Run it again' })])
+  stop()
+
+  expect([first.status, second.status].toSorted()).toEqual(['fulfilled', 'rejected'])
+  expect([first, second].flatMap((each) => (each.status === 'rejected' ? [(each.reason as Error).message] : []))).toEqual(['Session ended runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.'])
+  expect(readFileSync(join(home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'ended', '--', 'Run it again'])
 }, 30_000)
 
 test.concurrent('cmod serve reads a session record Claude Code left with bytes after its JSON, so a running session lists as running, and finds one session by its id', async () => {

@@ -117,12 +117,36 @@ export const Pagination = hostComponent(
     }),
 )
 
+export type ProgressSection = { readonly value: number; readonly tone?: Tone }
+
+type ProgressProps = ({ readonly value: number; readonly tone?: Tone } | { readonly sections: readonly ProgressSection[] }) & { readonly width?: number; readonly label?: string }
+
+type ProgressData = { readonly value: number; readonly width: number; readonly label?: string; readonly sections?: readonly ProgressSection[] }
+
+function filledSections(sections: readonly ProgressSection[]): ProgressSection[] {
+  let reached = 0
+  return sections.map(({ value, tone }) => {
+    const filled = Math.min(Math.max(value, 0), 100 - reached)
+    reached += filled
+    return { value: filled, ...(tone === undefined ? {} : { tone }) }
+  })
+}
+
 export const Progress = hostComponent(
   'Progress',
-  ({ value, width = 24, label }: { readonly value: number; readonly width?: number; readonly label?: string }) => ({ value: Math.min(Math.max(value, 0), 100), width, ...(label === undefined ? {} : { label }) }),
-  ({ value, width }: { readonly value: number; readonly width: number; readonly label?: string }) => {
-    const filled = Math.round((value / 100) * width)
-    return Text({ children: [Text({ color: 'claude', children: '█'.repeat(filled) }), Text({ color: 'subtle', children: '░'.repeat(width - filled) })] })
+  ({ width = 24, label, ...given }: ProgressProps): ProgressData => {
+    const sections = 'sections' in given ? filledSections(given.sections) : given.tone === undefined ? undefined : filledSections([given])
+    const value = sections === undefined && 'value' in given ? Math.min(Math.max(given.value, 0), 100) : (sections ?? []).reduce((sum, each) => sum + each.value, 0)
+    return { value, width, ...(label === undefined ? {} : { label }), ...(sections === undefined ? {} : { sections }) }
+  },
+  ({ value, width, sections }: ProgressData) => {
+    let reached = 0
+    const cells = (sections ?? [{ value }]).map(({ value: part, tone }) => {
+      const from = Math.round((reached / 100) * width)
+      reached += part
+      return Text({ ...(tone === undefined ? { color: 'claude' } : textOf(tone)), children: '█'.repeat(Math.round((reached / 100) * width) - from) })
+    })
+    return Text({ children: [...cells, Text({ color: 'subtle', children: '░'.repeat(width - Math.round((reached / 100) * width)) })] })
   },
 )
 

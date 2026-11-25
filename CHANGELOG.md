@@ -4,6 +4,17 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.8.4] - 2026-11-25
+
+### Added
+- `Progress` takes `sections`, parts filled left to right each in its own `tone`, and a `tone` for a one-part bar, so a usage bar draws what is used under its expected pace and what is past it in two colors in the terminal, Herdr, and the browser.
+
+### Fixed
+- A message to a session that runs on another device goes to that device, and this computer starts no copy of it. Before, a session whose transcript was on both computers, such as one moved between them, was resumed here as a second copy.
+- A session that ran `/reload-plugins` reaches `cmod serve` again at once, so other sessions can message it, read it, and draw its views. Before, it stayed unreached until its next prompt.
+- With Claude Code's hint hidden, the widgets below the prompt draw on one line after the permission mode, as `⏵⏵ bypass permissions on · …`. Claude Code always draws the permission mode before them, and the widgets took the full width, so the label wrapped onto a second line.
+- Two messages that reach an ended session at once resume it once. The later one is refused because the resumed session runs, where before each started its own copy.
+
 ## [8.8.3] - 2026-11-24
 
 ### Fixed

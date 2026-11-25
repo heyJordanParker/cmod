@@ -60,12 +60,19 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
 
   const projectOf = (session: string, context: SessionContext, holding: HoldingOf) => holding(session)?.project ?? (typeof context['project'] === 'string' ? context['project'] : '')
 
-  const resume = async (session: string, project: string, input: unknown) => {
-    const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
-    if (text.trim() === '') throw new Error('send needs text.')
-    if ((await activeSessions()).has(session)) throw runsUnreached(session, 'send')
-    const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
-    return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
+  const resuming = new Map<string, Promise<unknown>>()
+
+  const resume = (session: string, project: string, input: unknown) => {
+    const resumed = Promise.allSettled([resuming.get(session)]).then(async () => {
+      const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
+      if (text.trim() === '') throw new Error('send needs text.')
+      if ((await activeSessions()).has(session)) throw runsUnreached(session, 'send')
+      const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
+      return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
+    })
+    resuming.set(session, resumed)
+    void resumed.finally(() => resuming.get(session) === resumed && resuming.delete(session)).catch(() => undefined)
+    return resumed
   }
 
   const statusOf = (entry: RunningEntry | undefined, told: ToldAt, session: string) => {

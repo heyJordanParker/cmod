@@ -436,6 +436,31 @@ test("a session whose saved listeners do not read is still reached through cmod 
   expect({ held: fake.serve.routing.heldSessions().map(({ session }) => session), reported }).toEqual({ held: ['next'], reported: ["Could not read back the mods' listeners of this session"] })
 })
 
+test('a cmod plugin started into a running session, as /reload-plugins starts it, holds that session at once, with no prompt and no SessionStart', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  fake.fakes.fs = fakeFiles({ '/test/transcripts/test-session.jsonl': '{}\n' })
+  fake.fakes.process.spawn = () => printed('[]')
+  serveConversations({ claude: fake.claude, router: createRouter(), store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await fake.settle()
+
+  expect(fake.serve.routing.heldSessions().map(({ session }) => session)).toEqual(['test-session'])
+})
+
+test('a cmod plugin started with a new session, which has no transcript yet, waits for its SessionStart to hold it', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  const router = createRouter()
+  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await fake.settle()
+  const before = fake.serve.routing.heldSessions().length
+
+  await router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'startup' } as never, async () => ({}))
+  await fake.settle()
+
+  expect([before, fake.serve.routing.heldSessions().map(({ session }) => session)]).toEqual([0, ['test-session']])
+})
+
 test('a failure to tell a mod about a change clears once cmod reaches that mod again', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()

@@ -239,20 +239,20 @@ export function serveWidgets({
 
   const shown = (keys: readonly string[]) => keys.filter((key) => !isHidden(key))
 
-  const rowsNow = (area: Area, at: StyledAt, turn: TurnData | undefined): RenderElement[] =>
+  const rowsNow = (area: Area, at: StyledAt, turn: TurnData | undefined, isBesideMode = false): RenderElement[] =>
     layout.areas[area].flatMap((row) => {
       const side = (keys: readonly string[]) => shown(keys).map((key) => elementFor(key, area, at, turn)).filter((each) => each !== undefined)
       const left = side(row.left)
       const right = side(row.right)
       const group = (keys: readonly string[], children: readonly RenderElement[]) => Box({ flexShrink: shown(keys).some((key) => widgetOf(key)?.place?.size === 'fill') ? 1 : 0, minWidth: 0, columnGap: 2, children })
-      return left.length + right.length === 0 ? [] : [Box({ justifyContent: 'space-between', width: at.columns, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })]
+      return left.length + right.length === 0 ? [] : [Box({ ...(isBesideMode ? {} : { justifyContent: 'space-between' as const, width: at.columns }), columnGap: 2, children: [group(row.left, left), group(row.right, right)] })]
     })
 
   const keysIn = (area: Area) => layout.areas[area].flatMap((row) => shown([...row.left, ...row.right]))
 
-  const draw = async (area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]> => {
+  const draw = async (area: Area, table: ElementTable, at: StyledAt, turn?: TurnData, isBesideMode = false): Promise<RenderElement[]> => {
     await Promise.all(keysIn(area).map((key) => fill(key, area, at, turn)))
-    return drawWith(table, () => rowsNow(area, at, turn), markdownIn(table, at))
+    return drawWith(table, () => rowsNow(area, at, turn, isBesideMode), markdownIn(table, at))
   }
 
   const rows = (area: Area, at: StyledAt): RenderElement[] => {
@@ -270,8 +270,8 @@ export function serveWidgets({
     const inTranscript = styledAt(e, viewportColumns(e) - transcriptIndent)
     if (e.component === 'AbovePrompt') return e.props.hasSurvey ? next(e) : below(table, await next(e), await draw(AbovePrompt, table, styledAt(e, e.props.bodyColumns)))
     if (e.component === 'PromptHint') {
-      const added = await draw(BelowPrompt, table, styledAt(e, viewportColumns(e) - promptIndent))
-      return isHidden(claudeHint) ? column(table, added) : below(table, await next(e), added)
+      const at = styledAt(e, viewportColumns(e) - promptIndent)
+      return isHidden(claudeHint) ? column(table, await draw(BelowPrompt, table, at, undefined, true)) : below(table, await next(e), await draw(BelowPrompt, table, at))
     }
     if (e.component === 'SessionMode') return isHidden(claudeModes) ? column(table, []) : next(e)
     if (e.component === 'Spinner') return below(table, await next(e), await draw(Working, table, inTranscript))

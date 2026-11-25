@@ -73,6 +73,14 @@ test("hiding Claude Code's hint leaves the BelowPrompt widgets, and hiding its m
   expect(await fire([claudeModes], 'SessionMode')).toEqual([])
 })
 
+test("with Claude Code's hint hidden, the BelowPrompt widgets fit on the line beside the permission mode Claude Code draws before them", async () => {
+  const clock: WidgetInit = { ...label('clock', '00:03'), place: { side: 'right' } }
+  const tested = testMod(withWidgets('demo', label('branch', 'main'), clock), { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/branch'], right: ['demo/clock'] }] }, [claudeHint]) } })
+  const answer = await tested.fire('ui.render', { surface: 'terminal', component: 'PromptHint', requestId: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '' }, viewport: { columns: 60, rows: 24 } } as never, elements.Text({ children: '' }))
+
+  expect(rowsOf(elements.Box({ children: [elements.Text({ children: '⏵⏵ bypass permissions on · ' }), answer as never] }), 56).map((row) => row.trimEnd())).toEqual(['⏵⏵ bypass permissions on · main  00:03'])
+})
+
 test('a prompt narrower than its indent still draws its BelowPrompt widgets, at no width instead of a negative one', async () => {
   const tested = testMod(withWidgets('demo', label('branch', 'main')))
   const drawn = await tested.fire('ui.render', { surface: 'terminal', component: 'PromptHint', requestId: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '' }, viewport: { columns: 2, rows: 24 } } as never, elements.Text({ children: '' }))

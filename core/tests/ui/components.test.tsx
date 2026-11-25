@@ -111,6 +111,41 @@ test('Progress fills its width in proportion to its percent', async () => {
   expect(await testMod(kit).shown.pane.lines()).toContain('██░░░░░░')
 })
 
+test('Progress draws its sections left to right in their tones, and fills no more than its width when they add past 100', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup: (mod) =>
+        void mod.panes.add({
+          id: 'usage',
+          title: 'Usage',
+          render: () => (
+            <Box flexDirection="column">
+              <Progress sections={[{ value: 50 }, { value: 25, tone: 'warning' }]} width={8} label="Week used" />
+              <Progress sections={[{ value: 75 }, { value: 50, tone: 'critical' }]} width={8} />
+              <Progress value={50} tone="success" width={4} />
+            </Box>
+          ),
+        }).open(),
+    }),
+  )
+
+  await tested.start()
+  const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
+  const cells = (drawn: unknown) => ((drawn as { readonly props: { readonly children: readonly { readonly props: { readonly color: string; readonly children: string } }[] } }).props.children).map(({ props }) => [props.children, props.color])
+
+  expect((await tested.shown.pane.lines()).slice(0, 3)).toEqual(['██████░░', '████████', '██░░'])
+  expect(cells(drawWith(table, () => Progress({ sections: [{ value: 75 }, { value: 50, tone: 'critical' }], width: 8 })))).toEqual([
+    ['██████', 'claude'],
+    ['██', 'error'],
+    ['', 'subtle'],
+  ])
+  expect(cells(drawWith(table, () => Progress({ value: 50, tone: 'success', width: 4 })))).toEqual([
+    ['██', 'success'],
+    ['░░', 'subtle'],
+  ])
+})
+
 test('Pagination steps forward, and draws an end it cannot pass as text', async () => {
   const tested = testMod(kit)
   expect(await tested.shown.pane.lines()).toContain('p: Previous  1 of 2  n: Next')

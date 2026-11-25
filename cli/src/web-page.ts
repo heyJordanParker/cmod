@@ -332,6 +332,7 @@ textarea.input{resize:vertical}
 .button:disabled{opacity:.45;cursor:default;background:none;color:inherit}
 .progress{height:6px;border:0;border-radius:999px;background:var(--subtle);accent-color:var(--claude);align-self:center}
 .progress::-webkit-progress-bar{background:var(--subtle);border-radius:999px}.progress::-webkit-progress-value{background:var(--claude);border-radius:999px}.progress::-moz-progress-bar{background:var(--claude);border-radius:999px}
+.progress-bar{display:flex;height:6px;border-radius:999px;overflow:hidden;background:var(--subtle);align-self:center}.progress-section{background:var(--claude)}.progress-section.tone-neutral{background:var(--inactive)}.progress-section.tone-info,.progress-section.tone-success,.progress-section.tone-warning,.progress-section.tone-critical{background:var(--tone)}
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .list-item{font:inherit;color:var(--inactive);background:none;border:0;border-radius:4px;padding:0 1ch;display:flex;gap:1ch;align-items:center;width:100%;text-align:left;cursor:pointer}
 span.list-item{cursor:default}

@@ -633,6 +633,12 @@ export function serveConversations({
     start(e.session_id, e.source, e.agent_type)
     return next(e)
   })
+  void (async () => {
+    const id = await claude.session.id()
+    if (id === '') return
+    const isRunning = await claude.fs.exists((await claude.session.info()).transcriptPath)
+    if (session === '' && isRunning) start(id, 'resume', undefined)
+  })().catch((error: unknown) => claude.ui.warn('serve:hold', `cmod: other sessions reach this one after its next prompt: ${messageOf(error)}`))
   router.add('classic.SessionEnd', async (e, next) => {
     if (subscribed.size > 0 || watched.size > 0 || served.listened().length > 0) await saveListeners(true).catch((error: unknown) => report('follow', 'Left its listeners registered', error))
     return next(e)

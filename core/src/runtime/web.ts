@@ -174,7 +174,12 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
   },
   Progress: (props) => {
     const label = typeof props['label'] === 'string' ? props['label'] : undefined
-    return `<progress class="progress" max="100" value="${numberOr(props['value'], 0)}"${attribute('aria-label', label)}${attribute('style', `width:${across(numberOr(props['width'], 24))}`)}></progress>`
+    const value = numberOr(props['value'], 0)
+    const shared = `${attribute('aria-label', label)}${attribute('style', `width:${across(numberOr(props['width'], 24))}`)}`
+    if (!Array.isArray(props['sections'])) return `<progress class="progress" max="100" value="${value}"${shared}></progress>`
+    const sections = props['sections'].filter((each): each is Props => typeof each === 'object' && each !== null)
+    const section = (each: Props) => `<span class="progress-section${each['tone'] === undefined ? '' : ` tone-${toneOf(each['tone'])}`}" style="width:${numberOr(each['value'], 0)}%"></span>`
+    return `<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"${shared}>${sections.map(section).join('')}</div>`
   },
   List: (props, drawing) => `<ul class="list"${attribute('aria-label', textOr(props['label'], ''))}>${nodeHtml(props['children'], drawing)}</ul>`,
   ListItem: (props, drawing) => {

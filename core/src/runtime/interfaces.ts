@@ -386,8 +386,24 @@ export function routeSessions({
       return null
     }
     const holder = holderOf(session)
-    if (holder === undefined) return computer.unheld(session, action, input, context, holding)
-    return holder.connection.request(sessionActs.act, { action, input, ...context })
+    if (holder !== undefined) return holder.connection.request(sessionActs.act, { action, input, ...context })
+    const runner = action === 'startTask' ? undefined : await runnerElsewhere(session)
+    if (runner !== undefined) throw new RpcError(rpcCodes.notHeld, `Session ${session} runs on ${runner}, so this computer takes no ${action} for it.`)
+    return computer.unheld(session, action, input, context, holding)
+  }
+
+  const runnerElsewhere = async (session: string): Promise<string | undefined> => {
+    for (const other of await providers.list(sessionsInterface)) {
+      const ask = (method: string, args: readonly unknown[]) => providers.call({ interface: sessionsInterface, method, args, ...other })
+      const isAnswer = (error: unknown, code: number) => error instanceof RpcError && error.code === code
+      const found = await ask('session', [session]).catch(async (error: unknown) => {
+        if (isAnswer(error, rpcCodes.notHeld)) return undefined
+        if (isAnswer(error, rpcCodes.methodNotFound)) return ((await ask('sessions', [{ everyProject: true, running: true }])) as readonly SessionData[]).find((each) => each.id === session)
+        throw new Error(`cmod could not ask ${other.device?.name ?? other.mod} whether it runs session ${session}, so it starts no copy of it here: ${messageOf(error)}`)
+      })
+      if (isObject(found) && found['isRunning'] === true) return other.device?.name ?? other.mod
+    }
+    return undefined
   }
 
   const withStatus = (listed: SessionData, told: HeldStatus | undefined): SessionData => {

@@ -407,6 +407,7 @@ const kit = {
       { $cmodElement: 'Tabs', props: { key: 'demo/kit:', tabs: [{ key: 'options', label: 'Options', isSelected: true, onSelect: { $cmodHandler: 2 } }, { key: 'log', label: 'Log', isSelected: false, onSelect: { $cmodHandler: 3 } }], children: { $cmodElement: 'Text', props: { children: 'body' } } } },
       { $cmodElement: 'Toggle', props: { key: 'demo/kit:', label: 'Show errors', checked: true, onToggle: { $cmodHandler: 4 } } },
       { $cmodElement: 'Progress', props: { value: 40, width: 10, label: 'Context used' } },
+      { $cmodElement: 'Progress', props: { value: 55, width: 10, label: 'Week used', sections: [{ value: 40 }, { value: 15, tone: 'warning' }] } },
       { $cmodElement: 'Pagination', props: { page: 1, pages: 2, onNext: { $cmodHandler: 5 } } },
       { $cmodElement: 'Badge', props: { tone: 'warning', children: 'warning' } },
       { $cmodElement: 'Banner', props: { tone: 'warning', children: 'Needs setup: a branch', actions: [{ $cmodElement: 'Button', props: { key: 'demo/kit:finish', label: 'Finish setup', variant: 'primary', onPress: { $cmodHandler: 6 } } }] } },
@@ -435,6 +436,11 @@ test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel
   ])
   expect(drawn.find((each) => each.kind === 'Switch')?.calls['checked']).toEqual([true])
   expect([drawn.find((each) => each.kind === 'Progress')?.calls['value'], drawn.find((each) => each.kind === 'ProgressIndicator')?.calls['w']]).toEqual([[40], ['40%']])
+  expect(drawn.filter((each) => each.kind === 'ProgressIndicator').map((each) => [each.calls['w']?.[0], each.calls['bg']?.[0]])).toEqual([
+    ['40%', '#accent'],
+    ['40%', '#accent'],
+    ['15%', '#ansi3'],
+  ])
   expect(drawn.filter((each) => each.kind === 'Button' && each.calls['disabled'] !== undefined).map((each) => [each.calls['accessibility_label']?.[0], each.calls['disabled']?.[0]])).toEqual([
     ['Previous', true],
     ['Next', false],

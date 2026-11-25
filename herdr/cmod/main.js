@@ -893,8 +893,10 @@ export default class Cmod extends View {
     const value = typeof given.value === "number" ? Math.min(Math.max(given.value, 0), 100) : 0;
     const label = typeof given.label === "string" ? given.label : `${Math.round(value)}%`;
     const width = typeof given.width === "number" ? given.width * UI.cell : undefined;
+    const sections = Array.isArray(given.sections) ? given.sections.filter((each) => typeof each?.value === "number") : [{ value }];
     return Progress.new(`${drawn.key}:progress:${label}`).value(value).accessibility_label(label).flex().items_center().min_w(0).when(width === undefined, (el) => el.flex_1()).when(width !== undefined, (el) => el.w(width ?? 0))
-      .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.border).overflow_hidden().child(ProgressIndicator.new().h_full().w(`${value}%`).rounded(3).bg(t.accent)));
+      .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.border).overflow_hidden().flex()
+        .children(sections.map((each) => ProgressIndicator.new().h_full().w(`${Math.max(each.value, 0)}%`).bg(each.tone === undefined ? t.accent : toneOf(each.tone, t)))));
   }
 
   list(given, drawn, path, t) {

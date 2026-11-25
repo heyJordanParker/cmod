@@ -179,6 +179,12 @@ test('every component of ui/components.js draws in the browser as its own HTML c
   expect(handlers).toHaveLength(9)
 })
 
+test('a Progress with sections draws in the browser as one meter whose sections fill their share in their tones', () => {
+  const { html } = drawn(Progress({ sections: [{ value: 40 }, { value: 15, tone: 'warning' }], width: 20, label: 'Week used' }))
+
+  expect(html).toBe('<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55" aria-label="Week used" style="width:20ch"><span class="progress-section" style="width:40%"></span><span class="progress-section tone-warning" style="width:15%"></span></div>')
+})
+
 test('a tone a mod names that is not one of the tones draws as neutral, so no text reaches a class', () => {
   expect(htmlOf({ $cmodElement: 'Badge', props: { tone: '"><script>', children: 'x' } })).toBe('<span class="badge tone-neutral">x</span>')
 })

@@ -95,7 +95,7 @@ Tooltip(props: { text: string; children? })
 Help(props: { text: string; isOpen: boolean; onOpenChange(isOpen: boolean): void })
 Dialog(props: { title: string; children?; actions })
 Pagination(props: { page: number; pages: number; onPage(page: number): void })
-Progress(props: { value: number; width?: number; label?: string })
+Progress(props: ({ value: number; tone?: Tone } | { sections: readonly { value: number; tone?: Tone }[] }) & { width?: number; label?: string })
 ```
 
 - `Tabs` draws a row of tabs over `children`. The selected tab's label is bold and underlined. Each other tab is a `Button`, so a part that holds the keyboard switches tabs by Tab and Enter or a click. A tab given a `hotkey`, one digit or one lowercase letter, draws it before its label, as `o: Open`, and that key switches to it. Leave the Sidebar's digits to the Sidebar: inside a page, a tab's hotkey that matches one replaces it.
@@ -107,7 +107,7 @@ Progress(props: { value: number; width?: number; label?: string })
 - `Help` draws a `?` that shows `text` the same way. A press of `?` keeps the card open until the next press, so the keyboard reaches it too. Keep `isOpen` in `mod.state`.
 - `Dialog` lays out a dialog's title, body, and `actions`, the buttons in a row. Put the safe action first, as the `primary` Button with `autoFocus`.
 - `Pagination` draws `p: Previous  2 of 5  n: Next`. `p` and `n` are its hotkeys, and an end it cannot pass is dim text.
-- `Progress` fills `value` percent of `width` columns, 24 unless given, and `label` names the bar for a screen reader. Put the count beside it in a `Text`, or pass it as a loading toast's `description`.
+- `Progress` fills `value` percent of `width` columns, 24 unless given, in its `tone`'s color, and `label` names the bar for a screen reader. Put the count beside it in a `Text`, or pass it as a loading toast's `description`. Give it `sections` instead to fill several parts left to right, each `value` percent wide in its own `tone`, as a usage bar draws what is used under the expected pace in one color and what is past it in `'warning'`. The parts stop at 100 percent, and a part with no `tone` draws in the bar's own color.
 - `Tabs`, `Toggle`, `Help`, `Pagination`, and a tree `ListItem` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
 
 ## Views and pages
