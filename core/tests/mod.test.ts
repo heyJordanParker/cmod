@@ -3,7 +3,7 @@ import type { RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, Session, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type View, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
+import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, provide, providers, Reply, Session, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type View, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
@@ -1590,6 +1590,23 @@ test('settings.beforeChange refuses an edit to the settings files it matches, an
   expect(skills).toEqual({})
   expect(heard).toEqual([{ source: 'project', path: '/work/app/.claude/settings.json' }])
   expect(loaded).toEqual([{ source: 'skills' }])
+})
+
+test("settings.onChange's 500 ms wait for a change the test kit already loaded leaves the imports of a mod started since bound to that mod", async () => {
+  const timers: { readonly ms: number; readonly run: () => void }[] = []
+  const themed = testMod(defineMod({ name: 'themed', setup: () => void settings.onChange(() => undefined) }))
+  await themed.start()
+  themed.fakes.clock.after = (ms, run) => (timers.push({ ms, run }), { cancel: () => undefined })
+  await claudeCodeOf(themed).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  const echoer = testMod(defineMod({ name: 'echoer', setup: () => void provide('demo/Echo', { echo: (text: string) => text }) }))
+  await echoer.start()
+
+  for (const { run } of timers.filter(({ ms }) => ms === 500)) run()
+  await themed.settle()
+  const found = await providers('demo/Echo')
+
+  expect(timers.map(({ ms }) => ms)).toContain(500)
+  expect(found.map((each) => each.mod)).toEqual(['echoer'])
 })
 
 test('settings.onChange reads the new values from settings.user.read(), because it runs once Claude Code loaded them', async () => {

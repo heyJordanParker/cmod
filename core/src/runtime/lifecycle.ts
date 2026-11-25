@@ -912,6 +912,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   const settingsListeners = new Set<SettingsListener>()
   const loadingSettings: SettingsFileChange[] = []
   const settingsLoaded = async () => {
+    if (loadingSettings.length === 0) return
     bind(imports)
     await Promise.all(
       loadingSettings.splice(0).flatMap((change) =>
