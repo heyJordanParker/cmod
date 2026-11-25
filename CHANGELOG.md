@@ -16,6 +16,9 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 - `cmod sessions list`, `search`, and `read` reach every device through cmod serve, as a mod's `sessions` import does. `list` names each session's device and whether it runs or waits on a dialog, `read messages` and `search` start each line with the message id, and `search` shows the words around each match and leaves out earlier searches.
 - The terminal `Progress` splits each boundary at an eighth of a column, draws its track at the fill's height, and rounds its ends in Herdr, Ghostty, and WezTerm, whose fonts hold Nerd Font's half circles, also inside tmux. Settings, under Preferences, adds `Round the ends of bars in every terminal`, for a session over ssh, where nothing names the terminal that shows it.
 
+### Fixed
+- On a computer with no conversation index yet, `cmod serve`'s first reads no longer fail with `database is locked`, because its two index workers built the new index in the same temporary file.
+
 ### Removed
 - The cmod plugin's MCP tools, `list_sessions` through `delete_session` and `compact`, are gone. Run the `cmod sessions` and `cmod terminal` commands instead, which the Skills describe.
 

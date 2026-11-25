@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch, type Stats } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
-import { SHARE_ENV } from 'node:worker_threads'
+import { SHARE_ENV, threadId } from 'node:worker_threads'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
 import type { Device } from '@cmodjs/core/src/session/context/turn/device.js'
@@ -160,7 +160,7 @@ export function openIndex(): HistoryIndex {
 }
 
 function createIndex(path: string): void {
-  const made = `${path}.${process.pid}.tmp`
+  const made = `${path}.${process.pid}-${threadId}.tmp`
   const fresh = new Database(made, { create: true })
   try {
     const asked = fresh.prepare<{ version: string }, []>('select sqlite_version() as version')

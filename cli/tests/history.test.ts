@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { afterAll, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, expect, spyOn, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { appendFile, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -8,13 +8,20 @@ import { cmodWith as cmodWithHere, deleteTemporaryHomes, startCmod, startOf, tem
 
 afterAll(deleteTemporaryHomes)
 
-const serves = new Map<string, Promise<unknown>>()
+const serves = new Map<string, ReturnType<typeof startCmod>>()
+
+afterEach(async () => {
+  const stopped = [...serves.values()]
+  serves.clear()
+  for (const serving of stopped) serving.child.kill()
+  await Promise.all(stopped.map((serving) => serving.done))
+})
 
 const served = (home: string, args: readonly string[]) => {
   if (args[0] !== 'sessions' && args[0] !== 'history') return Promise.resolve()
-  const started = serves.get(home) ?? startCmod(home, 'serve').firstLine()
-  serves.set(home, started)
-  return started
+  const serving = serves.get(home) ?? startCmod(home, 'serve')
+  serves.set(home, serving)
+  return serving.firstLine()
 }
 
 const outside = { CLAUDE_CODE_SESSION_ID: '' }
@@ -93,7 +100,7 @@ function mainMessages(project: string) {
   ]
 }
 
-test.concurrent("the index names each message's agent type, a task's from its agent, and the main agent's from the session's agent-setting row, which cmod sessions list names too", async () => {
+test("the index names each message's agent type, a task's from its agent, and the main agent's from the session's agent-setting row, which cmod sessions list names too", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   await writeFiles(home, {
@@ -117,7 +124,7 @@ test.concurrent("the index names each message's agent type, a task's from its ag
   expect(task.map((message) => [message.id, message.agentType])).toEqual([['x1', 'explorer']])
 }, 60_000)
 
-test.concurrent('readers of a session longer than several write batches, running at once, each read it whole, with no row twice', async () => {
+test('readers of a session longer than several write batches, running at once, each read it whole, with no row twice', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const long = 'x'.repeat(2_000_000)
@@ -162,7 +169,7 @@ test.concurrent('readers of a session longer than several write batches, running
   expect(counts).toEqual({ total: counts?.ids ?? -1, ids: counts?.ids ?? -1, unordered: 0 })
 }, 120_000)
 
-test.concurrent('each cmod history form a released session or the inbox runs prints what its cmod sessions form prints, on the same store', async () => {
+test('each cmod history form a released session or the inbox runs prints what its cmod sessions form prints, on the same store', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const forms = [
@@ -183,7 +190,7 @@ test.concurrent('each cmod history form a released session or the inbox runs pri
   expect((await cmod(home, 'history', 'messages', 's3', '--project', project)).stderr).toBe('cmod history: no session s3 on any of your devices.\n')
 }, 60_000)
 
-test.concurrent('messages reads a conversation as typed messages placed in their context and turn, and --task reads a task', async () => {
+test('messages reads a conversation as typed messages placed in their context and turn, and --task reads a task', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -194,7 +201,7 @@ test.concurrent('messages reads a conversation as typed messages placed in their
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--turn', 'p1'))).toEqual(['p1'])
 })
 
-test.concurrent("read --transcripts reads a copied Claude Code folder's conversation through an index of its own, so cmod's index never lists it", async () => {
+test("read --transcripts reads a copied Claude Code folder's conversation through an index of its own, so cmod's index never lists it", async () => {
   const home = await temporaryHome()
   const copied = join(home, 'copied')
   const project = join(home, 'work/app')
@@ -211,7 +218,7 @@ test.concurrent("read --transcripts reads a copied Claude Code folder's conversa
   expect(await cmod(home, 'sessions', 'read', 'messages', 's1', '--transcripts', join(home, 'work'))).toEqual({ exitCode: 1, stdout: '', stderr: `cmod sessions: ${join(home, 'work')} holds no projects folder, so it is not a Claude Code folder.\n` })
 })
 
-test.concurrent("each mod's note in a hook row is indexed as a Note from that mod", async () => {
+test("each mod's note in a hook row is indexed as a Note from that mod", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const hookRow = { type: 'attachment', uuid: 'h1', timestamp: at(2), attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<demo_mod>\nsrc/CLAUDE.md is held.\n</demo_mod>'] } }
@@ -220,7 +227,7 @@ test.concurrent("each mod's note in a hook row is indexed as a Note from that mo
   expect(await json(home, 'read', 'messages', 's1', '--project', project)).toEqual([firstTurn(), { id: 'h1', type: 'note', at: at(2), session: 's1', context: 1, turn: 'u1', text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'demo' } }])
 })
 
-test.concurrent("each turn ran on the device the cmod plugin's last note before it names, and a transcript without such a note has turns without a device", async () => {
+test("each turn ran on the device the cmod plugin's last note before it names, and a transcript without such a note has turns without a device", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'mac', os: 'darwin', arch: 'arm64' }
@@ -247,7 +254,7 @@ test.concurrent("each turn ran on the device the cmod plugin's last note before 
   expect(await devices('older')).toEqual([['o1', undefined], ['o2', undefined]])
 })
 
-test.concurrent('turns, contexts, tasks, and goal read the shape of a conversation', async () => {
+test('turns, contexts, tasks, and goal read the shape of a conversation', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -261,7 +268,7 @@ test.concurrent('turns, contexts, tasks, and goal read the shape of a conversati
   expect(await json(home, 'read', 'goal', 's1', '--project', project)).toEqual({ text: 'Rename the tree pane' })
 })
 
-test.concurrent("--task reads the agent a task runs like a conversation: its turns, context, goal, and usage", async () => {
+test("--task reads the agent a task runs like a conversation: its turns, context, goal, and usage", async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await appendFile(join(home, `${projectFolder(project)}/s1/subagents/agent-a7.jsonl`), lines([{ type: 'assistant', uuid: 'x2', timestamp: at(3), message: { role: 'assistant', model: 'claude-haiku-5', content: [{ type: 'text', text: 'It is src/panes/tree.tsx.' }], usage: { input_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 80, output_tokens: 10 } } }]))
@@ -274,7 +281,7 @@ test.concurrent("--task reads the agent a task runs like a conversation: its tur
   expect(await json(home, 'read', 'usage', 's1', '--project', project)).toEqual({ model: '', contextWindow: {} })
 })
 
-test.concurrent('search --session keeps one conversation, and --task, --turn, and --agent keep a part of it', async () => {
+test('search --session keeps one conversation, and --task, --turn, and --agent keep a part of it', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -288,7 +295,7 @@ test.concurrent('search --session keeps one conversation, and --task, --turn, an
   expect((await cmod(home, 'sessions', 'search', 'pane', '--task', 'a7')).stderr).toContain('cmod sessions search takes --task, --turn, --context, and --agent only with --session.')
 })
 
-test.concurrent('a compaction closes the context and opens the next, and a turn closes when Claude finishes', async () => {
+test('a compaction closes the context and opens the next, and a turn closes when Claude finishes', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   await writeFiles(home, {
@@ -308,7 +315,7 @@ test.concurrent('a compaction closes the context and opens the next, and a turn 
   expect((await json(home, 'read', 'turns', 's1', '--project', project, '--context', '1')) as unknown[]).toEqual([{ prompt: firstTurn(), context: 1, openedAt: at(0), closedAt: at(3) }])
 })
 
-test.concurrent('the goal a mod saved replaces the first prompt, and state resumes from it', async () => {
+test('the goal a mod saved replaces the first prompt, and state resumes from it', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await writeFiles(home, { '.local/share/cmod/data/cmod/goals/s1.txt': 'Ship the tree pane' })
@@ -317,7 +324,7 @@ test.concurrent('the goal a mod saved replaces the first prompt, and state resum
   expect(await json(home, 'read', 'state', 's1', '--project', project)).toMatchObject({ session: 's1', context: 1, goal: 'Ship the tree pane', turn: { prompt: { id: 'p1' } } })
 })
 
-test.concurrent('messages and search print one line per message, with the local time, and search adds the date and session', async () => {
+test('messages and search print one line per message, with the local time, and search adds the date and session', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -337,7 +344,7 @@ test.concurrent('messages and search print one line per message, with the local 
   expect(found.stdout).toBe('2026-10-11 10:00  s1  u1  person   Rename the tree pane\n')
 })
 
-test.concurrent('messages after the last one read returns only the lines saved since', async () => {
+test('messages after the last one read returns only the lines saved since', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await json(home, 'read', 'messages', 's1', '--project', project)
@@ -346,7 +353,7 @@ test.concurrent('messages after the last one read returns only the lines saved s
   expect(await json(home, 'read', 'messages', 's1', '--project', project, '--after', 'p1')).toEqual([{ id: 'a2', type: 'reply', at: at(9), session: 's1', context: 1, turn: 'p1', text: 'Build mode is on.' }])
 })
 
-test.concurrent('follow prints a row Claude Code was still writing when follow started', async () => {
+test('follow prints a row Claude Code was still writing when follow started', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const prompt = JSON.stringify({ type: 'user', uuid: 'u1', timestamp: at(0), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the pane' } })
@@ -364,7 +371,7 @@ test.concurrent('follow prints a row Claude Code was still writing when follow s
   expect(stdout).toContain('"Renamed."')
 })
 
-test.concurrent('follow prints each change saved after it started, and nothing saved before', async () => {
+test('follow prints each change saved after it started, and nothing saved before', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const following = startCmod(home, 'sessions', 'follow', 's1', '--project', project, '--json')
@@ -381,7 +388,7 @@ test.concurrent('follow prints each change saved after it started, and nothing s
   ])
 })
 
-test.concurrent('follow --running follows a session of the project that starts after it, and no other project', async () => {
+test('follow --running follows a session of the project that starts after it, and no other project', async () => {
   const home = await temporaryHome()
   const { project, other } = await writeHistory(home)
   const following = startCmod(home, 'sessions', 'follow', '--running', '--project', project, '--json')
@@ -403,7 +410,7 @@ test.concurrent('follow --running follows a session of the project that starts a
   expect([...new Set(stdout.trim().split('\n').map((line) => (JSON.parse(line) as { session: string }).session))]).toEqual(['s2'])
 })
 
-test.concurrent('the conversation the command runs in has no messages before its first is saved, and another unsaved session id fails', async () => {
+test('the conversation the command runs in has no messages before its first is saved, and another unsaved session id fails', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's2', cwd: project }) })
@@ -415,7 +422,7 @@ test.concurrent('the conversation the command runs in has no messages before its
   expect([unknown.exitCode, unknown.stderr]).toEqual([1, 'cmod sessions: no session s3 on any of your devices.\n'])
 })
 
-test.concurrent("list lists the project's conversations newest first, and --every-project, --since, and --running change the scope", async () => {
+test("list lists the project's conversations newest first, and --every-project, --since, and --running change the scope", async () => {
   const home = await temporaryHome()
   const { project, other } = await writeHistory(home)
   await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project }), '.claude/sessions/2.json': JSON.stringify({ pid: 2 ** 22 + 7, sessionId: 's0', cwd: project }) })
@@ -431,7 +438,7 @@ test.concurrent("list lists the project's conversations newest first, and --ever
   expect(ids(await json(home, 'search', 'tree pane', '--project', project, '--running'))).toEqual(['u1'])
 })
 
-test.concurrent('a running session whose process started at another time than Claude Code recorded is a reused pid, so it does not count as running', async () => {
+test('a running session whose process started at another time than Claude Code recorded is a reused pid, so it does not count as running', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const started = await startOf(process.pid)
@@ -475,7 +482,7 @@ test('a registry write that changes only a status starts no process, and only a 
   expect(psRuns).toEqual([String(process.pid), String(other.pid)])
 })
 
-test.concurrent('sessions carries the color each session last took with /color, and none after a reset to default', async () => {
+test('sessions carries the color each session last took with /color, and none after a reset to default', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const transcript = (session: string) => join(home, projectFolder(project), `${session}.jsonl`)
@@ -491,7 +498,7 @@ test.concurrent('sessions carries the color each session last took with /color, 
   expect(await colors()).toEqual({ s1: 'none', s0: 'orange' })
 })
 
-test.concurrent('search finds every message whose text or tool input holds the text, newest first, in the project or every project, and never a tool result', async () => {
+test('search finds every message whose text or tool input holds the text, newest first, in the project or every project, and never a tool result', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -501,7 +508,7 @@ test.concurrent('search finds every message whose text or tool input holds the t
   expect(await json(home, 'search', 'panes/tree.tsx', '--project', project)).toEqual([])
 })
 
-test.concurrent("a subagent whose meta.json is empty still reads, as a task opened at its first message", async () => {
+test("a subagent whose meta.json is empty still reads, as a task opened at its first message", async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await writeFiles(home, { [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: '' })
@@ -510,7 +517,7 @@ test.concurrent("a subagent whose meta.json is empty still reads, as a task open
   expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: '', agentType: 'general-purpose', openedBy: '', openedAt: at(2), closedAt: at(6), status: 'killed' }])
 })
 
-test.concurrent("a fork Claude's Agent tool started reads as a task forked from its session, with no agent type", async () => {
+test("a fork Claude's Agent tool started reads as a task forked from its session, with no agent type", async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await writeFiles(home, { [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'fork', isFork: true, description: 'Find the pane', toolUseId: 'toolu_1' }) })
@@ -518,7 +525,7 @@ test.concurrent("a fork Claude's Agent tool started reads as a task forked from 
   expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', forkedFrom: 's1', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5), status: 'completed' }])
 })
 
-test.concurrent('two reads started together on a new transcript save each message once', async () => {
+test('two reads started together on a new transcript save each message once', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
@@ -528,7 +535,7 @@ test.concurrent('two reads started together on a new transcript save each messag
   expect(await json(home, 'read', 'turns', 's1', '--project', project)).toHaveLength(2)
 })
 
-test.concurrent('search returns the newest messages up to --limit, and --before pages through a forked copy without repeats or gaps', async () => {
+test('search returns the newest messages up to --limit, and --before pages through a forked copy without repeats or gaps', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await writeFiles(home, { [`${projectFolder(project)}/s2.jsonl`]: lines([{ ...conversation(project)[0], forkedFrom: { sessionId: 's1' } }]) })
@@ -543,7 +550,7 @@ test.concurrent('search returns the newest messages up to --limit, and --before 
   expect([[...first, ...second].toSorted(), third, fourth]).toEqual([['s1:u1', 's2:u1'], ['s0:o1'], []])
 })
 
-test.concurrent('search finds a value in a tool input, misses one past its first 1,024 characters, and refuses fewer than 3 characters', async () => {
+test('search finds a value in a tool input, misses one past its first 1,024 characters, and refuses fewer than 3 characters', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const write = { type: 'tool_use', id: 'toolu_9', name: 'Write', input: { file_path: 'notes.md', content: `${'x'.repeat(1100)}needle-after-the-cut` } }
@@ -555,7 +562,7 @@ test.concurrent('search finds a value in a tool input, misses one past its first
   expect(await cmod(home, 'sessions', 'search', 'ab', '--project', project)).toMatchObject({ exitCode: 1, stderr: 'cmod sessions: cmod sessions search takes at least 3 characters.\n' })
 })
 
-test.concurrent('sessions leaves out a session no one prompted, and lists one whose first prompt follows 64 KB of hook rows', async () => {
+test('sessions leaves out a session no one prompted, and lists one whose first prompt follows 64 KB of hook rows', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
   const hook = (uuid: string, second: number) => ({ type: 'attachment', uuid, timestamp: at(second), cwd: project, attachment: { type: 'hook_success', content: 'x'.repeat(70_000) } })
@@ -570,7 +577,7 @@ test.concurrent('sessions leaves out a session no one prompted, and lists one wh
   expect(await json(home, 'list', '--project', project)).toEqual([late])
 })
 
-test.concurrent('an index made by an older cmod is deleted, and the index is history-14.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-14.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite', 'history-12.sqlite', 'history-13.sqlite']
@@ -581,7 +588,7 @@ test.concurrent('an index made by an older cmod is deleted, and the index is his
   expect([...older, 'history-14.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
 })
 
-test.concurrent('the README names the conversation index cmod writes', async () => {
+test('the README names the conversation index cmod writes', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await json(home, 'list', '--project', project)
@@ -592,7 +599,7 @@ test.concurrent('the README names the conversation index cmod writes', async () 
   expect([...new Set(readme.match(/history[-\d]*\.sqlite/g))]).toEqual(written)
 })
 
-test.concurrent("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {
+test("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await appendFile(join(home, `${projectFolder(project)}/s1/subagents/agent-a7.jsonl`), lines([{ type: 'system', subtype: 'compact_boundary', uuid: 'c1', timestamp: at(3) }]))
@@ -603,7 +610,7 @@ test.concurrent("a task's compaction gives its owner a new context, and contexts
   ])
 })
 
-test.concurrent("a deleted project folder's sessions leave the index after cmod sessions index", async () => {
+test("a deleted project folder's sessions leave the index after cmod sessions index", async () => {
   const home = await temporaryHome()
   const { project, other } = await writeHistory(home)
   await cmod(home, 'sessions', 'index')
@@ -647,7 +654,7 @@ test("sessions read state reads the lines the index has not yet saved while anot
   expect(JSON.parse(state.stdout)).toMatchObject({ session: 's1', context: 1, turn: { prompt: { id: 'u9', text: 'Now the file pane' } } })
 }, 15_000)
 
-test.concurrent('a transcript rewritten under the index returns its new messages', async () => {
+test('a transcript rewritten under the index returns its new messages', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await json(home, 'read', 'messages', 's1', '--project', project)
@@ -700,7 +707,7 @@ test("a reader that finds another reader's offsets past its own after a write ba
   }
 })
 
-test.concurrent('a conversation whose transcript was deleted leaves the sessions list and the search', async () => {
+test('a conversation whose transcript was deleted leaves the sessions list and the search', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
   await json(home, 'search', 'tree pane', '--project', project)
