@@ -62,6 +62,7 @@ const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
   servesWebUi: 'Show the Sidebar in your browser',
   servesTailnet: 'Open web apps from your other devices, through Tailscale',
+  roundsBarEnds: 'Round the ends of bars in every terminal, for a font with Nerd Font symbols. A session uses it once it reloads.',
 } satisfies Partial<Record<keyof Preferences, string>>
 
 const viewSection = 'view:'

@@ -348,12 +348,12 @@ function widgetsPath(store) {
 function preferencesPath(store) {
   return `${store}/preferences.json`;
 }
-var preferenceKeys = ["showsInstalledModErrors", "servesWebUi", "servesTailnet"];
+var preferenceKeys = ["showsInstalledModErrors", "servesWebUi", "servesTailnet", "roundsBarEnds"];
 function parsePreferences(value, path) {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== "boolean")))
     throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`);
   const saved = isObject(value) ? value : {};
-  return { showsInstalledModErrors: saved["showsInstalledModErrors"] === true, servesWebUi: saved["servesWebUi"] === true, servesTailnet: saved["servesTailnet"] !== false };
+  return { showsInstalledModErrors: saved["showsInstalledModErrors"] === true, servesWebUi: saved["servesWebUi"] === true, servesTailnet: saved["servesTailnet"] !== false, roundsBarEnds: saved["roundsBarEnds"] === true };
 }
 function tailnetFolder(store, mod) {
   return `${store}/tailnet/${checkedName(mod)}`;
@@ -365,6 +365,10 @@ function parseTailnetRecord(value, path) {
   if (!isRecord)
     throw new Error(`${path} is not the tailnet address cmod keeps for a web app. Delete it, and the web app's next start writes it again.`);
   return { port: value["port"], url: value["url"], reason: value["reason"] };
+}
+var nerdFontTerminals = ["herdr", "ghostty", "WezTerm"];
+function isNerdFontTerminal({ program, ghostty, wezterm }) {
+  return nerdFontTerminals.includes(program ?? "") || (ghostty ?? "") !== "" || (wezterm ?? "") !== "";
 }
 function browserCommand(env, href) {
   if (env.browser === "true")
@@ -419,7 +423,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.8.4";
+var coreVersion = "8.9.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -776,7 +780,6 @@ function attachedPathOf(text) {
 var Notice = "notice";
 // node_modules/@cmodjs/core/runtime/deadline.js
 var longestMs = 600000;
-var toolDeadline = { ms: 30000, job: "tool" };
 var callDeadline = { ms: 30000 };
 var listenerMs = 1e4;
 var hookMs = 1e4;
@@ -934,12 +937,6 @@ var settings = {
   beforeChange: (matcherOrListener, listener) => bound().settings.beforeChange(matcherOrListener, listener),
   onChange: (matcherOrListener, listener) => bound().settings.onChange(matcherOrListener, listener)
 };
-var commands = {
-  list: () => bound().commands.list(),
-  run: (name, args) => bound().commands.run(name, args),
-  beforeRun: (...args) => bound().commands.beforeRun(...args),
-  onRun: (...args) => bound().commands.onRun(...args)
-};
 var fs = {
   read: (path) => bound().fs.read(path),
   write: (path, text) => bound().fs.write(path, text),
@@ -959,7 +956,6 @@ var device = {
 var clipboard = {
   write: (text) => bound().clipboard.write(text)
 };
-var providers = (name) => bound().providers(name);
 function defineMod(definition) {
   if (definition.name.trim() === "")
     throw new Error("defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.");
@@ -1125,20 +1121,6 @@ function textOf(content) {
 function tagOf(text, tag) {
   return new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text)?.[1]?.trim();
 }
-var toolValueChars = 1024;
-function searchText(message) {
-  if (message.type === ToolCall)
-    return [message.name, ...stringsIn(message.input).map((value) => value.slice(0, toolValueChars))].join(`
-`);
-  if (message.type === ToolResult)
-    return "";
-  if (message.type === InstructionFile)
-    return `${message.path}
-${message.text}`;
-  if (message.type === AttachedFile)
-    return message.path;
-  return message.text;
-}
 function promptText(text) {
   if (text.startsWith("<local-command-") || text.startsWith("<bash-stdout") || text.startsWith("<bash-stderr"))
     return;
@@ -1150,13 +1132,6 @@ function promptText(text) {
 }
 function basename(path) {
   return path.slice(path.lastIndexOf("/") + 1);
-}
-function stringsIn(value) {
-  if (typeof value === "string")
-    return [value];
-  if (Array.isArray(value))
-    return value.flatMap(stringsIn);
-  return isObject(value) ? Object.values(value).flatMap(stringsIn) : [];
 }
 
 // node_modules/@cmodjs/core/session/context/context.js
@@ -2686,95 +2661,7 @@ var Pt = me(function(ts, Lt) {
     }, []);
   };
 });
-function _e(e, r) {
-  let t = typeof e;
-  if (t !== typeof r)
-    return false;
-  if (Array.isArray(e)) {
-    if (!Array.isArray(r))
-      return false;
-    let n = e.length;
-    if (n !== r.length)
-      return false;
-    for (let o = 0;o < n; o++)
-      if (!_e(e[o], r[o]))
-        return false;
-    return true;
-  }
-  if (t === "object") {
-    if (!e || !r)
-      return e === r;
-    let n = Object.keys(e), o = Object.keys(r);
-    if (n.length !== o.length)
-      return false;
-    for (let s of n)
-      if (!_e(e[s], r[s]))
-        return false;
-    return true;
-  }
-  return e === r;
-}
-function oe(e) {
-  return encodeURI(Wt(e));
-}
-function Wt(e) {
-  return e.replace(/~/g, "~0").replace(/\//g, "~1");
-}
-var Xt = { prefixItems: true, items: true, allOf: true, anyOf: true, oneOf: true };
-var Qt = { $defs: true, definitions: true, properties: true, patternProperties: true, dependentSchemas: true };
-var Zt = { id: true, $id: true, $ref: true, $schema: true, $anchor: true, $vocabulary: true, $comment: true, default: true, enum: true, const: true, required: true, type: true, maximum: true, minimum: true, exclusiveMaximum: true, exclusiveMinimum: true, multipleOf: true, maxLength: true, minLength: true, pattern: true, format: true, maxItems: true, minItems: true, uniqueItems: true, maxProperties: true, minProperties: true };
 var Vt = typeof self < "u" && self.location && self.location.origin !== "null" ? new URL(self.location.origin + self.location.pathname + location.search) : new URL("https://github.com/cfworker");
-function ce(e, r = Object.create(null), t = Vt, n = "") {
-  if (e && typeof e === "object" && !Array.isArray(e)) {
-    let u = e.$id || e.id;
-    if (u) {
-      let s = new URL(u, t.href);
-      if (s.hash.length > 1)
-        r[s.href] = e;
-      else if (s.hash = "", n === "")
-        t = s;
-      else
-        ce(e, r, t);
-    }
-  } else if (e !== true && e !== false)
-    return r;
-  let o = t.href + (n ? "#" + n : "");
-  if (r[o] !== undefined)
-    throw Error(`Duplicate schema URI "${o}".`);
-  if (r[o] = e, e === true || e === false)
-    return r;
-  if (e.__absolute_uri__ === undefined)
-    Object.defineProperty(e, "__absolute_uri__", { enumerable: false, value: o });
-  if (e.$ref && e.__absolute_ref__ === undefined) {
-    let u = new URL(e.$ref, t.href);
-    u.hash = u.hash, Object.defineProperty(e, "__absolute_ref__", { enumerable: false, value: u.href });
-  }
-  if (e.$recursiveRef && e.__absolute_recursive_ref__ === undefined) {
-    let u = new URL(e.$recursiveRef, t.href);
-    u.hash = u.hash, Object.defineProperty(e, "__absolute_recursive_ref__", { enumerable: false, value: u.href });
-  }
-  if (e.$anchor) {
-    let u = new URL("#" + e.$anchor, t.href);
-    r[u.href] = e;
-  }
-  for (let u in e) {
-    if (Zt[u])
-      continue;
-    let s = `${n}/${oe(u)}`, i = e[u];
-    if (Array.isArray(i)) {
-      if (Xt[u]) {
-        let h = i.length;
-        for (let N = 0;N < h; N++)
-          ce(i[N], r, t, `${s}/${N}`);
-      }
-    } else if (Qt[u])
-      for (let h in i)
-        ce(i[h], r, t, `${s}/${oe(h)}`);
-    else
-      ce(i, r, t, s);
-  }
-  return r;
-}
 var Yt = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
 var Jt = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 var er = /^(\d\d):(\d\d):(\d\d)(\.\d+)?(z|[+-]\d\d(?::?\d\d)?)?$/i;
@@ -2840,393 +2727,6 @@ function xr(e) {
     return new RegExp(e, "u"), true;
   } catch (r) {
     return false;
-  }
-}
-function tt(e) {
-  let r = 0, t = e.length, n = 0, o;
-  while (n < t)
-    if (r++, o = e.charCodeAt(n++), o >= 55296 && o <= 56319 && n < t) {
-      if (o = e.charCodeAt(n), (o & 64512) == 56320)
-        n++;
-    }
-  return r;
-}
-function F(e, r, t = "2019-09", n = ce(r), o = true, u = null, s = "#", i = "#", h = Object.create(null)) {
-  if (r === true)
-    return { valid: true, errors: [] };
-  if (r === false)
-    return { valid: false, errors: [{ instanceLocation: s, keyword: "false", keywordLocation: s, error: "False boolean schema." }] };
-  let N = typeof e, _;
-  switch (N) {
-    case "boolean":
-    case "number":
-    case "string":
-      _ = N;
-      break;
-    case "object":
-      if (e === null)
-        _ = "null";
-      else if (Array.isArray(e))
-        _ = "array";
-      else
-        _ = "object";
-      break;
-    default:
-      throw Error(`Instances of "${N}" type are not supported.`);
-  }
-  let { $ref: w, $recursiveRef: M, $recursiveAnchor: K, type: g, const: k, enum: ee, required: q, not: L, anyOf: H, allOf: ne, oneOf: X, if: T, then: V, else: A, format: I, properties: a, patternProperties: Q, additionalProperties: C, unevaluatedProperties: B, minProperties: l, maxProperties: f, propertyNames: Y, dependentRequired: P, dependentSchemas: J, dependencies: te, prefixItems: W, items: ue, additionalItems: $e, unevaluatedItems: fe, contains: ae, minContains: R, maxContains: de, minItems: Re, maxItems: p, uniqueItems: j, minimum: d, maximum: O, exclusiveMinimum: D, exclusiveMaximum: U, multipleOf: z, minLength: re, maxLength: ie, pattern: pe, __absolute_ref__: we, __absolute_recursive_ref__: zt } = r, m = [];
-  if (K === true && u === null)
-    u = r;
-  if (M === "#") {
-    let E = u === null ? n[zt] : u, x = `${i}/$recursiveRef`, v = F(e, u === null ? r : u, t, n, o, E, s, x, h);
-    if (!v.valid)
-      m.push({ instanceLocation: s, keyword: "$recursiveRef", keywordLocation: x, error: "A subschema had errors." }, ...v.errors);
-  }
-  if (w !== undefined) {
-    let x = n[we || w];
-    if (x === undefined) {
-      let c = `Unresolved $ref "${w}".`;
-      if (we && we !== w)
-        c += `  Absolute URI "${we}".`;
-      throw c += `
-Known schemas:
-- ${Object.keys(n).join(`
-- `)}`, Error(c);
-    }
-    let v = `${i}/$ref`, y = F(e, x, t, n, o, u, s, v, h);
-    if (!y.valid)
-      m.push({ instanceLocation: s, keyword: "$ref", keywordLocation: v, error: "A subschema had errors." }, ...y.errors);
-    if (t === "4" || t === "7")
-      return { valid: m.length === 0, errors: m };
-  }
-  if (Array.isArray(g)) {
-    let E = g.length, x = false;
-    for (let v = 0;v < E; v++)
-      if (_ === g[v] || g[v] === "integer" && _ === "number" && e % 1 === 0 && e === e) {
-        x = true;
-        break;
-      }
-    if (!x)
-      m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g.join('", "')}".` });
-  } else if (g === "integer") {
-    if (_ !== "number" || e % 1 || e !== e)
-      m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g}".` });
-  } else if (g !== undefined && _ !== g)
-    m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g}".` });
-  if (k !== undefined) {
-    if (_ === "object" || _ === "array") {
-      if (!_e(e, k))
-        m.push({ instanceLocation: s, keyword: "const", keywordLocation: `${i}/const`, error: `Instance does not match ${JSON.stringify(k)}.` });
-    } else if (e !== k)
-      m.push({ instanceLocation: s, keyword: "const", keywordLocation: `${i}/const`, error: `Instance does not match ${JSON.stringify(k)}.` });
-  }
-  if (ee !== undefined) {
-    if (_ === "object" || _ === "array") {
-      if (!ee.some((E) => _e(e, E)))
-        m.push({ instanceLocation: s, keyword: "enum", keywordLocation: `${i}/enum`, error: `Instance does not match any of ${JSON.stringify(ee)}.` });
-    } else if (!ee.some((E) => e === E))
-      m.push({ instanceLocation: s, keyword: "enum", keywordLocation: `${i}/enum`, error: `Instance does not match any of ${JSON.stringify(ee)}.` });
-  }
-  if (L !== undefined) {
-    let E = `${i}/not`;
-    if (F(e, L, t, n, o, u, s, E).valid)
-      m.push({ instanceLocation: s, keyword: "not", keywordLocation: E, error: 'Instance matched "not" schema.' });
-  }
-  let Oe = [];
-  if (H !== undefined) {
-    let E = `${i}/anyOf`, x = m.length, v = false;
-    for (let y = 0;y < H.length; y++) {
-      let c = H[y], b = Object.create(h), S = F(e, c, t, n, o, K === true ? u : null, s, `${E}/${y}`, b);
-      if (m.push(...S.errors), v = v || S.valid, S.valid)
-        Oe.push(b);
-    }
-    if (v)
-      m.length = x;
-    else
-      m.splice(x, 0, { instanceLocation: s, keyword: "anyOf", keywordLocation: E, error: "Instance does not match any subschemas." });
-  }
-  if (ne !== undefined) {
-    let E = `${i}/allOf`, x = m.length, v = true;
-    for (let y = 0;y < ne.length; y++) {
-      let c = ne[y], b = Object.create(h), S = F(e, c, t, n, o, K === true ? u : null, s, `${E}/${y}`, b);
-      if (m.push(...S.errors), v = v && S.valid, S.valid)
-        Oe.push(b);
-    }
-    if (v)
-      m.length = x;
-    else
-      m.splice(x, 0, { instanceLocation: s, keyword: "allOf", keywordLocation: E, error: "Instance does not match every subschema." });
-  }
-  if (X !== undefined) {
-    let E = `${i}/oneOf`, x = m.length, v = X.filter((y, c) => {
-      let b = Object.create(h), S = F(e, y, t, n, o, K === true ? u : null, s, `${E}/${c}`, b);
-      if (m.push(...S.errors), S.valid)
-        Oe.push(b);
-      return S.valid;
-    }).length;
-    if (v === 1)
-      m.length = x;
-    else
-      m.splice(x, 0, { instanceLocation: s, keyword: "oneOf", keywordLocation: E, error: `Instance does not match exactly one subschema (${v} matches).` });
-  }
-  if (_ === "object" || _ === "array")
-    Object.assign(h, ...Oe);
-  if (T !== undefined) {
-    let E = `${i}/if`;
-    if (F(e, T, t, n, o, u, s, E, h).valid) {
-      if (V !== undefined) {
-        let v = F(e, V, t, n, o, u, s, `${i}/then`, h);
-        if (!v.valid)
-          m.push({ instanceLocation: s, keyword: "if", keywordLocation: E, error: 'Instance does not match "then" schema.' }, ...v.errors);
-      }
-    } else if (A !== undefined) {
-      let v = F(e, A, t, n, o, u, s, `${i}/else`, h);
-      if (!v.valid)
-        m.push({ instanceLocation: s, keyword: "if", keywordLocation: E, error: 'Instance does not match "else" schema.' }, ...v.errors);
-    }
-  }
-  if (_ === "object") {
-    if (q !== undefined) {
-      for (let y of q)
-        if (!(y in e))
-          m.push({ instanceLocation: s, keyword: "required", keywordLocation: `${i}/required`, error: `Instance does not have required property "${y}".` });
-    }
-    let E = Object.keys(e);
-    if (l !== undefined && E.length < l)
-      m.push({ instanceLocation: s, keyword: "minProperties", keywordLocation: `${i}/minProperties`, error: `Instance does not have at least ${l} properties.` });
-    if (f !== undefined && E.length > f)
-      m.push({ instanceLocation: s, keyword: "maxProperties", keywordLocation: `${i}/maxProperties`, error: `Instance does not have at least ${f} properties.` });
-    if (Y !== undefined) {
-      let y = `${i}/propertyNames`;
-      for (let c in e) {
-        let b = `${s}/${oe(c)}`, S = F(c, Y, t, n, o, u, b, y);
-        if (!S.valid)
-          m.push({ instanceLocation: s, keyword: "propertyNames", keywordLocation: y, error: `Property name "${c}" does not match schema.` }, ...S.errors);
-      }
-    }
-    if (P !== undefined) {
-      let y = `${i}/dependantRequired`;
-      for (let c in P)
-        if (c in e) {
-          let b = P[c];
-          for (let S of b)
-            if (!(S in e))
-              m.push({ instanceLocation: s, keyword: "dependentRequired", keywordLocation: y, error: `Instance has "${c}" but does not have "${S}".` });
-        }
-    }
-    if (J !== undefined)
-      for (let y in J) {
-        let c = `${i}/dependentSchemas`;
-        if (y in e) {
-          let b = F(e, J[y], t, n, o, u, s, `${c}/${oe(y)}`, h);
-          if (!b.valid)
-            m.push({ instanceLocation: s, keyword: "dependentSchemas", keywordLocation: c, error: `Instance has "${y}" but does not match dependant schema.` }, ...b.errors);
-        }
-      }
-    if (te !== undefined) {
-      let y = `${i}/dependencies`;
-      for (let c in te)
-        if (c in e) {
-          let b = te[c];
-          if (Array.isArray(b)) {
-            for (let S of b)
-              if (!(S in e))
-                m.push({ instanceLocation: s, keyword: "dependencies", keywordLocation: y, error: `Instance has "${c}" but does not have "${S}".` });
-          } else {
-            let S = F(e, b, t, n, o, u, s, `${y}/${oe(c)}`);
-            if (!S.valid)
-              m.push({ instanceLocation: s, keyword: "dependencies", keywordLocation: y, error: `Instance has "${c}" but does not match dependant schema.` }, ...S.errors);
-          }
-        }
-    }
-    let x = Object.create(null), v = false;
-    if (a !== undefined) {
-      let y = `${i}/properties`;
-      for (let c in a) {
-        if (!(c in e))
-          continue;
-        let b = `${s}/${oe(c)}`, S = F(e[c], a[c], t, n, o, u, b, `${y}/${oe(c)}`);
-        if (S.valid)
-          h[c] = x[c] = true;
-        else if (v = o, m.push({ instanceLocation: s, keyword: "properties", keywordLocation: y, error: `Property "${c}" does not match schema.` }, ...S.errors), v)
-          break;
-      }
-    }
-    if (!v && Q !== undefined) {
-      let y = `${i}/patternProperties`;
-      for (let c in Q) {
-        let b = new RegExp(c, "u"), S = Q[c];
-        for (let se in e) {
-          if (!b.test(se))
-            continue;
-          let Qe = `${s}/${oe(se)}`, Ze = F(e[se], S, t, n, o, u, Qe, `${y}/${oe(c)}`);
-          if (Ze.valid)
-            h[se] = x[se] = true;
-          else
-            v = o, m.push({ instanceLocation: s, keyword: "patternProperties", keywordLocation: y, error: `Property "${se}" matches pattern "${c}" but does not match associated schema.` }, ...Ze.errors);
-        }
-      }
-    }
-    if (!v && C !== undefined) {
-      let y = `${i}/additionalProperties`;
-      for (let c in e) {
-        if (x[c])
-          continue;
-        let b = `${s}/${oe(c)}`, S = F(e[c], C, t, n, o, u, b, y);
-        if (S.valid)
-          h[c] = true;
-        else
-          v = o, m.push({ instanceLocation: s, keyword: "additionalProperties", keywordLocation: y, error: `Property "${c}" does not match additional properties schema.` }, ...S.errors);
-      }
-    } else if (!v && B !== undefined) {
-      let y = `${i}/unevaluatedProperties`;
-      for (let c in e)
-        if (!h[c]) {
-          let b = `${s}/${oe(c)}`, S = F(e[c], B, t, n, o, u, b, y);
-          if (S.valid)
-            h[c] = true;
-          else
-            m.push({ instanceLocation: s, keyword: "unevaluatedProperties", keywordLocation: y, error: `Property "${c}" does not match unevaluated properties schema.` }, ...S.errors);
-        }
-    }
-  } else if (_ === "array") {
-    if (p !== undefined && e.length > p)
-      m.push({ instanceLocation: s, keyword: "maxItems", keywordLocation: `${i}/maxItems`, error: `Array has too many items (${e.length} > ${p}).` });
-    if (Re !== undefined && e.length < Re)
-      m.push({ instanceLocation: s, keyword: "minItems", keywordLocation: `${i}/minItems`, error: `Array has too few items (${e.length} < ${Re}).` });
-    let E = e.length, x = 0, v = false;
-    if (W !== undefined) {
-      let y = `${i}/prefixItems`, c = Math.min(W.length, E);
-      for (;x < c; x++) {
-        let b = F(e[x], W[x], t, n, o, u, `${s}/${x}`, `${y}/${x}`);
-        if (h[x] = true, !b.valid) {
-          if (v = o, m.push({ instanceLocation: s, keyword: "prefixItems", keywordLocation: y, error: "Items did not match schema." }, ...b.errors), v)
-            break;
-        }
-      }
-    }
-    if (ue !== undefined) {
-      let y = `${i}/items`;
-      if (Array.isArray(ue)) {
-        let c = Math.min(ue.length, E);
-        for (;x < c; x++) {
-          let b = F(e[x], ue[x], t, n, o, u, `${s}/${x}`, `${y}/${x}`);
-          if (h[x] = true, !b.valid) {
-            if (v = o, m.push({ instanceLocation: s, keyword: "items", keywordLocation: y, error: "Items did not match schema." }, ...b.errors), v)
-              break;
-          }
-        }
-      } else
-        for (;x < E; x++) {
-          let c = F(e[x], ue, t, n, o, u, `${s}/${x}`, y);
-          if (h[x] = true, !c.valid) {
-            if (v = o, m.push({ instanceLocation: s, keyword: "items", keywordLocation: y, error: "Items did not match schema." }, ...c.errors), v)
-              break;
-          }
-        }
-      if (!v && $e !== undefined) {
-        let c = `${i}/additionalItems`;
-        for (;x < E; x++) {
-          let b = F(e[x], $e, t, n, o, u, `${s}/${x}`, c);
-          if (h[x] = true, !b.valid)
-            v = o, m.push({ instanceLocation: s, keyword: "additionalItems", keywordLocation: c, error: "Items did not match additional items schema." }, ...b.errors);
-        }
-      }
-    }
-    if (ae !== undefined)
-      if (E === 0 && R === undefined)
-        m.push({ instanceLocation: s, keyword: "contains", keywordLocation: `${i}/contains`, error: "Array is empty. It must contain at least one item matching the schema." });
-      else if (R !== undefined && E < R)
-        m.push({ instanceLocation: s, keyword: "minContains", keywordLocation: `${i}/minContains`, error: `Array has less items (${E}) than minContains (${R}).` });
-      else {
-        let y = `${i}/contains`, c = m.length, b = 0;
-        for (let S = 0;S < E; S++) {
-          let se = F(e[S], ae, t, n, o, u, `${s}/${S}`, y);
-          if (se.valid)
-            h[S] = true, b++;
-          else
-            m.push(...se.errors);
-        }
-        if (b >= (R || 0))
-          m.length = c;
-        if (R === undefined && de === undefined && b === 0)
-          m.splice(c, 0, { instanceLocation: s, keyword: "contains", keywordLocation: y, error: "Array does not contain item matching schema." });
-        else if (R !== undefined && b < R)
-          m.push({ instanceLocation: s, keyword: "minContains", keywordLocation: `${i}/minContains`, error: `Array must contain at least ${R} items matching schema. Only ${b} items were found.` });
-        else if (de !== undefined && b > de)
-          m.push({ instanceLocation: s, keyword: "maxContains", keywordLocation: `${i}/maxContains`, error: `Array may contain at most ${de} items matching schema. ${b} items were found.` });
-      }
-    if (!v && fe !== undefined) {
-      let y = `${i}/unevaluatedItems`;
-      for (x;x < E; x++) {
-        if (h[x])
-          continue;
-        let c = F(e[x], fe, t, n, o, u, `${s}/${x}`, y);
-        if (h[x] = true, !c.valid)
-          m.push({ instanceLocation: s, keyword: "unevaluatedItems", keywordLocation: y, error: "Items did not match unevaluated items schema." }, ...c.errors);
-      }
-    }
-    if (j)
-      for (let y = 0;y < E; y++) {
-        let c = e[y], b = typeof c === "object" && c !== null;
-        for (let S = 0;S < E; S++) {
-          if (y === S)
-            continue;
-          let se = e[S];
-          if (c === se || b && (typeof se === "object" && se !== null) && _e(c, se))
-            m.push({ instanceLocation: s, keyword: "uniqueItems", keywordLocation: `${i}/uniqueItems`, error: `Duplicate items at indexes ${y} and ${S}.` }), y = Number.MAX_SAFE_INTEGER, S = Number.MAX_SAFE_INTEGER;
-        }
-      }
-  } else if (_ === "number") {
-    if (t === "4") {
-      if (d !== undefined && (D === true && e <= d || e < d))
-        m.push({ instanceLocation: s, keyword: "minimum", keywordLocation: `${i}/minimum`, error: `${e} is less than ${D ? "or equal to " : ""} ${d}.` });
-      if (O !== undefined && (U === true && e >= O || e > O))
-        m.push({ instanceLocation: s, keyword: "maximum", keywordLocation: `${i}/maximum`, error: `${e} is greater than ${U ? "or equal to " : ""} ${O}.` });
-    } else {
-      if (d !== undefined && e < d)
-        m.push({ instanceLocation: s, keyword: "minimum", keywordLocation: `${i}/minimum`, error: `${e} is less than ${d}.` });
-      if (O !== undefined && e > O)
-        m.push({ instanceLocation: s, keyword: "maximum", keywordLocation: `${i}/maximum`, error: `${e} is greater than ${O}.` });
-      if (D !== undefined && e <= D)
-        m.push({ instanceLocation: s, keyword: "exclusiveMinimum", keywordLocation: `${i}/exclusiveMinimum`, error: `${e} is less than ${D}.` });
-      if (U !== undefined && e >= U)
-        m.push({ instanceLocation: s, keyword: "exclusiveMaximum", keywordLocation: `${i}/exclusiveMaximum`, error: `${e} is greater than or equal to ${U}.` });
-    }
-    if (z !== undefined) {
-      let E = e % z;
-      if (Math.abs(0 - E) >= 0.00000011920929 && Math.abs(z - E) >= 0.00000011920929)
-        m.push({ instanceLocation: s, keyword: "multipleOf", keywordLocation: `${i}/multipleOf`, error: `${e} is not a multiple of ${z}.` });
-    }
-  } else if (_ === "string") {
-    let E = re === undefined && ie === undefined ? 0 : tt(e);
-    if (re !== undefined && E < re)
-      m.push({ instanceLocation: s, keyword: "minLength", keywordLocation: `${i}/minLength`, error: `String is too short (${E} < ${re}).` });
-    if (ie !== undefined && E > ie)
-      m.push({ instanceLocation: s, keyword: "maxLength", keywordLocation: `${i}/maxLength`, error: `String is too long (${E} > ${ie}).` });
-    if (pe !== undefined && !new RegExp(pe, "u").test(e))
-      m.push({ instanceLocation: s, keyword: "pattern", keywordLocation: `${i}/pattern`, error: "String does not match pattern." });
-    if (I !== undefined && Me[I] && !Me[I](e))
-      m.push({ instanceLocation: s, keyword: "format", keywordLocation: `${i}/format`, error: `String does not match format "${I}".` });
-  }
-  return { valid: m.length === 0, errors: m };
-}
-
-class rt {
-  schema;
-  draft;
-  shortCircuit;
-  lookup;
-  constructor(e, r = "2019-09", t = true) {
-    this.schema = e, this.draft = r, this.shortCircuit = t, this.lookup = ce(e);
-  }
-  validate(e) {
-    return F(e, this.schema, this.draft, this.lookup, this.shortCircuit);
-  }
-  addSchema(e, r) {
-    if (r)
-      e = { ...e, $id: r };
-    ce(e, this.lookup);
   }
 }
 var Ar = /^[A-Za-z]:\//;
@@ -5903,7 +5403,7 @@ function pickedColor(args) {
   const picked = args.trim().toLowerCase();
   return resetColors.includes(picked) ? undefined : picked;
 }
-var acts = ["send", "startTask", "fork", "clone", "startBackgroundTask", "callTool", "usage", "surfaces", "abort", "end", "visit", "delete"];
+var acts = ["send", "startTask", "fork", "clone", "startBackgroundTask", "callTool", "usage", "surfaces", "abort", "end", "visit", "delete", "compact", "sendTo"];
 var isAct = (action) => acts.includes(action);
 async function usageOf(claude) {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()]);
@@ -6599,6 +6099,7 @@ var isRelay = (value) => isObject(value) && relayKinds.has(value["kind"]);
 var bufferedTaskRows = 200;
 var questionTool = "AskUserQuestion";
 var permissionPrompt = "permission prompt";
+var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var keptClosings = 200;
 var keptMessages = 200;
 var noneKept = { subscribed: {}, watched: {}, provided: [] };
@@ -6621,6 +6122,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   const waitingRows = new Map;
   const engineTurns = new Map;
   let endsAfterTurn = false;
+  let compactsAfterTurn;
   let isWorking = false;
   let waitingFor;
   let waitingOn;
@@ -6701,7 +6203,21 @@ function serveConversations({ claude, router, store, project, report, clear, kee
       dispatch(conversation.endTurn(new Date().toISOString(), ending, task));
     if (task === undefined && endsAfterTurn)
       claude.clock.after(0, () => void exitNow());
+    if (task === undefined && compactsAfterTurn !== undefined && !isInterrupted)
+      claude.clock.after(1, () => void compactNow());
     return below;
+  };
+  const compactNow = async () => {
+    const asked = compactsAfterTurn;
+    compactsAfterTurn = undefined;
+    if (asked === undefined)
+      return;
+    try {
+      await claude.command.run({ command: "compact", ...asked.keep === undefined ? {} : { args: asked.keep } });
+      await claude.prompt.submit({ text: carryOn });
+    } catch (error) {
+      report("compact", "Could not compact the conversation", error);
+    }
   };
   router.add("classic.Stop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } })(await next(e), next.signal.aborted));
   router.add("classic.StopFailure", async (e, next) => {
@@ -6726,7 +6242,8 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   let ui = {};
   const liveTasksOver = async (saved, request) => {
     await starting;
-    const kept = liveTasks().filter((task) => request["all"] === true || task.parent === request["task"]);
+    const closed = new Map(saved.flatMap((task) => task.closedAt === undefined ? [] : [[task.id, task]]));
+    const kept = liveTasks().filter((task) => request["all"] === true || task.parent === request["task"]).map((task) => task.closedAt === undefined ? closed.get(task.id) ?? task : task);
     const running = await claude.agent.list().catch((error) => (claude.ui.warn("tasks:status", `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []));
     const background = saved.flatMap(({ id, status, isBackground }) => status === undefined || isBackground !== true ? [] : [{ id, status }]);
     return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
@@ -6849,7 +6366,9 @@ ${program ?? ""}`;
     }
     throw last instanceof Error ? last : new Error(String(last));
   };
-  const read = (id, part, options = {}) => firstHolding((client) => client.request(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }]));
+  const read = (id, part, options = {}) => firstHolding((client) => client.request(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error) => {
+    throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
+  });
   const listAll = async (scope) => {
     const lists = await Promise.all((await providers()).map((client) => client.request(`${sessionsInterface}.sessions`, [scope]).catch((error) => client === local.client ? Promise.reject(error) : (report("store", "Lists no sessions of another sessions provider", error), []))));
     const seen = new Set;
@@ -7256,6 +6775,19 @@ ${target}`;
         claude.clock.after(0, () => void exitNow());
       return null;
     }
+    if (action === "compact") {
+      const { keep } = isObject(input) ? input : {};
+      compactsAfterTurn = typeof keep === "string" && keep.trim() !== "" ? { keep } : {};
+      if (!engineTurns.has(""))
+        claude.clock.after(0, () => void compactNow());
+      return null;
+    }
+    if (action === "sendTo") {
+      const { to, type, text } = input;
+      if (to === session)
+        throw new Error(`session ${session} cannot send as itself to itself.`);
+      return actElsewhere(caller, to, "send", { type, text, as: Session }, undefined);
+    }
     if (action === "send") {
       const { type, text, as } = input;
       if (as === Session)
@@ -7436,9 +6968,10 @@ ${target}`;
     },
     async[conversationMethods.search](request) {
       const record = fields(request, ["session", "task", "turn", "context", "isAgent"]);
-      const options = { project: project(), ...fields(request, ["since", "everyProject", "running", "before"]), record };
+      const options = { project: project(), ...fields(request, ["since", "everyProject", "running", "before", "limit"]), record };
       const pages = await Promise.all((await providers()).map((client) => client.request(`${sessionsInterface}.search`, [String(request["text"]), options]).catch((error) => client === local.client ? Promise.reject(error) : [])));
-      return pages.flat().sort((first, second) => second.at.localeCompare(first.at));
+      const found = pages.flat().sort((first, second) => second.at.localeCompare(first.at));
+      return typeof request["limit"] === "number" ? found.slice(0, request["limit"]) : found;
     },
     async[conversationMethods.messages](request) {
       const id = String(request["session"]);
@@ -8038,6 +7571,11 @@ function createModFiles({ name, claude, places, report }) {
 }
 
 // node_modules/@cmodjs/core/ui/elements.js
+var tableFacts = new WeakMap;
+var plainTerminal = { hasNerdFont: false };
+function drawnIn() {
+  return drawing?.drawnIn ?? plainTerminal;
+}
 var unbuilt = Symbol("an element built outside a render");
 var drawing;
 var lowerings = new Map;
@@ -8050,7 +7588,7 @@ function elementNamed(name, props) {
 }
 function drawWith(table, draw, markdown) {
   const outer = drawing;
-  const current = { table, markdown };
+  const current = { table, markdown, drawnIn: tableFacts.get(table) ?? plainTerminal };
   drawing = current;
   try {
     return built(current, draw());
@@ -8146,7 +7684,7 @@ function drawsFocusable(data, key) {
     return true;
   return Object.values(fields).some((each) => drawsFocusable(each, key));
 }
-function forClaudeCode(table, surface, open) {
+function forClaudeCode(table, surface, open, { hasNerdFont } = plainTerminal) {
   const { Button: button, Link: link, Image: image, Svg: svg, Raster: raster } = table;
   const opening = (props) => {
     const { href, ...rest } = props;
@@ -8159,7 +7697,9 @@ function forClaudeCode(table, surface, open) {
     return button({ ...rest, onPress: (press) => open(href, press) });
   };
   const named = (draw) => ({ label, ...rest }) => draw({ alt: label, ...rest });
-  return { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }) => raster(rest) };
+  const resolved = { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }) => raster(rest) };
+  tableFacts.set(resolved, { hasNerdFont: hasNerdFont && surface === "terminal" });
+  return resolved;
 }
 var Box = element("Box");
 var Text = element("Text");
@@ -9842,7 +9382,7 @@ function layoutOf(value) {
   const stored = isObject(value) && isObject(value["areas"]) ? value["areas"] : {};
   return { areas: Object.fromEntries(areas.map((area) => [area, rowsOf(stored[area])])), hidden: isObject(value) ? keys(value["hidden"]) : [] };
 }
-var stringsIn2 = (value) => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(stringsIn2) : isObject(value) ? Object.values(value).flatMap(stringsIn2) : [];
+var stringsIn = (value) => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(stringsIn) : isObject(value) ? Object.values(value).flatMap(stringsIn) : [];
 var holds = (row, key) => row.left.includes(key) || row.right.includes(key);
 function placedIn(layout, key) {
   return areas.find((area) => layout.areas[area].some((row) => holds(row, key)));
@@ -9858,7 +9398,7 @@ function moved(layout, widget, move) {
   const at = rows.findIndex((row) => holds(row, widget.key));
   const row = rows[at];
   const side = row.left.includes(widget.key) ? "left" : "right";
-  const withAreas = (changed) => ({ ...layout, areas: { ...layout.areas, ...Object.fromEntries(Object.entries(changed).map(([name, list]) => [name, list.filter((each) => stringsIn2(each).length > 0)])) } });
+  const withAreas = (changed) => ({ ...layout, areas: { ...layout.areas, ...Object.fromEntries(Object.entries(changed).map(([name, list]) => [name, list.filter((each) => stringsIn(each).length > 0)])) } });
   if (move === "left" || move === "right") {
     const sequence = [...row.left, separator, ...row.right];
     const from = sequence.indexOf(widget.key);
@@ -9901,7 +9441,7 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   let placedKeys = new Set;
   const readFile = async () => {
     const file = JSON.parse(await claude.fs.read(path).catch(ifMissing("{}")));
-    placedKeys = new Set(stringsIn2(isObject(file) ? file["areas"] : undefined));
+    placedKeys = new Set(stringsIn(isObject(file) ? file["areas"] : undefined));
     return file;
   };
   const read = async () => layoutOf(await readFile());
@@ -10581,27 +10121,58 @@ var Pagination = hostComponent("Pagination", ({ page, pages, onPage }) => ({
     onNext === undefined ? Text({ dimColor: true, children: "n: Next" }) : Button({ plain: true, hotkey: "n", label: "Next", onPress: onNext })
   ]
 }));
+var eighths = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+var roundedLeft = "";
+var roundedRight = "";
+var barColors = { neutral: "inactive", info: "suggestion", success: "success", warning: "warning", critical: "error" };
 function filledSections(sections) {
   let reached = 0;
-  return sections.map(({ value, tone }) => {
-    const filled = Math.min(Math.max(value, 0), 100 - reached);
+  return sections.map((section) => {
+    const filled = Math.min(Math.max(section.value, 0), 100 - reached);
     reached += filled;
-    return { value: filled, ...tone === undefined ? {} : { tone } };
+    return { ...section, value: filled };
   });
 }
-var Progress = hostComponent("Progress", ({ width = 24, label, ...given }) => {
+var Progress = hostComponent("Progress", ({ width = 24, label, buffer, ...given }) => {
   const sections = "sections" in given ? filledSections(given.sections) : given.tone === undefined ? undefined : filledSections([given]);
   const value = sections === undefined && "value" in given ? Math.min(Math.max(given.value, 0), 100) : (sections ?? []).reduce((sum, each) => sum + each.value, 0);
-  return { value, width, ...label === undefined ? {} : { label }, ...sections === undefined ? {} : { sections } };
-}, ({ value, width, sections }) => {
+  const buffered = buffer === undefined ? undefined : Math.min(Math.max(buffer, value), 100);
+  return { value, width, ...label === undefined ? {} : { label }, ...sections === undefined ? {} : { sections }, ...buffered === undefined || buffered === value ? {} : { buffer: buffered } };
+}, ({ value, width, sections, buffer }) => {
+  const isRounded = drawnIn().hasNerdFont && width > 2;
+  const cells = isRounded ? width - 2 : width;
+  const units = cells * eighths.length;
   let reached = 0;
-  const cells = (sections ?? [{ value }]).map(({ value: part, tone }) => {
-    const from = Math.round(reached / 100 * width);
-    reached += part;
-    return Text({ ...tone === undefined ? { color: "claude" } : textOf2(tone), children: "█".repeat(Math.round(reached / 100 * width) - from) });
+  const ends = (sections ?? [{ value }]).map((section) => {
+    reached += section.value;
+    return { end: Math.round(reached / 100 * units), color: "color" in section ? section.color : section.tone === undefined ? "claude" : barColors[section.tone] };
   });
-  return Text({ children: [...cells, Text({ color: "subtle", children: "░".repeat(width - Math.round(reached / 100 * width)) })] });
+  const buffered = Math.round((buffer ?? 0) / 100 * units);
+  const colorAt = (unit) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? "promptBorder" : "subtle");
+  const drawn = [];
+  for (let cell = 0;cell < cells; cell++) {
+    const from = cell * eighths.length;
+    const left = colorAt(from);
+    const right = colorAt(from + eighths.length - 1);
+    let edge = 1;
+    while (edge < eighths.length && colorAt(from + edge) === left)
+      edge++;
+    drawn.push(left === right ? { color: left, children: "█" } : { color: left, backgroundColor: right, children: eighths[edge] ?? "█" });
+  }
+  const capped = isRounded ? [{ color: colorAt(0), children: roundedLeft }, ...drawn, { color: colorAt(units - 1), children: roundedRight }] : drawn;
+  return Text({ children: runsOf(capped).map((run) => Text(run)) });
 });
+function runsOf(cells) {
+  const runs = [];
+  for (const cell of cells) {
+    const last = runs.at(-1);
+    if (last !== undefined && last.color === cell.color && last.backgroundColor === cell.backgroundColor && last.children !== roundedLeft && cell.children !== roundedRight)
+      last.children += cell.children;
+    else
+      runs.push({ ...cell });
+  }
+  return runs;
+}
 var List = hostComponent("List", ({ label, children }) => ({ label, ...children === undefined ? {} : { children } }), ({ children }) => Box({ flexDirection: "column", children }));
 var statusOf = (tone) => tone === undefined ? [] : [tone === "off" ? Text({ dimColor: true, children: "○ " }) : Text({ ...textOf2(tone), children: "● " })];
 function treeRow({ key, label, description, leading, trailing, tone, isSelected, depth = 0, isOpen, onToggle, onPress }) {
@@ -10656,6 +10227,11 @@ var stallTicks = 3;
 var stallMs = 60000;
 var settingsLoadMs = 500;
 var shellTools = ["Bash", "PowerShell"];
+async function roundsBarEnds(claude) {
+  const path = preferencesPath(await cmodStore(claude));
+  const text = await claude.fs.read(path).catch(ifMissing(undefined));
+  return parsePreferences(text === undefined ? undefined : JSON.parse(text), path).roundsBarEnds;
+}
 async function readPlugin(claude) {
   const { name, root } = claude.plugin;
   const read = async (path) => {
@@ -11240,12 +10816,13 @@ ${String(asked.input.session)}`, asked);
       if (runtime !== undefined)
         return;
       const open = (href, press) => void openLink(claudeCalls, href, press.surface).then((done) => done === "copied" && runtime?.toaster.toast.success("Copied the link", { description: "Paste it in your browser." }), (error) => toastFailure({ id: "open-link", message: "Could not open the link", error, isCritical: true }));
+      let hasNerdFont = false;
       const naming = {
         ...claudeCalls,
         ui: {
           ...claudeCalls.ui,
           warn: (id, text) => runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text),
-          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open)
+          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, { hasNerdFont })
         },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() }
       };
@@ -11264,6 +10841,7 @@ ${String(asked.input.session)}`, asked);
       readStarted = read;
       try {
         drawCount = await claudeCalls.clock.now() * drawsPerMs;
+        hasNerdFont = await roundsBarEnds(claudeCalls).catch((error) => (claudeCalls.ui.warn("preferences:read", `${definition.name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false)) || isNerdFontTerminal(await claudeCalls.env.terminal());
         await programs.refresh();
         await begin().catch(report);
       } finally {
@@ -11882,7 +11460,8 @@ async function startMod($, eventInput, passOn) {
       browser: () => $.env.get("BROWSER"),
       sshConnection: () => $.env.get("SSH_CONNECTION"),
       display: () => $.env.get("DISPLAY"),
-      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY")
+      waylandDisplay: () => $.env.get("WAYLAND_DISPLAY"),
+      terminal: async () => ({ program: await $.env.get("TERM_PROGRAM"), ghostty: await $.env.get("GHOSTTY_RESOURCES_DIR"), wezterm: await $.env.get("WEZTERM_EXECUTABLE") })
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) }
@@ -12285,7 +11864,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12305,7 +11884,8 @@ var logPageSize = 10;
 var preferenceTitles = {
   showsInstalledModErrors: "Show errors from installed mods",
   servesWebUi: "Show the Sidebar in your browser",
-  servesTailnet: "Open web apps from your other devices, through Tailscale"
+  servesTailnet: "Open web apps from your other devices, through Tailscale",
+  roundsBarEnds: "Round the ends of bars in every terminal, for a font with Nerd Font symbols. A session uses it once it reloads."
 };
 var viewSection = "view:";
 var panelColumns = 4;
@@ -12689,7 +12269,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12878,7 +12458,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13164,322 +12744,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// node_modules/@cmodjs/core/jobs/tool.js
-var toolName = /^[A-Za-z0-9_-]{1,64}$/;
-function tool(options) {
-  const { name, description, inputSchema, isDeferred, execute } = options;
-  return (job) => {
-    const { mod, announce, reserveName } = job;
-    const { claude, router, report } = engineOf(mod);
-    if (!toolName.test(name))
-      throw new Error(`${mod.name}: "${name}" is not a tool name. Use 1 to 64 letters, digits, "_", or "-".`);
-    const properties = inputSchema?.properties ?? {};
-    const reserved = reservedKeys.filter((key) => Object.hasOwn(properties, key));
-    if (reserved.length > 0)
-      throw new Error(`${mod.name}: the ${name} tool's inputSchema has the property ${reserved.join(", ")}, which Claude Code keeps for itself. Rename it.`);
-    const named = reserveName("tool", name, `${mod.name}: the tool ${name} is already added. Give each tool its own name.`);
-    const validator = new rt(inputSchema ?? { type: "object" }, "2020-12", false);
-    let registered;
-    claude.tool.register({ name, description, ...inputSchema === undefined ? {} : { inputSchema }, ...isDeferred === undefined ? {} : { isDeferred } }).then((answer) => {
-      registered = answer.tool;
-    }, (error) => {
-      report({ id: `tool:${name}`, message: `The ${name} tool is not added`, error });
-    });
-    announce(`the ${name} tool`);
-    const answering = router.add("tool.call", async (e, next) => {
-      if (e.tool !== registered)
-        return next(e);
-      const input = toolInputOf(e);
-      const { valid, errors } = validator.validate(input);
-      if (!valid)
-        return { deny: `The ${name} tool input is not valid:
-${errors.map((error) => `- ${error.instanceLocation}: ${error.error}`).join(`
-`)}` };
-      try {
-        return { result: resultOf2(await withinDeadline(mod, toolDeadline, `the ${name} tool`, () => execute(input, mod))) };
-      } catch (error) {
-        return { deny: `The ${name} tool failed: ${messageOf(error)}` };
-      }
-    });
-    return {
-      name: `mcp__${claude.plugin.name}__${name}`,
-      remove() {
-        answering.remove();
-        named.remove();
-      }
-    };
-  };
-}
-function resultOf2(value) {
-  if (value === undefined || typeof value === "string")
-    return value;
-  if (Array.isArray(value) && value.every((block) => typeof block === "object" && block !== null && ("type" in block)))
-    return value;
-  return JSON.stringify(value);
-}
-
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/tools.ts
-var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
-var shownMessages = 30;
-var foundMessages = 20;
-var lineChars = 300;
-var snippetBefore = 60;
-var snippetAfter = 140;
-var sessionId = { type: "string", description: "The id of the session, as list_sessions names it." };
-var oneLine2 = (text) => {
-  const line = firstLine(text);
-  return line.length > lineChars ? `${line.slice(0, lineChars)}…` : line;
-};
-var waitLine = ({ dialog, tool, input, question }) => `  waiting for ${dialog}${question !== undefined ? `: ${oneLine2(question)}` : tool !== undefined ? `: ${tool} ${oneLine2(JSON.stringify(input ?? {}))}` : ""}`;
-var sessionLine = (session) => [
-  `${session.id}  ${session.isRunning ? "running" : "ended"}  ${session.title || "(untitled)"}`,
-  `  ${session.device === undefined ? "" : `device ${session.device.name}, `}project ${session.project}, last active ${session.lastAt}`,
-  ...session.forkedFrom === undefined ? [] : [`  forked from ${session.forkedFrom}`],
-  ...session.visitedAt === undefined ? [] : [`  visited ${session.visitedAt}`],
-  ...session.waitingFor === undefined ? [] : [waitLine(session.waitingFor)]
-].join(`
-`);
-var places = ["focus", "peek", "tab", "right", "down", "hide"];
-var onTerminal = async (session, run) => {
-  const found = await providers("cmod/Terminal");
-  const refused = [];
-  for (const terminal of found) {
-    try {
-      return await run(terminal);
-    } catch (error) {
-      refused.push(`${terminal.mod}: ${messageOf(error)}`);
-    }
-  }
-  throw new Error(found.length === 0 ? `no program on this computer provides cmod/Terminal, so the terminal of session ${session} is out of reach. A session claude --bg started has none.` : `no terminal runs session ${session}. ${refused.join(" ")}`);
-};
-var messageLine = (message) => `${message.id}  ${message.at}  ${message.type}${message.task === undefined ? "" : ` in task ${message.task}`}: ${oneLine2(searchText(message))}`;
-var speakerOf = (message) => message.type === Prompt ? "prompt" : message.type === Reply ? "Claude" : message.type === ToolCall ? `${message.name} call` : message.type === Note ? "note" : message.type;
-var snippetOf = (text, find) => {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const at = flat.toLowerCase().indexOf(find.toLowerCase());
-  if (at === -1)
-    return oneLine2(flat);
-  const start = Math.max(0, at - snippetBefore);
-  const end = Math.min(flat.length, at + find.length + snippetAfter);
-  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
-};
-var isSearchCall = (message) => message.type === ToolCall && message.name.endsWith("search_sessions");
-var foundIn = (session, id, hits, find) => {
-  const about = session === undefined ? [] : [`${session.project}${session.device === undefined ? "" : ` on ${session.device.name}`}`, session.isRunning ? "running" : `ended, last active ${session.lastAt}`];
-  return [
-    `${session?.title || "(untitled)"}${about.map((part) => ` · ${part}`).join("")}`,
-    `  session ${id}`,
-    ...hits.map((message) => `  ${message.at}  ${message.task === undefined ? "" : `subagent ${message.task}, `}${speakerOf(message)}: ${snippetOf(searchText(message), find)}  (message ${message.id})`)
-  ].join(`
-`);
-};
-function addClaudeTools(mod) {
-  const { report } = engineOf(mod);
-  let compaction;
-  const compact = async ({ keep }) => {
-    try {
-      await commands.run("compact", keep);
-      await sessions.current.send({ type: Prompt, text: carryOn });
-    } catch (error) {
-      report({ id: "compact", message: "Could not compact the conversation", error });
-    }
-  };
-  sessions.current.onTurnEnd(() => {
-    const asked = compaction;
-    compaction = undefined;
-    if (asked !== undefined)
-      mod.after(1, () => void compact(asked));
-  });
-  mod.use(tool({
-    name: "compact",
-    description: "Compact this conversation once your answer ends: a summary replaces the conversation so far, and a prompt then lets you carry on. Use it when the context window is filling up and the work so far fits in a summary.",
-    inputSchema: {
-      type: "object",
-      properties: { keep: { type: "string", description: "What the summary must keep, such as the plan, the decisions, and the files changed." } },
-      additionalProperties: false
-    },
-    execute: ({ keep }) => {
-      compaction = keep === undefined ? {} : { keep };
-      return "The conversation compacts once this answer ends, and a prompt then lets you carry on. End your answer now.";
-    }
-  }));
-  mod.use(tool({
-    name: "start_session",
-    description: "Start a new background Claude Code session on a task. It works on its own, sees none of this conversation, and keeps running after this session ends. Its end shows up in this session as a task.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        prompt: { type: "string", description: "Everything the session needs to do the task, because it sees none of this conversation." },
-        title: { type: "string", description: "A few words that name the task." },
-        agentType: { type: "string", description: "The agent definition the session runs, such as Explore. Leave it out for a plain session." },
-        model: { type: "string", description: "The model the session runs on, such as sonnet. Leave it out for the default model." },
-        cwd: { type: "string", description: "The folder the session works in. Leave it out for this session’s folder." },
-        device: { type: "string", description: "The device the session runs on, by its name or its cmod device id, which a mod that starts sessions on other devices reads. Leave it out for this computer." }
-      },
-      required: ["prompt", "title"],
-      additionalProperties: false
-    },
-    execute: async ({ prompt, title, agentType, model, cwd, device }) => {
-      const started = await sessions.current.startTask({ prompt, title, isBackground: true, ...agentType === undefined ? {} : { agentType }, ...model === undefined ? {} : { model }, ...cwd === undefined ? {} : { cwd }, ...device === undefined ? {} : { device } });
-      return `Started session ${started.id}. It answers there, not in this conversation. Read it with read_session.`;
-    }
-  }));
-  mod.use(tool({
-    name: "list_sessions",
-    description: "List Claude Code sessions, newest first: this project's, or every project's, on every device cmod reaches.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        everyProject: { type: "boolean", description: "List every project’s sessions, not only this project’s." },
-        running: { type: "boolean", description: "List only the sessions that run now." },
-        since: { type: "string", description: "List only sessions active since this ISO time." }
-      },
-      additionalProperties: false
-    },
-    execute: async ({ everyProject, running, since }) => {
-      const found = await sessions.list({ ...everyProject === undefined ? {} : { everyProject }, ...running === undefined ? {} : { running }, ...since === undefined ? {} : { since } });
-      return found.length === 0 ? "No sessions." : found.map(sessionLine).join(`
-`);
-    }
-  }));
-  mod.use(tool({
-    name: "search_sessions",
-    description: "Search the messages of Claude Code sessions for a text, newest first. Each session found shows its title, project, and state, then each message that holds the text with the words around it.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        text: { type: "string", description: "The text to find, at least 3 characters." },
-        everyProject: { type: "boolean", description: "Search every project’s sessions, not only this project’s." }
-      },
-      required: ["text"],
-      additionalProperties: false
-    },
-    execute: async ({ text, everyProject }) => {
-      const found = [];
-      for await (const message of sessions.search(text, undefined, everyProject === undefined ? {} : { everyProject })) {
-        if (isSearchCall(message))
-          continue;
-        found.push(message);
-        if (found.length === foundMessages)
-          break;
-      }
-      if (found.length === 0)
-        return `No message holds "${text}".`;
-      const listed = await sessions.list(everyProject === undefined ? {} : { everyProject });
-      const ids = [...new Set(found.map((message) => message.session))];
-      return ids.map((id) => foundIn(listed.find((session) => session.id === id), id, found.filter((message) => message.session === id), text)).join(`
-
-`);
-    }
-  }));
-  mod.use(tool({
-    name: "read_session",
-    description: "Read a session's latest messages, each with the id fork_session takes as at.",
-    inputSchema: {
-      type: "object",
-      properties: { session: sessionId, last: { type: "number", description: `How many of the latest messages to read. ${shownMessages} when left out.` } },
-      required: ["session"],
-      additionalProperties: false
-    },
-    execute: async ({ session, last }) => {
-      const read = await sessions.get(session);
-      const messages = await read.messages({ last: last ?? shownMessages });
-      return [sessionLine(read), ...messages.map(messageLine)].join(`
-`);
-    }
-  }));
-  mod.use(tool({
-    name: "message_session",
-    description: "Send a session a prompt, which it answers as its next turn, or a note, which it reads with its next prompt. A session that ended resumes on the prompt.",
-    inputSchema: {
-      type: "object",
-      properties: { session: sessionId, text: { type: "string", description: "The message." }, isNote: { type: "boolean", description: "Send it as a note the session reads with its next prompt, not as a prompt." } },
-      required: ["session", "text"],
-      additionalProperties: false
-    },
-    execute: async ({ session, text, isNote }) => {
-      await (await sessions.get(session)).send({ type: isNote === true ? Note : Prompt, text, as: Session });
-      return `Sent session ${session} the ${isNote === true ? "note" : "prompt"}.`;
-    }
-  }));
-  mod.use(tool({
-    name: "stop_session",
-    description: "Stop a session's running turn, as Esc does in its terminal. The session keeps running and takes the next prompt.",
-    inputSchema: { type: "object", properties: { session: sessionId }, required: ["session"], additionalProperties: false },
-    execute: async ({ session }) => {
-      const turn = await (await sessions.get(session)).turn();
-      if (turn === undefined)
-        return `Session ${session} runs no turn.`;
-      await turn.abort();
-      return `Stopped the turn of session ${session}.`;
-    }
-  }));
-  mod.use(tool({
-    name: "end_session",
-    description: "End a session’s Claude Code once its running turn ends. Its conversation stays, and message_session resumes it.",
-    inputSchema: { type: "object", properties: { session: sessionId }, required: ["session"], additionalProperties: false },
-    execute: async ({ session }) => {
-      await (await sessions.get(session)).end();
-      return `Session ${session} ends once its turn ends.`;
-    }
-  }));
-  mod.use(tool({
-    name: "fork_session",
-    description: "Start a background session on a copy of a session's conversation, up to a message or whole, and give it a task.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session: { type: "string", description: "The session to fork, as list_sessions names it. Leave it out for this session." },
-        prompt: { type: "string", description: "The task the fork works on." },
-        title: { type: "string", description: "A few words that name the task." },
-        at: { type: "string", description: "The id of the last message the fork keeps, from read_session. Leave it out to keep the whole conversation." }
-      },
-      required: ["prompt", "title"],
-      additionalProperties: false
-    },
-    execute: async ({ session, prompt, title, at }) => {
-      const source = session === undefined ? sessions.current : await sessions.get(session);
-      const fork = await source.fork({ prompt, title, isBackground: true, ...at === undefined ? {} : { at } });
-      return `Forked session ${source.id} into session ${fork.id}.`;
-    }
-  }));
-  mod.use(tool({
-    name: "read_screen",
-    description: "Read the screen of a session's terminal, as the person sees it.",
-    inputSchema: { type: "object", properties: { session: sessionId }, required: ["session"], additionalProperties: false },
-    execute: ({ session }) => onTerminal(session, (terminal) => terminal.screen(session))
-  }));
-  mod.use(tool({
-    name: "press_keys",
-    description: "Type keys into a session's terminal, as the person would, such as an answer to a dialog.",
-    inputSchema: { type: "object", properties: { session: sessionId, keys: { type: "string", description: 'The keys to type, such as 1 then Enter for the first answer: "1\\r".' } }, required: ["session", "keys"], additionalProperties: false },
-    execute: async ({ session, keys }) => {
-      await onTerminal(session, (terminal) => terminal.press(session, keys));
-      return `Typed the keys into session ${session}.`;
-    }
-  }));
-  mod.use(tool({
-    name: "show_session",
-    description: "Show a session's terminal in a pane of the app that runs it on this computer: focused, as a peek, as a tab, right of or below the focused pane, or hidden again. You keep working in your own pane.",
-    inputSchema: { type: "object", properties: { session: sessionId, place: { type: "string", enum: [...places], description: "Where the terminal shows. focus when left out." } }, required: ["session"], additionalProperties: false },
-    execute: async ({ session, place }) => {
-      const where = places.find((each) => each === place) ?? "focus";
-      await onTerminal(session, (terminal) => terminal.show(session, where));
-      return where === "hide" ? `Hid the terminal of session ${session}.` : `Showed the terminal of session ${session} (${where}).`;
-    }
-  }));
-  mod.use(tool({
-    name: "delete_session",
-    description: "Delete a session that has ended: its transcripts, goal, tasks, and index rows. A running session stays.",
-    inputSchema: { type: "object", properties: { session: sessionId }, required: ["session"], additionalProperties: false },
-    execute: async ({ session }) => {
-      await (await sessions.get(session)).delete();
-      return `Deleted session ${session}.`;
-    }
-  }));
-}
-
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13509,7 +12774,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13566,7 +12831,6 @@ var cmodPlugin = defineMod({
     unloaded.clear();
     const server = mod.use(program({ command: ["cmod", "serve"], isService: true, processType: "Interactive" }));
     engineOf(mod).onServeUnreached(() => void server.ready().catch((error) => report({ id: "serve", message: "cmod serve did not start, so this session reaches no other session", error })));
-    addClaudeTools(mod);
     const web = webUi(mod, server);
     const shown = sidebar(mod, settings2(mod), (isShown) => history(mod, isShown), web.openInBrowser);
     mod.hotkeys.sidebar.onPress(() => shown.toggle());
@@ -14012,7 +13276,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-7fv1KQ/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
