@@ -112,7 +112,9 @@ belongs to this session, and a fork to the session it copies, which hears when
 the task ends.
 
 stop stops the session's running turn, as Esc does. end ends the session's
-Claude Code once its turn ends, and its conversation stays. compact compacts
+Claude Code now between turns, or once its running turn ends, and says which,
+through claude stop for a background session and /exit for any other, and its
+conversation stays. compact compacts
 the conversation once its turn ends, keeping what --keep names, and then
 prompts Claude to carry on. delete deletes a session that ended: its
 transcripts, goal, tasks, and index rows.
@@ -293,8 +295,8 @@ async function onServe(script: Script, command: string, rest: readonly string[],
   }
   if (command === 'end') {
     const session = await named('end')
-    await act(session, 'end', null)
-    process.stdout.write(`Session ${session} ends once its turn ends.\n`)
+    const answer = (await act(session, 'end', null)) as { readonly ends?: 'now' | 'afterTurn' } | null
+    process.stdout.write(`Session ${session} ${answer?.ends === 'now' ? 'ends now' : answer?.ends === 'afterTurn' ? 'ends once its turn ends' : 'ends now, or once its turn ends if one runs'}.\n`)
     return 0
   }
   if (command === 'compact') {

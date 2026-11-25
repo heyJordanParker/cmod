@@ -1,7 +1,8 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmodWith, deleteTemporaryHomes, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith, deleteTemporaryHomes, spawningTestLimitMs, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
 
 setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
@@ -16,6 +17,7 @@ case "$1" in
     echo 'backgrounded · 1a2b3c4d'
     ;;
   agents) echo '[{"pid":4242,"id":"1a2b3c4d","cwd":"/work","kind":"background","sessionId":"${sessionId}","name":"Upgrade","status":"running","state":"working"}]' ;;
+  stop) printf '%s\\n' "$@" > "$HOME/stop-args"; echo "stopped $2" ;;
   *) exit 1 ;;
 esac
 `
@@ -28,17 +30,17 @@ async function backgroundHome(): Promise<string> {
 
 const lines = async (home: string, file: string) => (await readFile(join(home, file), 'utf8')).trimEnd().split('\n')
 
-test('cmod task start runs claude --bg with the starting session in --settings env, resolves the short id through claude agents, and prints the task', async () => {
+test('cmod task start runs claude --bg named with the task title and with the starting session in --settings env, resolves the short id through claude agents, and prints the task', async () => {
   const home = await backgroundHome()
 
   const started = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Upgrade', '--agent', 'Explore', '--model', 'haiku', '--cwd', join(home, 'work'), '--json', '--', 'Upgrade every dependency.')
   const args = await lines(home, 'bg-args')
-  const settings = args[6] ?? ''
+  const settings = args[8] ?? ''
   const task = { title: 'Upgrade', agentType: 'Explore', model: 'haiku', openedBy: '', openedAt: expect.any(String), isBackground: true }
 
   expect(started.stderr).toBe('')
   expect(JSON.parse(started.stdout)).toEqual({ id: sessionId, ...task })
-  expect(args).toEqual(['--bg', '--agent', 'Explore', '--model', 'haiku', '--settings', settings, '--', 'Upgrade every dependency.'])
+  expect(args).toEqual(['--bg', '--agent', 'Explore', '--model', 'haiku', '--name', 'Upgrade', '--settings', settings, '--', 'Upgrade every dependency.'])
   expect(JSON.parse((JSON.parse(settings) as { env: { CMOD_TASK: string } }).env.CMOD_TASK)).toEqual({ session: 'starter', ...task })
   expect(await lines(home, 'bg-place')).toEqual([join(home, 'work'), 'unset'])
 })
@@ -74,14 +76,13 @@ test('cmod task start --clone writes a fork of the whole conversation of the sta
   const { started, args, fork, transcript } = await forkOf(await forkedHome(), [])
 
   expect(JSON.parse(started.stdout)).toEqual({ id: sessionId, title: 'Try SQL', forkedFrom: 'starter', openedBy: '', openedAt: expect.any(String), isBackground: true })
-  expect(args).toEqual(['--bg', '--resume', fork, '--settings', '--', 'Rebuild this on SQL.'])
+  expect(args).toEqual(['--bg', '--resume', fork, '--name', 'Try SQL', '--settings', '--', 'Rebuild this on SQL.'])
   expect(transcript.map((line) => [line['uuid'] ?? line['type'], line['parentUuid'], line['sessionId']])).toEqual([
     ['m1', null, fork],
     ['m2', 'm1', fork],
     ['m3', 'm2', fork],
     ['m4', 'm3', fork],
     ['content-replacement', undefined, fork],
-    ['custom-title', undefined, fork],
   ])
   expect(transcript[0]?.['forkedFrom']).toEqual({ sessionId: 'starter', messageUuid: 'm1' })
 })
@@ -106,6 +107,24 @@ test("the starting session's tasks list a background task, with the status claud
 
   expect(listed.stderr).toBe('')
   expect(JSON.parse(listed.stdout)).toEqual([{ id: sessionId, title: 'Upgrade', openedBy: '', openedAt: expect.any(String), isBackground: true, status: 'running' }])
+})
+
+test("cmod task stop stops a session Claude Code records as a background session with claude stop and its job id, and stops no other session", async () => {
+  const home = await backgroundHome()
+  const started = await startOf(process.pid)
+  await writeFiles(home, {
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId, cwd: home, procStart: started, kind: 'bg', jobId: '1a2b3c4d' }),
+    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 'starter', cwd: home, procStart: started, kind: 'interactive' }),
+  })
+
+  const interactive = await cmodWith(home, {}, 'task', 'stop', 'starter', '--json')
+  const leftAlone = existsSync(join(home, 'stop-args'))
+  const background = await cmodWith(home, {}, 'task', 'stop', sessionId, '--json')
+
+  expect(interactive).toEqual({ exitCode: 0, stdout: '{"isStopped":false}\n', stderr: '' })
+  expect(leftAlone).toBe(false)
+  expect(background).toEqual({ exitCode: 0, stdout: '{"isStopped":true}\n', stderr: '' })
+  expect(await lines(home, 'stop-args')).toEqual(['stop', '1a2b3c4d'])
 })
 
 test('cmod task start outside Claude Code names the session it needs, and starts nothing', async () => {

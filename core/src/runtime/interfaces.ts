@@ -745,7 +745,8 @@ function labelledText(mail: Mail): string {
   if (mail.from === undefined) return mail.text
   const quoted = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   const replyTo = mail.replyTo === undefined ? '' : ` reply-to="${mail.replyTo}"`
-  return `<cmod-message from="${quoted(mail.from)}" title="${quoted(mail.fromTitle ?? '')}" reply="cmod sessions send ${quoted(mail.from.slice(0, 8))} --reply-to ${mail.id}"${replyTo}>\n${mail.text}\n</cmod-message>`
+  const title = mail.fromTitle === undefined || mail.fromTitle === '' ? '' : ` title="${quoted(mail.fromTitle)}"`
+  return `<cmod-message from="${quoted(mail.from)}"${title} reply="cmod sessions send ${quoted(mail.from.slice(0, 8))} --reply-to ${mail.id}"${replyTo}>\n${mail.text}\n</cmod-message>`
 }
 
 export type ProgramReach = { readonly store: string; readonly files: InstanceFiles; readonly fetch: HttpFetch; readonly clock: RpcClock; hasExited(mod: string, program: string): Promise<boolean> }

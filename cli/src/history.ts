@@ -184,7 +184,7 @@ export function runningFolder(): string {
   return join(configRoot(), 'sessions')
 }
 
-export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: SessionData['status']; readonly waitingFor?: string; readonly statusAt?: number; readonly startedAt?: number }
+export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly kind?: string; readonly jobId?: string; readonly name?: string; readonly status?: SessionData['status']; readonly waitingFor?: string; readonly statusAt?: number; readonly startedAt?: number }
 
 export function leadingJson(text: string): unknown {
   let depth = 0
@@ -239,6 +239,8 @@ function registryRecordOf(path: string, known: RegistryRecord | undefined): Regi
       cwd: typeof row['cwd'] === 'string' ? row['cwd'] : '',
       pid: row['pid'],
       entrypoint: typeof row['entrypoint'] === 'string' ? row['entrypoint'] : '',
+      ...(typeof row['kind'] === 'string' ? { kind: row['kind'] } : {}),
+      ...(typeof row['jobId'] === 'string' ? { jobId: row['jobId'] } : {}),
       ...(typeof row['name'] === 'string' && row['name'] !== '' ? { name: row['name'] } : {}),
       ...(recordedStatuses.includes(row['status']) ? { status: row['status'] as SessionData['status'] } : {}),
       ...(typeof row['waitingFor'] === 'string' ? { waitingFor: row['waitingFor'] } : {}),

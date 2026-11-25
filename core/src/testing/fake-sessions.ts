@@ -246,7 +246,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       }
       if (action === 'end') {
         session.data = { ...session.data, isRunning: false }
-        return null
+        return { ends: 'now' }
       }
       if (action === 'send') {
         const from = isObject(input['from']) ? String(input['from']['session']) : input['as'] === Session ? current : undefined

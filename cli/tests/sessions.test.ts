@@ -52,12 +52,13 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
 
 test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, a send from inside Claude Code names that session as its sender, and read mail lists each mail with its state', async () => {
   const { home, acted, actedTimes, stop } = await servedSessions({
-    worker: {},
+    worker: { end: () => ({ ends: 'afterTurn' }) },
     planner: {},
     stalled: {
       send: () => {
         throw new Error('Claude Code dropped the prompt: the session is closing')
       },
+      end: () => ({ ends: 'now' }),
     },
   })
   await writeFiles(home, { [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/old.jsonl`]: `${JSON.stringify({ type: 'user', uuid: 'u1', sessionId: 'old', timestamp: '2026-11-20T10:00:00.000Z', cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } })}\n` })
@@ -72,19 +73,21 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
   const mail = await cmodWith(home, outside, 'sessions', 'read', 'mail', 'worker')
   const stopped = await cmodWith(home, outside, 'sessions', 'stop', 'worker')
   const ended = await cmodWith(home, outside, 'sessions', 'end', 'worker')
+  const endedNow = await cmodWith(home, outside, 'sessions', 'end', 'stalled')
   const compacted = await cmodWith(home, outside, 'sessions', 'compact', 'worker', '--keep', 'the parser plan')
   const compactedHere = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'planner' }, 'sessions', 'compact')
   const running = await cmodWith(home, outside, 'sessions', 'delete', 'worker')
   const deleted = await cmodWith(home, outside, 'sessions', 'delete', 'old')
   stop()
 
-  expect([fromOutside, fromPlanner, answered, queued, stopped, ended, compacted, compactedHere, running, deleted]).toEqual([
+  expect([fromOutside, fromPlanner, answered, queued, stopped, ended, endedNow, compacted, compactedHere, running, deleted]).toEqual([
     { exitCode: 0, stdout: 'Sent message 1 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
     { exitCode: 0, stdout: 'Sent message 2 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
     { exitCode: 0, stdout: 'Sent message 3 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
     { exitCode: 0, stdout: 'Sent message 4 to session stalled. It arrives as soon as the session can take it, and cmod sessions read mail stalled shows when.\n', stderr: '' },
     { exitCode: 0, stdout: 'Stopped the turn of session worker.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker ends once its turn ends.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Session stalled ends now.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker compacts once its turn ends, and then carries on.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session planner compacts once its turn ends, and then carries on.\n', stderr: '' },
     { exitCode: 1, stdout: '', stderr: 'cmod sessions: session worker runs, so it stays. End it first.\n' },
@@ -97,11 +100,12 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
   ])
   expect(acted).toEqual([
     ['worker', 'send', { type: 'prompt', text: 'Rerun the deploy' }],
-    ['worker', 'send', { type: 'note', text: '<cmod-message from="planner" title="" reply="cmod sessions send planner --reply-to 2">\nTests pass.\n</cmod-message>' }],
-    ['worker', 'send', { type: 'prompt', text: '<cmod-message from="planner" title="" reply="cmod sessions send planner --reply-to 3" reply-to="1">\nMerged.\n</cmod-message>' }],
+    ['worker', 'send', { type: 'note', text: '<cmod-message from="planner" reply="cmod sessions send planner --reply-to 2">\nTests pass.\n</cmod-message>' }],
+    ['worker', 'send', { type: 'prompt', text: '<cmod-message from="planner" reply="cmod sessions send planner --reply-to 3" reply-to="1">\nMerged.\n</cmod-message>' }],
     ['stalled', 'send', { type: 'prompt', text: 'Go on' }],
     ['worker', 'abort', {}],
     ['worker', 'end', null],
+    ['stalled', 'end', null],
     ['worker', 'compact', { keep: 'the parser plan' }],
     ['planner', 'compact', {}],
   ])

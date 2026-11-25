@@ -1113,6 +1113,22 @@ test('a send to a session a cmod plugin holds stores the mail, answers queued, a
   serve.close()
 })
 
+test('a send from a session with no title labels the mail without a title attribute', async () => {
+  const watched = watchedMail()
+  const { serve, fetch } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox } })
+  const worker = heldBy(fetch, 'worker')
+  await worker.hold()
+  const { app, send } = appOn(fetch)
+
+  await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: { session: planner.session, title: '' } })
+  await watched.deliveredTimes(1)
+
+  expect(worker.acted).toEqual([['send', { type: 'prompt', text: `<cmod-message from="${planner.session}" reply="cmod sessions send 4b1e9c2a --reply-to 1">\nRerun the deploy\n</cmod-message>` }]])
+  await app.close()
+  await worker.plugin.close()
+  serve.close()
+})
+
 test('a send to a session whose cmod plugin answers its act only once the running turn ends, as Claude Code holds a prompt until then, answers queued without waiting on the turn, and the mail turns delivered when the act answers', async () => {
   const watched = watchedMail()
   const { serve, fetch, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox } })

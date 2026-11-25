@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Fixed
+- A message from a session with no title arrives labelled without a `title` attribute, where it carried `title=""`.
+- `end` and `cmod sessions end` stop a background session, one `cmod sessions start` or a mod's background task started, through Claude Code's `claude stop`. Claude Code's `/exit`, which cmod ran, left it running for good. `cmod sessions end` prints `ends now` or `ends once its turn ends`, as the session answers.
+- A background session carries the title it was started with in Claude Code too, through `claude --name`, so `cmod sessions list`, Claude Code's own lists, and its terminal title show it, where they showed its first prompt or a name Claude Code chose.
+
 ## [8.10.2] - 2026-11-25
 
 ### Fixed

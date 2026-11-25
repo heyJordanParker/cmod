@@ -188,7 +188,7 @@ export function serveConversations({
     if (below.block !== undefined) return below
     engineTurns.delete(task ?? '')
     if (!isInterrupted) dispatch(conversation.endTurn(new Date().toISOString(), ending, task))
-    if (task === undefined && endsAfterTurn) claude.clock.after(0, () => void exitNow())
+    if (task === undefined && endsAfterTurn) endSoon()
     if (task === undefined && compactsAfterTurn !== undefined && !isInterrupted) claude.clock.after(1, () => void compactNow())
     return below
   }
@@ -743,8 +743,10 @@ export function serveConversations({
 
   const exitNow = async () => {
     endsAfterTurn = false
-    await claude.command.run({ command: 'exit' })
+    const { isStopped } = JSON.parse(await runCmod(claude, ['task', 'stop', session, '--json'], session)) as { readonly isStopped: boolean }
+    if (!isStopped) await claude.command.run({ command: 'exit' })
   }
+  const endSoon = () => claude.clock.after(0, () => void exitNow().catch((error: unknown) => report('end', `Could not end session ${session}`, error)))
 
   const perform = async (caller: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
     await starting
@@ -753,9 +755,12 @@ export function serveConversations({
     if (action === 'usage') return usageOf(claude)
     if (action === 'surfaces') return [...(await claude.session.surfaces())] satisfies Surface[]
     if (action === 'end') {
-      if (engineTurns.has('')) endsAfterTurn = true
-      else claude.clock.after(0, () => void exitNow())
-      return null
+      if (engineTurns.has('')) {
+        endsAfterTurn = true
+        return { ends: 'afterTurn' }
+      }
+      endSoon()
+      return { ends: 'now' }
     }
     if (action === 'compact') {
       const { keep } = (isObject(input) ? input : {}) as { readonly keep?: string }

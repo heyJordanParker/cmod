@@ -243,8 +243,13 @@ export async function startBackground(args: readonly string[], cwd: string): Pro
 export async function startTask(session: string, { title, prompt, cwd, agentType, model, fork }: { readonly title: string; readonly prompt: string; readonly cwd: string; readonly agentType?: string; readonly model?: string; readonly fork?: string }): Promise<TaskData> {
   const task = { title, ...(fork === undefined ? {} : { forkedFrom: session }), ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), openedBy: '', openedAt: new Date().toISOString(), isBackground: true as const }
   const settings = JSON.stringify({ env: { CMOD_TASK: JSON.stringify({ session, ...task }) } })
-  const id = await startBackground([...(fork === undefined ? [] : ['--resume', fork]), ...(agentType === undefined ? [] : ['--agent', agentType]), ...(model === undefined ? [] : ['--model', model]), '--settings', settings, '--', prompt], cwd)
+  const id = await startBackground([...(fork === undefined ? [] : ['--resume', fork]), ...(agentType === undefined ? [] : ['--agent', agentType]), ...(model === undefined ? [] : ['--model', model]), '--name', title, '--settings', settings, '--', prompt], cwd)
   return { id, ...task }
+}
+
+export async function stopBackground(jobId: string): Promise<void> {
+  const { exitCode, stdout, stderr } = await capture([claudeCode(), 'stop', jobId])
+  if (exitCode !== 0) throw new Error(`claude stop ${jobId} exited ${exitCode}: ${`${stdout}${stderr}`.trim()}`)
 }
 
 export async function backgroundAgents(): Promise<{ readonly id: string; readonly sessionId: string; readonly status: string }[]> {
