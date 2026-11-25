@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.9.1] - 2026-11-25
+
+### Fixed
+- `cmod sessions send` inside a session whose cmod plugin is older than 8.9.0 sends the prompt straight to the session it names, as 8.9.0 meant to, instead of failing with `which has no "sendTo" action`.
+
 ## [8.9.0] - 2026-11-25
 
 ### Added
