@@ -4,6 +4,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.10.0] - 2026-11-25
+
 ### Added
 - Every `cmod sessions` command takes any start of a session id that no other session shares, as git takes a commit, and an ambiguous start lists each match.
 - `cmod sessions send` prints whether it delivered or queued the message, with the message's id and the start of the id and the title of the session it reached, and says why a queued message waits and when it arrives.
