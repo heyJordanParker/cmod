@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.10.2] - 2026-11-25
+
+### Fixed
+- A test that fires `ConfigChange` at a tested mod no longer moves the `@cmodjs/core/mod.js` imports of a later test in the same `bun test` process to that mod half a second later, which hung or broke that test's own `providers()` or `sessions` calls.
+
 ## [8.10.1] - 2026-11-25
 
 ### Fixed

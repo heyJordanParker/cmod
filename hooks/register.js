@@ -426,7 +426,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.10.1";
+var coreVersion = "8.10.2";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -11195,6 +11195,8 @@ async function createMod(definition, runtime) {
   const settingsListeners = new Set;
   const loadingSettings = [];
   const settingsLoaded = async () => {
+    if (loadingSettings.length === 0)
+      return;
     bind(imports);
     await Promise.all(loadingSettings.splice(0).flatMap((change) => [...settingsListeners].map(async (listener) => {
       try {
@@ -12107,7 +12109,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12532,7 +12534,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12721,7 +12723,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13007,7 +13009,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13037,7 +13039,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13544,7 +13546,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-8dAakj/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
