@@ -419,7 +419,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.8.3";
+var coreVersion = "8.8.4";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -7152,6 +7152,14 @@ ${target}`;
     start(e.session_id, e.source, e.agent_type);
     return next(e);
   });
+  (async () => {
+    const id = await claude.session.id();
+    if (id === "")
+      return;
+    const isRunning = await claude.fs.exists((await claude.session.info()).transcriptPath);
+    if (session === "" && isRunning)
+      start(id, "resume", undefined);
+  })().catch((error) => claude.ui.warn("serve:hold", `cmod: other sessions reach this one after its next prompt: ${messageOf(error)}`));
   router.add("classic.SessionEnd", async (e, next) => {
     if (subscribed.size > 0 || watched.size > 0 || served.listened().length > 0)
       await saveListeners(true).catch((error) => report("follow", "Left its listeners registered", error));
@@ -9978,17 +9986,17 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   };
   const isHidden = (key) => layout.hidden.includes(key);
   const shown = (keys) => keys.filter((key) => !isHidden(key));
-  const rowsNow = (area, at, turn) => layout.areas[area].flatMap((row) => {
+  const rowsNow = (area, at, turn, isBesideMode = false) => layout.areas[area].flatMap((row) => {
     const side = (keys) => shown(keys).map((key) => elementFor(key, area, at, turn)).filter((each) => each !== undefined);
     const left = side(row.left);
     const right = side(row.right);
     const group = (keys, children) => Box({ flexShrink: shown(keys).some((key) => widgetOf(key)?.place?.size === "fill") ? 1 : 0, minWidth: 0, columnGap: 2, children });
-    return left.length + right.length === 0 ? [] : [Box({ justifyContent: "space-between", width: at.columns, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })];
+    return left.length + right.length === 0 ? [] : [Box({ ...isBesideMode ? {} : { justifyContent: "space-between", width: at.columns }, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })];
   });
   const keysIn = (area) => layout.areas[area].flatMap((row) => shown([...row.left, ...row.right]));
-  const draw = async (area, table, at, turn) => {
+  const draw = async (area, table, at, turn, isBesideMode = false) => {
     await Promise.all(keysIn(area).map((key) => fill(key, area, at, turn)));
-    return drawWith(table, () => rowsNow(area, at, turn), markdownIn(table, at));
+    return drawWith(table, () => rowsNow(area, at, turn, isBesideMode), markdownIn(table, at));
   };
   const rows = (area, at) => {
     const started = keysIn(area).flatMap((key) => fill(key, area, at, undefined) ?? []);
@@ -10004,8 +10012,8 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     if (e.component === "AbovePrompt")
       return e.props.hasSurvey ? next(e) : below(table, await next(e), await draw(AbovePrompt, table, styledAt(e, e.props.bodyColumns)));
     if (e.component === "PromptHint") {
-      const added = await draw(BelowPrompt, table, styledAt(e, viewportColumns(e) - promptIndent));
-      return isHidden(claudeHint) ? column(table, added) : below(table, await next(e), added);
+      const at = styledAt(e, viewportColumns(e) - promptIndent);
+      return isHidden(claudeHint) ? column(table, await draw(BelowPrompt, table, at, undefined, true)) : below(table, await next(e), await draw(BelowPrompt, table, at));
     }
     if (e.component === "SessionMode")
       return isHidden(claudeModes) ? column(table, []) : next(e);
@@ -10573,9 +10581,26 @@ var Pagination = hostComponent("Pagination", ({ page, pages, onPage }) => ({
     onNext === undefined ? Text({ dimColor: true, children: "n: Next" }) : Button({ plain: true, hotkey: "n", label: "Next", onPress: onNext })
   ]
 }));
-var Progress = hostComponent("Progress", ({ value, width = 24, label }) => ({ value: Math.min(Math.max(value, 0), 100), width, ...label === undefined ? {} : { label } }), ({ value, width }) => {
-  const filled = Math.round(value / 100 * width);
-  return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) })] });
+function filledSections(sections) {
+  let reached = 0;
+  return sections.map(({ value, tone }) => {
+    const filled = Math.min(Math.max(value, 0), 100 - reached);
+    reached += filled;
+    return { value: filled, ...tone === undefined ? {} : { tone } };
+  });
+}
+var Progress = hostComponent("Progress", ({ width = 24, label, ...given }) => {
+  const sections = "sections" in given ? filledSections(given.sections) : given.tone === undefined ? undefined : filledSections([given]);
+  const value = sections === undefined && "value" in given ? Math.min(Math.max(given.value, 0), 100) : (sections ?? []).reduce((sum, each) => sum + each.value, 0);
+  return { value, width, ...label === undefined ? {} : { label }, ...sections === undefined ? {} : { sections } };
+}, ({ value, width, sections }) => {
+  let reached = 0;
+  const cells = (sections ?? [{ value }]).map(({ value: part, tone }) => {
+    const from = Math.round(reached / 100 * width);
+    reached += part;
+    return Text({ ...tone === undefined ? { color: "claude" } : textOf2(tone), children: "█".repeat(Math.round(reached / 100 * width) - from) });
+  });
+  return Text({ children: [...cells, Text({ color: "subtle", children: "░".repeat(width - Math.round(reached / 100 * width)) })] });
 });
 var List = hostComponent("List", ({ label, children }) => ({ label, ...children === undefined ? {} : { children } }), ({ children }) => Box({ flexDirection: "column", children }));
 var statusOf = (tone) => tone === undefined ? [] : [tone === "off" ? Text({ dimColor: true, children: "○ " }) : Text({ ...textOf2(tone), children: "● " })];
@@ -12260,7 +12285,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12664,7 +12689,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12853,7 +12878,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13193,7 +13218,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 var shownMessages = 30;
 var foundMessages = 20;
@@ -13454,7 +13479,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13484,7 +13509,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13987,7 +14012,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-Wwvhbd/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-ArqXiR/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
