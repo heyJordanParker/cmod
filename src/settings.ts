@@ -1,7 +1,7 @@
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type ConfigRow, type Mod, type Pane, type Surface } from '../node_modules/@cmodjs/core/mod.js'
 import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, parseTailnetRecord, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, tailnetFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
-import { isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
+import { isNotInstalled, isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError, cmodStore, newestCmodVersion } from '../node_modules/@cmodjs/core/runtime/programs.js'
@@ -62,7 +62,7 @@ const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
   servesWebUi: 'Show the Sidebar in your browser',
   servesTailnet: 'Open web apps from your other devices, through Tailscale',
-  roundsBarEnds: 'Round the ends of bars in every terminal, for a font with Nerd Font symbols. A session uses it once it reloads.',
+  roundsBarEnds: 'Round the ends of bars in every terminal, for a font with Nerd Font symbols.',
 } satisfies Partial<Record<keyof Preferences, string>>
 
 const viewSection = 'view:'
@@ -176,6 +176,7 @@ export async function writePreference(mod: Mod<object>, key: keyof Preferences, 
   parsePreferences(saved, path)
   await fs.write(path, `${JSON.stringify({ ...(isObject(saved) ? saved : {}), [key]: isOn }, null, 2)}\n`)
   await fs.write(storeChangedPath(store), '')
+  engineOf(mod).storeChanged('preferences')
 }
 
 function timeOf(at: string): string {
@@ -218,25 +219,21 @@ function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets
 }
 
 export function settings<State extends SettingsState>(mod: Mod<State>) {
-  return (pane: Pane, changed: () => void): SettingsView => {
+  return (pane: Pane, changed: () => void, isShown: () => boolean): SettingsView => {
     const { parts, widgets, claude } = engineOf(mod)
     if (parts === undefined || widgets === undefined) throw new Error('cmod draws no Settings, because the cmod plugin started without its pages and widgets.')
 
     const read = (path: string) => fs.read(path).catch(ifMissing(undefined))
+
+    const roots = new Map<string, string | undefined>()
 
     const viewOf = async (store: string, name: string, root: string | undefined, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
       const readIn = async (file: string) => (root === undefined ? undefined : read(`${root}/${file}`))
       const manifest: unknown = await readIn('package.json').then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const plugin: unknown = await readIn('.claude-plugin/plugin.json').then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const steps = isObject(manifest) ? readSteps(manifest) : undefined
-      const ask = async (method: string): Promise<readonly string[]> => {
-        if (name === mod.name) return []
-        const answer = await claude.cmod.call({ to: name, method, input: null }).catch((error: unknown) => {
-          if (!isStillInstalling(name, error)) claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`)
-          return undefined
-        })
-        return Array.isArray(answer) ? (answer as string[]) : []
-      }
+      const known = mod.state.memory.views.find((each) => each.name === name)
+      roots.set(name, root)
       return {
         name,
         version,
@@ -244,11 +241,26 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         isOn,
         hotkeys: Object.entries(steps?.hotkeys ?? {}).map(([hotkey, { title }]) => ({ name: hotkey, title, combo: combos.get(hotkeyCommand(name, hotkey)) })),
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
-        pendingSteps: await ask(pendingStepsMethod),
-        changelog: changelogSections((await readIn('CHANGELOG.md')) ?? ''),
+        pendingSteps: known?.pendingSteps ?? [],
+        changelog: known?.changelog ?? [],
         isService: (await fs.list(serviceFolder(store, name)).catch(ifMissing([]))).some((entry) => entry.name.endsWith('.json')),
         webApps: await webAppsOf(store, name),
       }
+    }
+
+    const pendingStepsOf = async ({ name, isOn }: ModView): Promise<readonly string[]> => {
+      if (name === mod.name || !isOn) return []
+      const answer = await claude.cmod.call({ to: name, method: pendingStepsMethod, input: null }).catch((error: unknown) => {
+        if (!isStillInstalling(name, error) && !isNotInstalled(name, error)) claude.ui.warn(`settings:${name}:${pendingStepsMethod}`, `cmod: ${name} did not answer ${pendingStepsMethod}: ${messageOf(error)}`)
+        return undefined
+      })
+      return Array.isArray(answer) ? (answer as string[]) : []
+    }
+
+    const fill = async (view: ModView) => {
+      const root = roots.get(view.name)
+      const [pendingSteps, changelog] = await Promise.all([pendingStepsOf(view), root === undefined ? undefined : read(`${root}/CHANGELOG.md`)])
+      mod.state.memory.views = mod.state.memory.views.map((each) => (each.name === view.name ? { ...each, pendingSteps, changelog: changelogSections(changelog ?? '') } : each))
     }
 
     const webAppsOf = async (store: string, name: string): Promise<WebAppView[]> => {
@@ -274,11 +286,20 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))]
     }
 
+    let isStale = true
+
+    const fillAll = async () => {
+      isStale = false
+      await Promise.all(mod.state.memory.views.map(fill))
+    }
+
     const refresh = async () => {
       const failed = (what: string) => (error: unknown) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`)
       await load().then((views) => void (mod.state.memory.views = views), failed('The mods'))
       await readLog(mod).then((log) => void (mod.state.memory.log = log), failed('The Log'))
       await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed('The preferences'))
+      if (isShown()) await fillAll()
+      else isStale = true
     }
 
     void refresh()
@@ -468,6 +489,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       draw(columns, isFocused, surface) {
         const { views } = mod.state.memory
         if (views.length === 0) return Text({ dimColor: true, children: mod.state.session.notice ?? 'Reading your mods…' })
+        if (isStale && isShown()) void fillAll()
         const view = selectedView()
         return view === undefined ? modList(views) : detail(view, columns, isFocused, surface)
       },

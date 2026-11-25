@@ -4,6 +4,49 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.10.0] - 2026-11-25
+
+### Added
+- Every `cmod sessions` command takes any start of a session id that no other session shares, as git takes a commit, and an ambiguous start lists each match.
+- `cmod sessions send` prints whether it delivered or queued the message, with the message's id and the start of the id and the title of the session it reached, and says why a queued message waits and when it arrives.
+- A message to another session is stored until it is delivered. `cmod serve` keeps it in `mail.sqlite` before it delivers it, so a restart of either session or of `cmod serve` no longer drops it, and a session whose cmod plugin does not reach `cmod serve` gets each queued message, in order, once it does. A message from a session arrives labelled with that session's id and title and the `cmod sessions send <id> --reply-to <mail>` command that answers it. `send` resolves `{ id, state }`, `delivered` or `queued`, where it resolved nothing, `cmod sessions send` prints it, and `cmod sessions read mail` lists a session's mail with each one's state.
+- `cmod sessions list --running` lists every project's running sessions unless `--project` names one.
+- Bars and colored text draw with three distinct grays in Claude Code's `dark-ansi` and `light-ansi` themes, and follow a theme change and the bar-ends switch without a reload. kitty rounds bar ends.
+- `cmod serve` provides `cmod/Store`, which tells a `Change { part }` each time a cmod command or session writes a file of the cmod store a session reads, and `cmod/Programs`, which tells a `Change { mod, program }` each time a program's holder writes or deletes its instance file.
+- `cmod/Sessions` tells a `Change` of `part: 'messages'` each time a session's transcript changes, to a listener whose matcher names that part.
+
+### Fixed
+- A mod is active as soon as its setup returns. The replay of a SessionStart it missed, and its first-start announcement, run after, so Claude Code no longer holds the first prompt for them. On a loaded Mac, `session.start` went from 9.3 s to 1.3 s.
+- The cmod plugin no longer copies the whole conversation into Claude Code's hooks worker at every turn end. In the largest sessions that copy froze the worker, and after 3 freezes Claude Code turned off every mod for the session.
+- `cmod serve` no longer walks every row of a session each time it indexes a change, which kept it near 70% CPU with large sessions.
+- A mod that lists providers, listens to one, or calls one inside the cmod plugin's call to it no longer fails as `cmod did not answer in time`.
+- Sessions on different cmod versions no longer move `~/.claude/rules/cmod` between their copies. It links the copy Claude Code installed.
+- Settings no longer asks a mod that is off for its steps.
+- Under Claude Code's sandbox, a `cmod` command that reaches cmod serve names the sandbox setting that blocks its socket.
+- `cmod watch` finds what changed in a linked checkout by comparing each file's modification time and size with its last look, and times each change by its file. On a loaded Mac, macOS reported many changes under the checkout's own name, and `cmod watch` dropped them, so no session offered Reload.
+- `cmod sessions follow` reads a session again each time `cmod serve` tells that its messages changed, so a message macOS reported under the folder's name on a loaded Mac is no longer missed.
+- Each session reads the cmod store again when `cmod serve` tells it a mod changed, the widget layout, a preference, a build failure, or the linked mods, instead of checking `store-changed` and Claude Code's `installed_plugins.json` every 500 ms.
+- A session following a mod's program reads its new address as soon as the program's holder writes it, instead of at the next check of the instance file.
+- `cmod serve`, `cmod watch`, and `cmod sessions follow` no longer read every file they follow every 5 seconds. They compare modification times and sizes at each file event, every 400 ms for a minute after a change, and every 30 seconds after that.
+- The browser app shows a new reply or status of another device's session as soon as that device's `cmod serve` tells it.
+- `cmod serve` and each web app's program follow the browser app and tailnet preferences, and `cmod serve` and `cmod watch` follow a cmod update and the linked mods, when `cmod/Store` tells them, instead of reading them every 5 seconds. A service of the computer counts as started as soon as its program writes its instance file, even while `cmod serve` is down.
+- A call to a provider program that exits fails at once, naming the program, as soon as its holder tells `cmod/Programs`.
+- `cmod sessions follow --running` prints a session that started after it from that session's first row, whenever it notices the session, and a resumed one from the first row of the resume. A session it noticed late lost its first rows.
+- Each mod's hooks name what they handle, so Claude Code runs a mod's worker only for its own hotkey commands and the components core draws for it. A session start no longer sends every listed command to the cmod plugin's worker, and a redraw of the prompt hint, the session mode, or the status line reaches no mod's worker. A hotkey command stays out of the typeahead even when its hook fails.
+- A state change tells the cmod plugin only the views, pages, and widgets whose drawing changed, at most 10 times a second per mod, and the cmod plugin draws only those again. A mod's state change asks Claude Code for no redraw while every pane of the mod is closed, so a Log write no longer redraws the screen.
+- A hidden Settings asks no mod for its steps and reads no changelog. `/mods` still lists every mod on its first frame, and a mod's pending steps fill its row once the mod answers.
+- `cmod serve` reads this computer at each start and writes it to `device.json` in the cmod store, and a mod's `device.read()`, `cmod device`, and the cmod plugin read it there, instead of running `uname`, `ioreg`, and `scutil` in each mod at each start. A renamed computer shows its new name after the next `cmod serve` start.
+- A widget keeps its place in its row with its last drawing while it draws at a new width or after a change, where it dropped out of the row for a frame.
+- A mod's view, page, or widget that draws what Claude Code refuses, such as two `Input` elements with one key, goes to the Log with the part and the rule, once, and keeps its last good drawing. Claude Code drew its own in its place and told only a `--plugin-dir` session. The test kit names the mod's own key in that failure.
+- `cmod/UI` `draw` answers `null` only before a part's first drawing, and an empty `Box` for a part that drew nothing.
+- Herdr's cmod panel draws a view again after it reconnects to `cmod serve`. A view whose drawing was on its way when the connection dropped stayed blank for good. A view with no drawing yet, or whose mod is still installing, shows its title with "Drawing…".
+- A session started or resumed while `cmod serve` restarts gets its earlier turns once `cmod serve` is back, where it started without them. Every call made while `cmod serve` restarts waits for it until the call's 30 second deadline, instead of failing at once.
+- A mod's listener on another program or device, such as a sessions provider, hears it again once that provider comes back after a `cmod serve` restart, where the Log showed `Missed a change a sessions provider told` and the listener heard nothing more for the session.
+- A session logs `cmod: this session waits for cmod serve` once per outage, where it logged it every 2 seconds while `cmod serve` was down.
+- Sessions no longer restart `cmod serve` and every other service by rewriting its launchd agent or systemd unit from their own environment. cmod rewrites a service only when the mod's program command, flags, `environment`, or process type change, and names Claude Code by `~/.local/bin/claude` whenever it exists.
+- `cmod serve` keeps the connection of a program that polls late, such as one whose computer is loaded, for 30 seconds, where it dropped it after 8 seconds. A call to a program whose copy exited still fails at once.
+- A page tab in Herdr drops its refusal and its error on its own once its session's cmod plugin holds the session again, and draws the page again, where it kept both until Try again. A page a mod opens on its own opens its Herdr tab without taking focus and leaves an open one where it is, while a page the person opens selects its tab.
+
 ## [8.9.1] - 2026-11-25
 
 ### Fixed

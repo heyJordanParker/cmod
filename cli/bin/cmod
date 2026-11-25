@@ -21,6 +21,7 @@ newer() {
 }
 
 store="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/bin/cmod"
+installed=
 package=$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
 
 if [ -f "$package/package.json" ]; then
@@ -57,6 +58,7 @@ if [ -f "$package/package.json" ]; then
     [ "$reported" = "$version" ] || fail "$release/$build reports version $reported, not $version"
     mv -f "$partial" "$folder/cmod"
     rm -f "$sums"
+    installed=$version
     trap - EXIT HUP INT TERM
     for older in "$store"/*/; do
       name=${older%/}
@@ -76,4 +78,7 @@ for folder in "$store"/*/; do
   if [ -z "$newest" ] || newer "$name" "$newest"; then newest=$name; fi
 done
 [ -n "$newest" ] || fail "no cmod is installed in $store. Run npm i -g @cmodjs/cli, or install the cmod plugin in Claude Code."
+if [ -n "$installed" ]; then
+  CMOD_INSTALLED_VERSION=$installed exec "$store/$newest/cmod" "$@"
+fi
 exec "$store/$newest/cmod" "$@"

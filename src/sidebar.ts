@@ -53,7 +53,7 @@ export type SettingsView = {
 
 const keyOf = ({ mod, id }: Pick<OpenTab, 'mod' | 'id'>) => `${mod}/${id}`
 
-export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView, history: (isShown: () => boolean) => HistoryView, openInBrowser: () => Promise<void>) {
+export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void, isShown: () => boolean) => SettingsView,history: (isShown: () => boolean) => HistoryView, openInBrowser: () => Promise<void>) {
   const { parts, widgets } = engineOf(mod)
   if (parts === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its views, pages, and widgets.')
   const told = new Set<string>()
@@ -213,7 +213,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     onClose: () => tell(),
   })
 
-  const view = settings(pane, () => tell())
+  const view = settings(pane, () => tell(), () => (pane.isShown && mod.state.session.shown === settingsTab) || settingsPart.isShown)
 
   let dashboardView: View | undefined
   const hasDashboard = () => {
@@ -232,7 +232,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
   placeDashboard()
   widgets.onChange(placeDashboard)
   const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() })
-  mod.views.add({ id: settingsTab, title: 'Settings', render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) })
+  const settingsPart = mod.views.add({ id: settingsTab, title: 'Settings', render:(_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) })
   const isFixedTab = (name: string, id: string) => name === mod.name && (id === dashboardTab || id === settingsTab)
 
   const placeOf = (name: string, id: string) => declaredOf(name)?.views.find((each) => each.id === id)?.place

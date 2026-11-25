@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/cli",
-  "version": "8.9.1",
+  "version": "8.10.0",
   "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
   "license": "MIT",
   "type": "module",
@@ -21,7 +21,8 @@
   "scripts": {
     "build": "trap 'rm -f .*.bun-build' EXIT; for machine in ${CMOD_MACHINES:-darwin-arm64 darwin-x64 linux-arm64 linux-x64}; do bun build --compile --bytecode --format=esm --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-$machine src/main.ts src/history-worker.ts --outfile dist/cmod-$machine || exit 1; done",
     "check": "tsc --noEmit && OXLINT_TSGOLINT_PATH=../lint/node_modules/.bin/tsgolint ../lint/node_modules/.bin/oxlint --type-aware --deny-warnings",
-    "test": "ls tests/*.test.ts | xargs -P 0 -n 1 bun test --timeout 30000"
+    "build:host": "CMOD_MACHINES=$(bun -p process.platform)-$(bun -p process.arch) bun run build",
+    "test": "sh -c 'bun run build:host > /dev/null && if [ $# -gt 0 ]; then printf \"%s\\n\" \"$@\"; else ls tests/*.test.ts; fi | xargs -P 0 -n 1 bun test' test"
   },
   "cmod": {
     "build": "bun run build",

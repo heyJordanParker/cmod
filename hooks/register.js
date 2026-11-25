@@ -348,6 +348,9 @@ function widgetsPath(store) {
 function preferencesPath(store) {
   return `${store}/preferences.json`;
 }
+function devicePath(store) {
+  return `${store}/device.json`;
+}
 var preferenceKeys = ["showsInstalledModErrors", "servesWebUi", "servesTailnet", "roundsBarEnds"];
 function parsePreferences(value, path) {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== "boolean")))
@@ -367,8 +370,8 @@ function parseTailnetRecord(value, path) {
   return { port: value["port"], url: value["url"], reason: value["reason"] };
 }
 var nerdFontTerminals = ["herdr", "ghostty", "WezTerm"];
-function isNerdFontTerminal({ program, ghostty, wezterm }) {
-  return nerdFontTerminals.includes(program ?? "") || (ghostty ?? "") !== "" || (wezterm ?? "") !== "";
+function isNerdFontTerminal({ program, ...set }) {
+  return nerdFontTerminals.includes(program ?? "") || Object.values(set).some((value) => (value ?? "") !== "");
 }
 function browserCommand(env, href) {
   if (env.browser === "true")
@@ -423,7 +426,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.9.1";
+var coreVersion = "8.10.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -678,6 +681,7 @@ var components = {
   [Working]: "Spinner",
   [TurnEnd]: "TurnDuration"
 };
+var modComponents = ["AbovePrompt", "Pane", ...new Set(Object.values(components))];
 function componentOf(kind) {
   return typeof kind === "string" && Object.hasOwn(components, kind) ? components[kind] : undefined;
 }
@@ -3238,7 +3242,26 @@ var machineIdFiles = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
 
 class MissingMachineId extends Error {
 }
-async function readDevice(claude) {
+async function readDevice(claude, store) {
+  const text = await claude.fs.read(devicePath(store)).catch(ifMissing(undefined));
+  return (text === undefined ? undefined : storedDevice(text)) ?? measureDevice(claude);
+}
+function storedDevice(text) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError)
+      return;
+    throw error;
+  }
+  if (!isObject(value))
+    return;
+  const { id, name, os, arch } = value;
+  const isDevice = typeof id === "string" && machineId.test(id) && typeof name === "string" && Object.values(systems).includes(os) && Object.values(machines).includes(arch);
+  return isDevice ? { id, name, os, arch } : undefined;
+}
+async function measureDevice(claude) {
   const output = async (argv) => {
     const { exitCode, stdout, stderr } = await claude.process.run(argv);
     if (exitCode !== 0)
@@ -3335,6 +3358,7 @@ var rpcCodes = {
   internal: -32603,
   closed: -32099,
   notHeld: -32098,
+  notProvided: -32097,
   cancelled: -32800
 };
 
@@ -3482,7 +3506,7 @@ function addressCall(fetch, address) {
     return { status: answer.status, text: answer.text };
   };
 }
-function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, keepsConnecting = false }) {
+function connectRpc({ call, handle, onConnect, onError, onLost, clock, retryMs = 2000, keepsConnecting = false }) {
   let current;
   let connecting;
   let isClosed = false;
@@ -3519,6 +3543,7 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
     queued = [];
     link.peer.close(reason);
     reconnect();
+    onLost?.();
   };
   const pollLoop = async (link) => {
     while (current === link && !isClosed) {
@@ -3543,15 +3568,20 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
     }
   };
   let hasConnected = false;
+  let isRetrying = false;
+  const waiting = new Set;
   const reconnect = () => {
-    if (isClosed || !(keepsConnecting || hasConnected))
+    if (isClosed || isRetrying || !(keepsConnecting || hasConnected))
       return;
-    wait(retryMs).then(async () => {
-      await Promise.allSettled([connecting]);
-      if (!isClosed && current === undefined)
-        connection().catch(() => {
-          return;
-        });
+    isRetrying = true;
+    clock.after(retryMs, () => {
+      isRetrying = false;
+      Promise.allSettled([connecting]).then(() => {
+        if (!isClosed && current === undefined)
+          connection().catch(() => {
+            return;
+          });
+      });
     });
   };
   const open = async () => {
@@ -3580,6 +3610,8 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
       hasConnected = true;
       pollLoop(link);
       (async () => onConnect?.(client))().catch((error) => onError?.(error));
+      for (const each of waiting)
+        each.resolve(link);
       return current;
     } catch (error) {
       onError?.(error);
@@ -3595,12 +3627,39 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
     });
     return connecting;
   };
+  const nextLink = (method, signal) => {
+    if (current !== undefined)
+      return Promise.resolve(current);
+    if (isClosed || !(keepsConnecting || hasConnected))
+      return connection();
+    if (!isRetrying)
+      connection().catch(() => {
+        return;
+      });
+    return beforeDeadline(clock, callDeadline, method, (passed) => new Promise((resolve, reject) => {
+      const settled = () => {
+        waiting.delete(waiter);
+        signal?.removeEventListener("abort", stop);
+        passed.removeEventListener("abort", stop);
+      };
+      const waiter = {
+        resolve: (link) => (settled(), resolve(link)),
+        reject: (error) => (settled(), reject(error))
+      };
+      const stop = () => waiter.reject(passed.aborted ? passed.reason : new RpcError(rpcCodes.cancelled, `${method} was cancelled.`));
+      if (signal?.aborted === true)
+        return stop();
+      signal?.addEventListener("abort", stop, { once: true });
+      passed.addEventListener("abort", stop, { once: true });
+      waiting.add(waiter);
+    }));
+  };
   const client = {
     get isConnected() {
       return current !== undefined;
     },
     async request(method, params, signal) {
-      const link = await connection();
+      const link = await nextLink(method, signal);
       const answer = link.peer.request(method, params, signal);
       const sent = link.lastAsked;
       try {
@@ -3618,6 +3677,8 @@ function connectRpc({ call, handle, onConnect, onError, wait, retryMs = 2000, ke
     },
     async close() {
       isClosed = true;
+      for (const each of waiting)
+        each.reject(closedError(new Error("the client closed it")));
       const was = current;
       current = undefined;
       if (was === undefined)
@@ -3654,6 +3715,8 @@ var sessionActs = {
   tasks: "$/tasks"
 };
 var providersInterface = "cmod/Providers";
+var storeInterface = "cmod/Store";
+var programsInterface = "cmod/Programs";
 var interfaceMethods = { providers: "cmod:providers", provider: "cmod:provider", provided: "cmod:provided", listen: "cmod:listenProvided", unlisten: "cmod:unlistenProvided", tell: "cmod:tellProvided", ask: "cmod:askProvided", heard: "cmod:heard" };
 var providerActs = { provide: "$/provide", unprovide: "$/unprovide", providers: "$/providers", provider: "$/provider", call: "$/call", link: "$/link" };
 var providerHoldMs = hookMs / 4;
@@ -3746,13 +3809,17 @@ function interfaceListeners({ report: reportAll }) {
     if (!isConnectionGone(error))
       reportAll(error);
   };
-  const send = (request, each) => request.request(listenMethod, { ...each.listening, ...each.cursor === undefined ? {} : { after: each.cursor } });
-  return {
+  const send = (request, each) => request.request(listenMethod, { ...each.listening, ...each.cursor === undefined ? {} : { after: each.cursor } }).then(() => void (each.isPending = false), (error) => {
+    each.isPending = error instanceof RpcError && error.code === rpcCodes.notProvided;
+    if (!each.isPending)
+      report(error);
+  });
+  const listeners = {
     listen(request, listening, listener) {
       const id = `${next += 1}`;
-      const each = { listening: { ...listening, id }, listener, cursor: undefined };
+      const each = { listening: { ...listening, id }, listener, cursor: undefined, isPending: false };
       registered.set(id, each);
-      send(request, each).catch(report);
+      send(request, each);
       return {
         remove() {
           if (!registered.delete(id))
@@ -3777,8 +3844,25 @@ function interfaceListeners({ report: reportAll }) {
       return (async () => ({ result: await each.listener(heard.payload, signal) ?? null }))();
     },
     async replay(request) {
-      await Promise.all([...registered.values()].map((each) => send(request, each).catch(report)));
-    }
+      await Promise.all([...registered.values()].map((each) => send(request, each)));
+    },
+    followProviders: (request) => listeners.listen(request, listeningOf(providersInterface, "on", "Change", [], undefined), (told) => {
+      for (const each of registered.values())
+        if (each.isPending && each.listening.interface === told.interface)
+          send(request, each);
+    })
+  };
+  return listeners;
+}
+function listeningOf(name, kind, event, args, matcher, options = {}) {
+  return {
+    interface: name,
+    event,
+    kind,
+    ...args.length === 0 ? {} : { args },
+    ...matcher === undefined ? {} : { matcher: sentMatcher(matcher) },
+    ...options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs },
+    ...options.onFailure === undefined ? {} : { onFailure: options.onFailure }
   };
 }
 function providerClient(name, identity, call, listen) {
@@ -3893,7 +3977,7 @@ function createProviders({ name, call, changed, after, report }) {
       checkInterfaceName(named);
       provided.set(named, methods);
       changed();
-      const send = (method, event, payload) => new Promise((resolve) => after(0, () => resolve(call(cmodPluginName, method, { interface: named, event, payload }))));
+      const send = (method, event, payload) => call(cmodPluginName, method, { interface: named, event, payload });
       return {
         remove() {
           if (provided.get(named) === methods && provided.delete(named))
@@ -3907,6 +3991,7 @@ function createProviders({ name, call, changed, after, report }) {
       const listed = await call(cmodPluginName, interfaceMethods.providers, { name: named });
       return [...listed.mods.map((mod) => client(named, { mod, device: listed.device })), ...listed.programs.map((identity) => client(named, identity))];
     },
+    serveProvider: (named) => client(named, { mod: cmodPluginName, program: cmodPluginName }),
     answer
   };
 }
@@ -5386,6 +5471,7 @@ var conversationMethods = {
   contexts: "cmod:contexts",
   tasks: "cmod:tasks",
   goal: "cmod:goal",
+  mail: "cmod:mail",
   updateGoal: "cmod:updateGoal",
   subscribe: "cmod:subscribe",
   watchBefore: "cmod:watchBefore",
@@ -5403,7 +5489,7 @@ function pickedColor(args) {
   const picked = args.trim().toLowerCase();
   return resetColors.includes(picked) ? undefined : picked;
 }
-var acts = ["send", "startTask", "fork", "clone", "startBackgroundTask", "callTool", "usage", "surfaces", "abort", "end", "visit", "delete", "compact", "sendTo"];
+var acts = ["send", "startTask", "fork", "clone", "startBackgroundTask", "callTool", "usage", "surfaces", "abort", "end", "visit", "delete", "compact"];
 var isAct = (action) => acts.includes(action);
 async function usageOf(claude) {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()]);
@@ -5740,9 +5826,15 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       async send(message) {
         if (message.text.trim() === "")
           throw new Error(`${name}: send needs text.`);
-        if (isHere() && message.as !== Session)
-          return sendHere(message);
-        await act(id(), "send", message, owned);
+        if (message.as === Session && isHere())
+          throw new Error(`${name}: session ${id()} cannot send as itself to itself.`);
+        if (message.as === Session && current.id === "")
+          throw new Error(`${name}: as: Session sends from the session the code runs in, and a cmod run script runs in none.`);
+        if (isHere()) {
+          await sendHere(message);
+          return { state: "delivered" };
+        }
+        return await act(id(), "send", message, owned) ?? { state: "delivered" };
       },
       async end() {
         await act(id(), "end", null, owned);
@@ -6286,6 +6378,9 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   let unreached = () => {
     return;
   };
+  let storeChanged = () => {
+    return;
+  };
   const local = {
     client: connectRpc({
       call: call(`unix:${serveSocketPath(store)}`),
@@ -6296,17 +6391,21 @@ function serveConversations({ claude, router, store, project, report, clear, kee
         tellStatus();
         await served.replay();
         await held.replay(client);
+        storeChanged(undefined);
         await reconcileTasks();
       },
       onError: (error) => {
-        claude.ui.warn("serve:connect", `cmod: this session waits for cmod serve: ${messageOf(error)}`);
+        if (!isUnreached)
+          claude.ui.warn("serve:connect", `cmod: this session waits for cmod serve: ${messageOf(error)}`);
         isUnreached = true;
         unreached();
       },
-      wait: (ms) => new Promise((resolve) => void claude.clock.after(ms, resolve)),
+      clock: claude.clock,
       keepsConnecting
     })
   };
+  held.followProviders(local.client);
+  held.listen(local.client, listeningOf(storeInterface, "on", "Change", [], undefined), (told) => storeChanged(told.part));
   const served = serveProviders({
     serve: local.client,
     listeners: held,
@@ -6782,12 +6881,6 @@ ${target}`;
         claude.clock.after(0, () => void compactNow());
       return null;
     }
-    if (action === "sendTo") {
-      const { to, type, text } = input;
-      if (to === session)
-        throw new Error(`session ${session} cannot send as itself to itself.`);
-      return actElsewhere(caller, to, "send", { type, text, as: Session }, undefined);
-    }
     if (action === "send") {
       const { type, text, as } = input;
       if (as === Session)
@@ -6904,16 +6997,6 @@ ${target}`;
     await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(closed));
     local.client.notify(sessionActs.changed, { session: from, part: "tasks" });
   };
-  const actElsewhere = async (caller, target, action, input, task) => {
-    if (action === "send" && task === undefined && input.as === Session) {
-      const { type, text } = input;
-      const sent = await claude.session.send({ to: { sessionId: target }, text });
-      if (sent.isDelivered === true)
-        return null;
-      return actOn(target, action, { type, text }, { caller });
-    }
-    return actOn(target, action, input, { caller, ...task === undefined ? {} : { task } });
-  };
   const merged = (saved, kept, key) => {
     const keptKeys = new Set(kept.map(key));
     return [...saved.filter((item) => !keptKeys.has(key(item))), ...kept];
@@ -6946,26 +7029,26 @@ ${target}`;
   const lastOf = (items, last) => typeof last === "number" ? items.slice(-last) : [...items];
   const isHeld = (kept, last) => typeof last === "number" && kept.length >= last;
   const fields = (request, keys) => Object.fromEntries(keys.flatMap((key) => request[key] === undefined ? [] : [[key, request[key]]]));
+  const sessionNamed = async (id) => {
+    const lookedUp = (client) => client.request(`${sessionsInterface}.session`, [id]).catch(async (error) => {
+      if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound))
+        throw error;
+      const listed = (await client.request(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id);
+      if (listed === undefined)
+        throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`);
+      return listed;
+    });
+    const found = await firstHolding(lookedUp).catch((error) => {
+      throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
+    });
+    return found.id === session ? { ...found, isRunning: true } : found;
+  };
   const methods = {
     async[conversationMethods.sessions](request) {
       const found = await listAll({ project: project(), ...fields(request, ["since", "everyProject", "running"]) });
       return found.map((each) => each.id === session ? { ...each, isRunning: true } : each);
     },
-    async[conversationMethods.session](request) {
-      const id = String(request["session"]);
-      const lookedUp = (client) => client.request(`${sessionsInterface}.session`, [id]).catch(async (error) => {
-        if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound))
-          throw error;
-        const listed = (await client.request(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id);
-        if (listed === undefined)
-          throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`);
-        return listed;
-      });
-      const found = await firstHolding(lookedUp).catch((error) => {
-        throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
-      });
-      return found.id === session ? { ...found, isRunning: true } : found;
-    },
+    [conversationMethods.session]: (request) => sessionNamed(String(request["session"])),
     async[conversationMethods.search](request) {
       const record = fields(request, ["session", "task", "turn", "context", "isAgent"]);
       const options = { project: project(), ...fields(request, ["since", "everyProject", "running", "before", "limit"]), record };
@@ -7024,6 +7107,9 @@ ${target}`;
       }
       return read(id, "goal", task === undefined ? {} : { task });
     },
+    async[conversationMethods.mail](request) {
+      return read(String(request["session"]), "mail", fields(request, ["last"]));
+    },
     async[conversationMethods.updateGoal](request) {
       const id = String(request["session"]);
       const task = typeof request["task"] === "string" ? request["task"] : undefined;
@@ -7064,14 +7150,29 @@ ${target}`;
         throw new Error(`cmod takes no action named ${action}.`);
       if (target === await claude.session.id())
         return perform(caller, action, request["input"], task);
-      return actElsewhere(caller, target, action, request["input"], task);
+      const input = action === "send" && task === undefined ? await fromHere(request["input"]) : request["input"];
+      return actOn(target, action, input, { caller, ...task === undefined ? {} : { task } });
     }
+  };
+  const fromHere = async (input) => {
+    if (!isObject(input) || input["as"] !== Session || input["from"] !== undefined)
+      return input;
+    return { ...input, from: { session, title: (await sessionNamed(session)).title } };
   };
   return {
     onUnreached(listener) {
       unreached = listener;
       if (isUnreached)
         listener();
+    },
+    onStoreChange(listener) {
+      storeChanged = listener;
+    },
+    tellStore(part) {
+      local.client.request(methodName(storeInterface, "changed"), [part]).catch((error) => {
+        if (!isConnectionGone(error) && !(error instanceof RpcError && error.code === rpcCodes.methodNotFound))
+          report("store", `Could not tell the other sessions that ${part} changed`, error);
+      });
     },
     async close() {
       serveChanges?.remove();
@@ -7572,7 +7673,7 @@ function createModFiles({ name, claude, places, report }) {
 
 // node_modules/@cmodjs/core/ui/elements.js
 var tableFacts = new WeakMap;
-var plainTerminal = { hasNerdFont: false };
+var plainTerminal = { hasNerdFont: false, theme: "dark" };
 function drawnIn() {
   return drawing?.drawnIn ?? plainTerminal;
 }
@@ -7684,7 +7785,7 @@ function drawsFocusable(data, key) {
     return true;
   return Object.values(fields).some((each) => drawsFocusable(each, key));
 }
-function forClaudeCode(table, surface, open, { hasNerdFont } = plainTerminal) {
+function forClaudeCode(table, surface, open, facts = {}) {
   const { Button: button, Link: link, Image: image, Svg: svg, Raster: raster } = table;
   const opening = (props) => {
     const { href, ...rest } = props;
@@ -7698,7 +7799,7 @@ function forClaudeCode(table, surface, open, { hasNerdFont } = plainTerminal) {
   };
   const named = (draw) => ({ label, ...rest }) => draw({ alt: label, ...rest });
   const resolved = { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }) => raster(rest) };
-  tableFacts.set(resolved, { hasNerdFont: hasNerdFont && surface === "terminal" });
+  tableFacts.set(resolved, surface === "terminal" ? { ...plainTerminal, ...facts } : plainTerminal);
   return resolved;
 }
 var Box = element("Box");
@@ -7865,10 +7966,12 @@ function merged(updates) {
   const parts = updates.findLast((update) => update.parts !== undefined)?.parts;
   const requests = updates.flatMap((update) => update.requests ?? []);
   const isRedrawn = updates.some((update) => update.redraw === true);
+  const changed = [...new Set(updates.flatMap((update) => update.changed ?? []))];
   const isStart = updates.some((update) => update.isStart === true);
-  return { ...parts === undefined ? {} : { parts }, ...isRedrawn ? { redraw: true } : {}, ...requests.length === 0 ? {} : { requests }, ...isStart ? { isStart } : {} };
+  return { ...parts === undefined ? {} : { parts }, ...isRedrawn ? { redraw: true } : {}, ...changed.length === 0 ? {} : { changed }, ...requests.length === 0 ? {} : { requests }, ...isStart ? { isStart } : {} };
 }
 var keptDrawInputs = 200;
+var tellGapMs = 100;
 function createUi({ name, claude, router, report, announce, mod, borrowed, nextDraw, provided }) {
   const panes = new Map;
   const paneLogs = new Map;
@@ -7911,6 +8014,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   let collected;
   let collecting = 0;
   let queued;
+  let isCooling = false;
   const partList = () => {
     const provides = [...provided(), ...markdownRenders.size > 0 ? [styleInterface] : []];
     return {
@@ -7934,57 +8038,71 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     const drawn = render();
     return drawn === undefined ? null : elementData(drawn, (run) => handlers.push(run) - 1);
   };
-  const isAnyDrawingChanged = () => {
-    for (const [key, inputs] of latestDraws) {
-      if (key === "markdown")
-        continue;
-      for (const sent of inputs.values()) {
-        const handlers = [];
-        try {
-          if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree)
-            return true;
-        } catch (error) {
-          claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`);
+  const isDrawingChanged = (key, inputs) => {
+    const unchanged = [];
+    for (const sent of inputs.values()) {
+      const handlers = [];
+      try {
+        if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree)
           return true;
-        }
-        const latest = sent.draws.at(-1);
-        if (latest !== undefined && draws.has(latest))
-          draws.set(latest, { id: key, handlers });
+      } catch (error) {
+        claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`);
+        return true;
       }
+      unchanged.push([sent, handlers]);
+    }
+    for (const [sent, handlers] of unchanged) {
+      const latest = sent.draws.at(-1);
+      if (latest !== undefined && draws.has(latest))
+        draws.set(latest, { id: key, handlers });
     }
     return false;
   };
-  const withNeededRedraw = ({ redraw, ...update }) => redraw === true && isAnyDrawingChanged() ? { ...update, redraw } : update;
+  const changedParts = () => [...latestDraws].filter(([key, inputs]) => key !== "markdown" && isDrawingChanged(key, inputs)).map(([key]) => key.slice(key.indexOf(":") + 1));
+  const withChangedParts = ({ redraw, ...update }) => {
+    if (redraw !== true)
+      return update;
+    const changed = changedParts();
+    return changed.length === 0 ? update : { ...update, redraw, changed };
+  };
+  const tell = async (needed, isAsked) => {
+    if (Object.keys(needed).length === 0)
+      return;
+    const input = { ...needed, ...isAsked ? { isAsked: true } : {} };
+    return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then((answer) => {
+      if (isAsked && input.requests !== undefined && !(isObject(answer) && answer["isHeld"] === true))
+        unheldRequests += 1;
+      if (isObject(answer) && name !== cmodPluginName)
+        hear(answer["stylers"], false);
+    }, (error) => {
+      claude.ui.warn("parts:tell", `${name}: the cmod plugin did not hear about its widgets, views, and pages: ${messageOf(error)}`);
+    });
+  };
+  const tellQueued = async () => {
+    const needed = withChangedParts(merged(queued ?? []));
+    queued = undefined;
+    if (needed.changed !== undefined) {
+      isCooling = true;
+      claude.clock.after(tellGapMs, () => {
+        isCooling = false;
+        if (queued !== undefined)
+          tellQueued();
+      });
+    }
+    await tell(needed, false);
+  };
   const send = (update) => {
     if (collected !== undefined)
       return void collected.push(update);
     if (beforeStart !== undefined)
       return void beforeStart.push(update);
-    const isAsked = askedDepth > 0;
-    if (queued !== undefined && !isAsked)
-      return void queued.push(update);
-    const batch = [update];
-    if (!isAsked)
-      queued = batch;
-    const tell = async () => {
-      if (queued === batch)
-        queued = undefined;
-      const needed = withNeededRedraw(merged(batch));
-      if (Object.keys(needed).length === 0)
-        return;
-      const input = { ...needed, ...isAsked ? { isAsked: true } : {} };
-      return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then((answer) => {
-        if (isAsked && input.requests !== undefined && !(isObject(answer) && answer["isHeld"] === true))
-          unheldRequests += 1;
-        if (isObject(answer) && name !== cmodPluginName)
-          hear(answer["stylers"], false);
-      }, (error) => {
-        claude.ui.warn("parts:tell", `${name}: the cmod plugin did not hear about its widgets, views, and pages: ${messageOf(error)}`);
-      });
-    };
-    if (!isAsked)
-      return Promise.resolve().then(tell);
-    const told = tell().finally(() => askedCalls.delete(told));
+    if (askedDepth === 0) {
+      if (queued !== undefined)
+        return void queued.push(update);
+      queued = [update];
+      return isCooling ? undefined : Promise.resolve().then(tellQueued);
+    }
+    const told = tell(withChangedParts(update), true).finally(() => askedCalls.delete(told));
     askedCalls.add(told);
     return told;
   };
@@ -8009,7 +8127,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     }
     const mine = collected;
     collected = collecting === 0 ? undefined : [];
-    return withNeededRedraw(merged(mine));
+    return withChangedParts(merged(mine));
   };
   const logOnce = (what) => {
     let hasLogged = false;
@@ -8468,7 +8586,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     changed() {
       if (widgets.size > 0 || parts.size > 0)
         send({ redraw: true });
-      if (panes.size === 0 && styles.size === 0)
+      if (openPanes.size === 0 && styles.size === 0)
         return;
       claude.ui.invalidate("ui.render");
       if (isResizeQueued)
@@ -8521,7 +8639,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
     });
     waiting.show(() => open(true), next);
     if (isOpen) {
-      await send({ redraw: true }).catch(log("the installer did not redraw"));
+      await send({ redraw: true, changed: [installView] }).catch(log("the installer did not redraw"));
     } else {
       isOpen = true;
       await open(false).catch((error) => {
@@ -8535,7 +8653,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
     waitingForShow = [];
     return answer;
   };
-  const redraw = () => void send({ redraw: true }).catch(log("the installer did not redraw"));
+  const redraw = () => void send({ redraw: true, changed: [installView] }).catch(log("the installer did not redraw"));
   const actions = (...buttons) => Box({ gap: 2, flexShrink: 0, children: buttons });
   const dialog = (title, ...children) => Box({ flexDirection: "column", gap: 1, children: [title, ...children] });
   const draw = (props) => {
@@ -8634,7 +8752,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
             } catch (error) {
               notice = { color: "error", text: `The ${step.title} step's isDone failed: ${messageOf(error)}` };
             }
-            await send({ redraw: true });
+            await send({ redraw: true, changed: [installView] });
           };
           return dialog(Text({ children: [Text({ bold: true, children: step.title }), Text({ dimColor: true, children: `  (${index} of ${total})` })] }), body, ...notice === undefined ? [] : [Text({ color: notice.color, wrap: "wrap", children: notice.text })], actions(filledButton({ key: "next", hotkey: "x", variant: "primary", label: index === total ? "Finish" : "Next", onPress: () => void next() }), filledButton({ key: "not-now", hotkey: "n", label: "Not now", onPress: () => answer(false) })));
         }
@@ -9320,12 +9438,6 @@ async function readCombos(claude, configRoot) {
   }
 }
 async function createHotkeys({ name, declared, configRoot, claude, router, answerInput, report }) {
-  if (name === cmodPluginName) {
-    router.add("command.describe", async (e, next) => {
-      const described = await next(e);
-      return e.command.startsWith(hotkeyCommand(e.provider.plugin.replace(/@[^@]*$/, ""), "")) ? { ...described, isHidden: true } : described;
-    });
-  }
   const entries = Object.entries(declared);
   if (entries.length === 0)
     return {};
@@ -9362,6 +9474,54 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
       }
     }
   ]));
+}
+
+// node_modules/@cmodjs/core/runtime/drawing-rules.js
+var oncePerKey = new Set(["Input", "Select", "Markdown", "Client", "Raster", "Image"]);
+function refusal(tree, inside) {
+  const seen = new Set;
+  for (const { type, key } of nodesIn(tree, inside)) {
+    if (!oncePerKey.has(type) || typeof key !== "string")
+      continue;
+    if (seen.has(`${type}\x00${key}`))
+      return `${type} "${key}" is drawn twice; each takes its own key`;
+    seen.add(`${type}\x00${key}`);
+  }
+  const [hovering] = hoversOutsideKeys(tree, inside, false);
+  if (hovering === undefined)
+    return;
+  return `${hovering.type}${typeof hovering.key === "string" ? ` "${hovering.key}"` : ""} hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`;
+}
+function insideData(node) {
+  if (typeof node !== "object" || node === null || Array.isArray(node))
+    return;
+  const { $cmodElement: type, props } = node;
+  if (typeof type !== "string")
+    return;
+  const fields = typeof props === "object" && props !== null ? props : {};
+  return { type, key: fields["key"], hover: fields["hover"], children: [fields["children"]].flat(Number.POSITIVE_INFINITY) };
+}
+function* nodesIn(node, inside) {
+  for (const each of [node].flat(Number.POSITIVE_INFINITY)) {
+    const drawn = inside(each);
+    if (drawn === undefined)
+      continue;
+    yield drawn;
+    for (const child of drawn.children)
+      yield* nodesIn(child, inside);
+  }
+}
+function* hoversOutsideKeys(node, inside, isInKeyedBox) {
+  for (const each of [node].flat(Number.POSITIVE_INFINITY)) {
+    const drawn = inside(each);
+    if (drawn === undefined)
+      continue;
+    const isKeyed = isInKeyedBox || drawn.type === "Box" && typeof drawn.key === "string";
+    if (typeof drawn.hover === "object" && drawn.hover !== null && !("scope" in drawn.hover) && !isKeyed)
+      yield drawn;
+    for (const child of drawn.children)
+      yield* hoversOutsideKeys(child, inside, isKeyed);
+  }
 }
 
 // node_modules/@cmodjs/core/runtime/widgets.js
@@ -9432,7 +9592,9 @@ function widgetsOf(input) {
     return typeof each["id"] === "string" && typeof each["title"] === "string" && known.length > 0 ? [{ id: each["id"], title: each["title"], areas: known, place }] : [];
   });
 }
-function serveWidgets({ claude, router, store, report, turnClosedBy, parts, markdownIn }) {
+function serveWidgets({ claude, router, store, report, turnClosedBy, parts, markdownIn, tellStore = () => {
+  return;
+} }) {
   const path = widgetsPath(store);
   const declared = new Map;
   let stored = layoutOf({});
@@ -9458,6 +9620,7 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
         await claude.fs.write(path, `${JSON.stringify({ ...kept, ...next, areas: { ...isObject(kept["areas"]) ? kept["areas"] : {}, ...next.areas } }, null, 2)}
 `);
         await claude.fs.write(storeChangedPath(store), "");
+        tellStore("widgets");
         stored = next;
       }
       place();
@@ -9522,7 +9685,7 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     if (widget === undefined)
       return;
     const element = parts.element(widget.mod, cacheKey(key, area, at, turn), `${key}:`, nameOf(widget), `widget:${key}`);
-    return element === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? "fit"], children: element });
+    return element === undefined || element === null ? undefined : Box({ ...widgetSizes[widget.place?.size ?? "fit"], children: element });
   };
   const isHidden = (key) => layout.hidden.includes(key);
   const shown = (keys) => keys.filter((key) => !isHidden(key));
@@ -9566,10 +9729,10 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     return next(e);
   });
   return {
-    update(mod, { parts: listing, redraw }) {
-      if (listing === undefined && redraw !== true)
+    update(mod, { parts: listing, redraw, changed }) {
+      if (listing === undefined && redraw !== true && changed === undefined)
         return;
-      parts.forget(mod);
+      parts.forget(mod, listing === undefined ? changed : undefined);
       if (listing !== undefined) {
         const listed = widgetsOf(listing);
         const isNewList = JSON.stringify(listed) !== JSON.stringify(declared.get(mod) ?? []);
@@ -9591,26 +9754,53 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
 }
 
 // node_modules/@cmodjs/core/runtime/parts.js
+function partOf2(input) {
+  const id = input["widget"] ?? input["page"];
+  return typeof id === "string" ? id : undefined;
+}
+var layoutInputs = new Set(["columns", "isFocused", "surface"]);
+function shownAs(mod, input) {
+  const part = Object.entries(input).filter(([key]) => !layoutInputs.has(key)).map(([key, value]) => [key, key === "turn" && isObject(value) && isObject(value["prompt"]) ? value["prompt"]["id"] : value]);
+  return `${mod}\x00${JSON.stringify(part)}`;
+}
 var keptDrawings = 200;
+function remember(kept, key, value) {
+  kept.delete(key);
+  kept.set(key, value);
+  const [oldest] = kept.keys();
+  if (kept.size > keptDrawings && oldest !== undefined)
+    kept.delete(oldest);
+}
 function drawnParts({ claude, report, press }) {
   const drawn = new Map;
   const drawing = new Map;
+  const shownBy = new Map;
+  const lastGood = new Map;
   const generations = new Map;
+  let forgotten = 0;
   const keyOf = (mod, cached) => `${mod}\x00${cached}`;
-  const generationOf = (mod) => generations.get(mod) ?? 0;
+  const generationOf = (mod, part) => Math.max(generations.get(mod) ?? 0, part === undefined ? 0 : generations.get(keyOf(mod, part)) ?? 0);
+  const toldRefusals = new Set;
   return {
     fill(mod, cached, input, name) {
       const key = keyOf(mod, cached);
-      const generation = generationOf(mod);
+      const part = partOf2(input);
+      const shown = shownAs(mod, input);
+      remember(shownBy, key, shown);
+      const generation = generationOf(mod, part);
       if (drawn.get(key)?.generation === generation)
         return;
       const keep = (data, failure) => {
-        drawn.delete(key);
-        drawn.set(key, { data, ...failure === undefined ? {} : { failure }, generation });
-        const [oldest] = drawn.keys();
-        if (drawn.size > keptDrawings && oldest !== undefined)
-          drawn.delete(oldest);
-        if (generationOf(mod) !== generation)
+        const rule = data === null ? undefined : refusal(data.tree, insideData);
+        const told = `${mod}\x00${part ?? ""}\x00${rule}`;
+        if (rule !== undefined && !toldRefusals.has(told)) {
+          toldRefusals.add(told);
+          report(`refused:${mod}/${part ?? "markdown"}`, `${name} drew what Claude Code refuses`, new Error(rule));
+        }
+        remember(drawn, key, { data, ...failure === undefined ? {} : { failure }, isRefused: rule !== undefined, generation });
+        if (data !== null && rule === undefined)
+          remember(lastGood, shown, data);
+        if (generationOf(mod, part) !== generation)
           claude.ui.invalidate("ui.render");
       };
       const pending = drawing.get(key) ?? claude.cmod.call({ to: mod, method: partMethods.draw, input }).then((data) => keep(data ?? null), (error) => {
@@ -9625,13 +9815,15 @@ function drawnParts({ claude, report, press }) {
     element(mod, cached, keyPrefix, name, reportId) {
       const key = keyOf(mod, cached);
       const entry = drawn.get(key);
-      if (entry === undefined)
+      const shown = shownBy.get(key) ?? "";
+      if (entry !== undefined)
+        remember(drawn, key, entry);
+      const data = entry !== undefined && entry.data !== null && !entry.isRefused ? entry.data : lastGood.get(shown);
+      if (data === undefined)
         return;
-      drawn.delete(key);
-      drawn.set(key, entry);
-      const { data } = entry;
-      if (data === null || data.tree === null)
-        return;
+      remember(lastGood, shown, data);
+      if (data.tree === null)
+        return null;
       try {
         return elementOf(data.tree, keyPrefix, (handler, args) => press(mod, { draw: data.draw, handler, args }));
       } catch (error) {
@@ -9642,8 +9834,10 @@ function drawnParts({ claude, report, press }) {
     failure(mod, cached) {
       return drawn.get(keyOf(mod, cached))?.failure;
     },
-    forget(mod) {
-      generations.set(mod, generationOf(mod) + 1);
+    forget(mod, ids) {
+      forgotten += 1;
+      for (const key of ids?.map((id) => keyOf(mod, id)) ?? [mod])
+        generations.set(key, forgotten);
     }
   };
 }
@@ -9790,19 +9984,19 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
     tellUi("Open", { mod, id, isAsked: true });
     return true;
   };
-  const update = (mod, { parts: listing, redraw, requests, isAsked, isStart }) => {
+  const update = (mod, { parts: listing, redraw, changed, requests, isAsked, isStart }) => {
     if (isStart === true)
       started(mod);
     if (listing !== undefined)
       declare(mod, listing);
     if (listing !== undefined)
       provide(mod, providedBy(listing));
-    const isRedrawn = redraw === true || requests?.some((request) => ("open" in request)) === true;
-    if (listing !== undefined || isRedrawn)
-      widgets.update(mod, { ...listing === undefined ? {} : { parts: listing }, ...isRedrawn ? { redraw: true } : {} });
-    if (redraw === true)
-      for (const id of idsOf(mod))
-        tellUi("Redraw", { mod, id });
+    const isWhole = redraw === true && changed === undefined;
+    const redrawn = [...new Set([...changed ?? [], ...(requests ?? []).flatMap((request) => ("open" in request) ? [request.open] : [])])];
+    if (listing !== undefined || isWhole || redrawn.length > 0)
+      widgets.update(mod, { ...listing === undefined ? {} : { parts: listing }, ...isWhole ? { redraw: true } : {}, ...redrawn.length === 0 ? {} : { changed: redrawn } });
+    for (const id of isWhole ? idsOf(mod) : changed ?? [])
+      tellUi("Redraw", { mod, id });
     if (requests === undefined || requests.length === 0)
       return false;
     tellRequested(mod, requests, isAsked === true);
@@ -9825,24 +10019,16 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
       pending.then(takeWaiting);
     return pending;
   };
-  const lastDrawn = new Map;
   const plain = (data) => JSON.parse(JSON.stringify(data));
   const nameOf = (mod, id) => `The ${id} ${declared.get(mod)?.pages.some((each) => each.id === id) === true ? "page" : "view"} of ${mod}`;
   const element = (mod, id, params, columns, isFocused, surface) => {
     if (!declared.has(mod))
       ask(mod);
-    const given = JSON.stringify(params ?? null);
-    const cached = `${id}\x00${given}\x00${columns}\x00${isFocused}\x00${surface}`;
+    const cached = `${id}\x00${JSON.stringify(params ?? null)}\x00${columns}\x00${isFocused}\x00${surface}`;
     const name = nameOf(mod, id);
-    const keyPrefix = `${mod}/${id}:`;
     parts.fill(mod, cached, { page: id, params: plain(params ?? null), columns, isFocused, surface }, name)?.then(() => claude.ui.invalidate("ui.render"));
     const failure = parts.failure(mod, cached);
-    const drawnAt = (key) => parts.element(mod, key, keyPrefix, name, `page:${mod}/${id}`);
-    const last = lastDrawn.get(keyPrefix);
-    const drawn = drawnAt(cached);
-    if (drawn !== undefined)
-      lastDrawn.set(keyPrefix, { params: given, cached });
-    return drawn ?? (last?.params === given ? drawnAt(last.cached) : undefined) ?? (failure === undefined ? undefined : Text({ color: "error", children: `${name} could not draw: ${failure}` }));
+    return parts.element(mod, cached, `${mod}/${id}:`, name, `page:${mod}/${id}`) ?? (failure === undefined ? undefined : Text({ color: "error", children: `${name} could not draw: ${failure}` }));
   };
   const pressable = new Map;
   const uiDraws = new Map;
@@ -9907,7 +10093,7 @@ function serveParts({ claude, router, report, tellRefusedPress, widgets, parts, 
       if (failure !== undefined)
         throw new Error(`${name} could not draw: ${failure}`);
       const drawn = parts.element(part.mod, cached, keyPrefix, name, `ui:${part.mod}/${part.id}`);
-      return drawn === undefined ? null : numbered(part, component, drawn);
+      return drawn === undefined ? null : numbered(part, component, drawn ?? Box({}));
     },
     async press(_session, handler, { surface, key, value, kind, link }) {
       const known = pressable.get(handler);
@@ -10062,18 +10248,38 @@ function createWatches(claude, report) {
   };
 }
 
-// node_modules/@cmodjs/core/ui/components.js
-var toneColors = { neutral: undefined, info: "suggestion", success: "success", warning: "warning", critical: "error" };
-var textOf2 = (tone) => {
-  const color = toneColors[tone];
-  return color === undefined ? { dimColor: true } : { color };
+// node_modules/@cmodjs/core/ui/palette.js
+var themePalette = {
+  foreground: "text",
+  background: "inverseText",
+  mutedForeground: "inactive",
+  border: "subtle",
+  input: "promptBorder",
+  primary: "claude",
+  accent: "userMessageBackground",
+  info: "suggestion",
+  success: "success",
+  warning: "warning",
+  destructive: "error"
 };
+var ansiPalettes = {
+  "dark-ansi": { ...themePalette, mutedForeground: "ansi:whiteBright", input: "ansi:white", border: "ansi:blackBright" },
+  "light-ansi": { ...themePalette, mutedForeground: "ansi:black", input: "ansi:blackBright", border: "ansi:white" }
+};
+function paletteOf(theme) {
+  return ansiPalettes[theme] ?? themePalette;
+}
+
+// node_modules/@cmodjs/core/ui/components.js
+var palette = () => paletteOf(drawnIn().theme);
+var toneTokens = { info: "info", success: "success", warning: "warning", critical: "destructive" };
+var textOf2 = (tone) => tone === "neutral" ? { dimColor: true } : { color: palette()[toneTokens[tone]] };
 var Tabs = hostComponent("Tabs", ({ tabs, selected, onSelect, children }) => ({
   key: "",
   tabs: tabs.map(({ key, label, hotkey }) => ({ key, label, ...hotkey === undefined ? {} : { hotkey }, isSelected: key === selected, onSelect: () => onSelect(key) })),
   ...children === undefined ? {} : { children }
 }), ({ key: prefix, tabs, children }) => {
-  const row = tabs.map(({ key, label, hotkey, isSelected, onSelect }) => isSelected ? Text({ children: [...hotkey === undefined ? [] : [Text({ color: "claude", children: hotkey }), ": "], Text({ bold: true, underline: true, children: label })] }) : Button({ plain: true, dimColor: true, key: `${prefix}tab:${key}`, ...hotkey === undefined ? {} : { hotkey }, label, onPress: onSelect }));
+  const row = tabs.map(({ key, label, hotkey, isSelected, onSelect }) => isSelected ? Text({ children: [...hotkey === undefined ? [] : [Text({ color: palette().primary, children: hotkey }), ": "], Text({ bold: true, underline: true, children: label })] }) : Button({ plain: true, dimColor: true, key: `${prefix}tab:${key}`, ...hotkey === undefined ? {} : { hotkey }, label, onPress: onSelect }));
   return Box({ flexDirection: "column", gap: 1, children: [Box({ gap: 3, children: row }), children] });
 });
 var Split = hostComponent("Split", ({ children }) => ({ children }), ({ children }) => {
@@ -10086,7 +10292,7 @@ var Panel = hostComponent("Panel", ({ title, description, actions, children }) =
     flexDirection: "column",
     flexGrow: 1,
     children: [
-      Box({ flexDirection: "column", flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: "subtle", paddingX: 1, children: [...header, children] }),
+      Box({ flexDirection: "column", flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: "round", borderColor: palette().border, paddingX: 1, children: [...header, children] }),
       Box({ position: "absolute", top: 0, left: 2, children: Text({ bold: true, wrap: "truncate-end", children: ` ${title} ` }) })
     ]
   });
@@ -10100,9 +10306,9 @@ function card(text, isShown) {
     left: 0,
     width: Math.min(text.length + 2, cardColumns),
     ...isShown ? {} : { display: "none", hover: { display: "flex" } },
-    backgroundColor: "text",
+    backgroundColor: palette().foreground,
     paddingX: 1,
-    children: Text({ color: "inverseText", wrap: "wrap", children: text })
+    children: Text({ color: palette().background, wrap: "wrap", children: text })
   });
 }
 var Tooltip = hostComponent("Tooltip", ({ text, children }) => ({ key: "", text, ...children === undefined ? {} : { children } }), ({ key, text, children }) => Box({ key: `${key}tooltip:${text}`, children: [children, card(text, false)] }));
@@ -10124,7 +10330,6 @@ var Pagination = hostComponent("Pagination", ({ page, pages, onPage }) => ({
 var eighths = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 var roundedLeft = "";
 var roundedRight = "";
-var barColors = { neutral: "inactive", info: "suggestion", success: "success", warning: "warning", critical: "error" };
 function filledSections(sections) {
   let reached = 0;
   return sections.map((section) => {
@@ -10140,15 +10345,16 @@ var Progress = hostComponent("Progress", ({ width = 24, label, buffer, ...given 
   return { value, width, ...label === undefined ? {} : { label }, ...sections === undefined ? {} : { sections }, ...buffered === undefined || buffered === value ? {} : { buffer: buffered } };
 }, ({ value, width, sections, buffer }) => {
   const isRounded = drawnIn().hasNerdFont && width > 2;
+  const colors = palette();
   const cells = isRounded ? width - 2 : width;
   const units = cells * eighths.length;
   let reached = 0;
   const ends = (sections ?? [{ value }]).map((section) => {
     reached += section.value;
-    return { end: Math.round(reached / 100 * units), color: "color" in section ? section.color : section.tone === undefined ? "claude" : barColors[section.tone] };
+    return { end: Math.round(reached / 100 * units), color: "color" in section ? section.color : section.tone === undefined ? colors.primary : section.tone === "neutral" ? colors.mutedForeground : colors[toneTokens[section.tone]] };
   });
   const buffered = Math.round((buffer ?? 0) / 100 * units);
-  const colorAt = (unit) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? "promptBorder" : "subtle");
+  const colorAt = (unit) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? colors.input : colors.border);
   const drawn = [];
   for (let cell = 0;cell < cells; cell++) {
     const from = cell * eighths.length;
@@ -10190,7 +10396,7 @@ var ListItem = hostComponent("ListItem", ({ onOpenChange, ...props }) => ({ ...p
     return treeRow(props);
   const shown = [...statusOf(tone), ...leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })], label, ...description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })], ...trailing === undefined ? [] : [" ", trailing]];
   if (isSelected === true || onPress === undefined)
-    return Box({ ...isSelected === true ? { backgroundColor: "userMessageBackground" } : {}, paddingX: 1, children: Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: shown }) });
+    return Box({ ...isSelected === true ? { backgroundColor: palette().accent } : {}, paddingX: 1, children: Text({ wrap: "truncate-end", ...isSelected === true ? { bold: true } : {}, children: shown }) });
   return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) });
 });
 var Badge = hostComponent("Badge", ({ tone = "neutral", children }) => ({ tone, children }), ({ tone, children }) => Text({ ...textOf2(tone), children }));
@@ -10227,21 +10433,48 @@ var stallTicks = 3;
 var stallMs = 60000;
 var settingsLoadMs = 500;
 var shellTools = ["Bash", "PowerShell"];
+var factsMs = 2000;
 async function roundsBarEnds(claude) {
   const path = preferencesPath(await cmodStore(claude));
   const text = await claude.fs.read(path).catch(ifMissing(undefined));
   return parsePreferences(text === undefined ? undefined : JSON.parse(text), path).roundsBarEnds;
 }
+function followDrawnIn(claude, name) {
+  let facts = { hasNerdFont: false, theme: "dark" };
+  let isNerdFont;
+  let readAt = Number.NEGATIVE_INFINITY;
+  let isReading = false;
+  const read = async (now) => {
+    readAt = now;
+    isNerdFont ??= claude.env.terminal().then(isNerdFontTerminal);
+    const [rounds, rows, isKnown] = await Promise.all([
+      roundsBarEnds(claude).catch((error) => (claude.ui.warn("preferences:read", `${name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false)),
+      claude.config.list().catch((error) => (claude.ui.warn("config:read", `${name} draws for a theme with full color: ${messageOf(error)}`), [])),
+      isNerdFont
+    ]);
+    const theme = rows.find((row) => row.key === "theme")?.value;
+    const next = { hasNerdFont: rounds || isKnown, theme: typeof theme === "string" ? theme : "dark" };
+    const isChanged = next.hasNerdFont !== facts.hasNerdFont || next.theme !== facts.theme;
+    facts = next;
+    return isChanged;
+  };
+  return {
+    facts: () => facts,
+    read: async () => void await read(await claude.clock.now()),
+    drawn: () => {
+      if (isReading)
+        return;
+      isReading = true;
+      claude.clock.now().then((now) => now - readAt >= factsMs && read(now)).then((isChanged) => isChanged && claude.ui.invalidate("ui.render")).finally(() => void (isReading = false));
+    }
+  };
+}
 async function readPlugin(claude) {
   const { name, root } = claude.plugin;
-  const read = async (path) => {
-    const stat = await claude.fs.stat(path).catch(ifMissing(undefined));
-    return stat?.kind === "file" ? claude.fs.read(path) : undefined;
-  };
-  const manifest = await readJson(read, `${root}/.claude-plugin/plugin.json`);
-  const version = typeof manifest?.version === "string" ? manifest.version : undefined;
-  const store = await cmodStore(claude);
-  const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
+  const read = (path) => claude.fs.read(path).catch(ifMissing(undefined));
+  const [manifest, packageJson, store] = await Promise.all([readJson(read, `${root}/.claude-plugin/plugin.json`), readJson(read, `${root}/package.json`), cmodStore(claude)]);
+  const version = isObject(manifest) && typeof manifest["version"] === "string" ? manifest["version"] : undefined;
+  const steps = readSteps(packageJson) ?? {};
   if (name === cmodPluginName) {
     const installed = await newestCmodVersion(claude);
     return { name, root, version, store, steps, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
@@ -10250,8 +10483,9 @@ async function readPlugin(claude) {
   const record = await readRecord(read, store, name);
   if (Object.keys(steps).length === 0)
     return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version };
+  const readStepFile = async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.kind === "file" ? claude.fs.read(path) : undefined;
   const scripts = await scriptsSha256(steps, {
-    read: (path) => read(`${root}/${path}`),
+    read: (path) => readStepFile(`${root}/${path}`),
     list: (folder) => filesBelow(claude, `${root}/${folder}`)
   });
   if (version === undefined || record?.scriptsSha256 !== scripts)
@@ -10513,20 +10747,19 @@ function createLifecycle(definition, permissionRoutes = () => {
       activeRouter.dispatch("cmod.call", call, async () => ({ deny: `${definition.name} has no method ${call.method}.` })).then((answer) => ("deny" in answer) ? failed(new Error(answer.deny)) : undefined, failed);
     }
     runtime.claude.ui.invalidate("ui.render");
-    if (definition.name === cmodPluginName)
-      runtime.claude.ui.invalidate("command.describe");
     runSteps(active.mod).catch((error) => toastFailure({ id: "cmod:steps", message: "Its installer stopped", error, isCritical: true }));
     const missed = missedSessionStart;
     missedSessionStart = undefined;
     if (missed !== undefined)
-      await replaySessionStart(missed);
-    if (await runtime.claude.store.get(announcedKey) !== undefined) {
-      runtime.toaster.toast.dismiss(installId);
-      return;
-    }
-    await runtime.claude.store.set(announcedKey, { version: plugin.version ?? "" });
-    const { toaster } = runtime;
-    announcementOf(runtime.claude, plugin, added, openSettings).then(({ message, ...options }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
+      replaySessionStart(missed);
+    announce(runtime, plugin, added).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
+  };
+  const announce = async ({ claude: engine, toaster }, installed, added) => {
+    if (await engine.store.get(announcedKey) !== undefined)
+      return toaster.toast.dismiss(installId);
+    await engine.store.set(announcedKey, { version: installed.version ?? "" });
+    const { message, ...options } = await announcementOf(engine, installed, added, openSettings);
+    toaster.toast.success(message, { id: installId, duration: announcementMs, ...options });
   };
   const replaySessionStart = async (e) => {
     hasHeardSessionStart = true;
@@ -10816,13 +11049,16 @@ ${String(asked.input.session)}`, asked);
       if (runtime !== undefined)
         return;
       const open = (href, press) => void openLink(claudeCalls, href, press.surface).then((done) => done === "copied" && runtime?.toaster.toast.success("Copied the link", { description: "Paste it in your browser." }), (error) => toastFailure({ id: "open-link", message: "Could not open the link", error, isCritical: true }));
-      let hasNerdFont = false;
+      const drawnFacts = followDrawnIn(claudeCalls, definition.name);
       const naming = {
         ...claudeCalls,
         ui: {
           ...claudeCalls.ui,
           warn: (id, text) => runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text),
-          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, { hasNerdFont })
+          resolve: (e) => {
+            drawnFacts.drawn();
+            return forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, drawnFacts.facts());
+          }
         },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() }
       };
@@ -10841,9 +11077,7 @@ ${String(asked.input.session)}`, asked);
       readStarted = read;
       try {
         drawCount = await claudeCalls.clock.now() * drawsPerMs;
-        hasNerdFont = await roundsBarEnds(claudeCalls).catch((error) => (claudeCalls.ui.warn("preferences:read", `${definition.name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false)) || isNerdFontTerminal(await claudeCalls.env.terminal());
-        await programs.refresh();
-        await begin().catch(report);
+        await Promise.all([drawnFacts.read(), programs.refresh().then(() => begin().catch(report))]);
       } finally {
         settleStart();
       }
@@ -10900,11 +11134,11 @@ async function createMod(definition, runtime) {
   const borrowed = (styler, cached, input, scope) => {
     const name = `The markdown style of ${styler}`;
     parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate("ui.render"));
-    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`);
+    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`) ?? undefined;
   };
   const provided = createProviders({
     name: definition.name,
-    call: (to, method, input) => claude.cmod.call({ to, method, input }),
+    call: (to, method, input) => new Promise((resolve) => claude.clock.after(0, () => resolve(claude.cmod.call({ to, method, input })))),
     changed: () => area.relisted(),
     after: (ms, run) => claude.clock.after(ms, run),
     report: (error) => report({ id: "interfaces", message: "A provider listener failed", error })
@@ -11309,6 +11543,8 @@ async function createMod(definition, runtime) {
     interfaces: provided,
     ...widgets === undefined ? {} : { widgets },
     onServeUnreached: (listener) => conversations?.onUnreached(listener),
+    onStoreChange: (listener) => conversations?.onStoreChange(listener),
+    storeChanged: (part) => conversations?.tellStore(part),
     ...servedParts === undefined ? {} : { parts: servedParts }
   });
   const names = new Set;
@@ -11461,9 +11697,9 @@ async function startMod($, eventInput, passOn) {
       sshConnection: () => $.env.get("SSH_CONNECTION"),
       display: () => $.env.get("DISPLAY"),
       waylandDisplay: () => $.env.get("WAYLAND_DISPLAY"),
-      terminal: async () => ({ program: await $.env.get("TERM_PROGRAM"), ghostty: await $.env.get("GHOSTTY_RESOURCES_DIR"), wezterm: await $.env.get("WEZTERM_EXECUTABLE") })
+      terminal: async () => ({ program: await $.env.get("TERM_PROGRAM"), ghostty: await $.env.get("GHOSTTY_RESOURCES_DIR"), wezterm: await $.env.get("WEZTERM_EXECUTABLE"), kitty: await $.env.get("KITTY_WINDOW_ID") })
     },
-    device: { read: () => readDevice(claude) },
+    device: { read: async () => readDevice(claude, await cmodStore(claude)) },
     cmod: { call: (input) => $.cmod.call(input) }
   };
   const [, answer] = await settledAfterAbort(Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]), passOn.signal);
@@ -11477,6 +11713,9 @@ function routeFailure(_$, eventInput, passOn) {
 }
 var withCaller = (eventInput, next) => ({ ...eventInput, caller: next.origin.plugin });
 var withoutCaller = (next) => (passed) => next(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== "caller")));
+async function hideHotkey(_$, eventInput, passOn) {
+  return { ...await passOn(eventInput), isHidden: true };
+}
 function routeCallToMod(_$, eventInput, passOn) {
   return lifecycle.route("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn.signal);
 }
@@ -11485,7 +11724,7 @@ function routeCallFailure(_$, eventInput, passOn) {
 }
 var serveCmodPlugin = ({ claude, router, store, project, report, clear, tellRefusedPress, parts, markdownIn, tellStylers }) => {
   const conversations = serveConversations({ claude, router, store, project, report, clear, sessionCode: (name) => served.providers(name) });
-  const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn });
+  const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn, tellStore: (part) => conversations.tellStore(part) });
   const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload), tellProviders: (names) => conversations.tellProviders(names) });
   conversations.serveUi(served.ui);
   conversations.onTurnClosed((turn) => served.turnClosed(turn));
@@ -11494,7 +11733,6 @@ var serveCmodPlugin = ({ claude, router, store, project, report, clear, tellRefu
 function registerCmodPlugin(addHook, definition, options) {
   registerHooks(addHook, definition, options, serveCmodPlugin);
   addHook("ui.render", { component: ["AbovePrompt", "PromptHint", "SessionMode", "Spinner", "TurnDuration", "Pane"] }, routeToMod).catch(routeFailure);
-  addHook("command.describe", { command: /--/ }, routeToMod).catch(routeFailure);
   addHook("session.append", routeToMod).catch(routeFailure);
   addHook("session.receive", routeToMod).catch(routeFailure);
   addHook("agent.spawn", routeToMod).catch(routeFailure);
@@ -11547,6 +11785,10 @@ function registerHooks(addHook, definition, options, serve) {
   addHook("ui.close", routeToMod).catch(routeFailure);
   addHook("cmod.call", { to: definition.name }, routeCallToMod).catch(routeCallFailure);
   addHook("session.compact", routeToMod).catch(routeFailure);
+  const hotkeyCommands = Object.keys(definition.hotkeys ?? {}).map((hotkey) => hotkeyCommand(definition.name, hotkey));
+  if (hotkeyCommands.length > 0) {
+    addHook("command.describe", { command: hotkeyCommands }, hideHotkey).catch(hideHotkey);
+  }
 }
 
 // node_modules/@cmodjs/core/jobs/program.js
@@ -11557,7 +11799,7 @@ var retryWithinMs = 1000;
 function program(options) {
   const { command, environment, singleInstance = false, isService = false, isWebApp = false, processType } = options;
   return ({ mod, announce, reserveName }) => {
-    const { claude, report, spawnCmod, isInstalledCopy, watches, interfaces } = engineOf(mod);
+    const { claude, report, spawnCmod, isInstalledCopy, interfaces } = engineOf(mod);
     const [executable] = command;
     if (executable === undefined)
       throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`);
@@ -11677,8 +11919,9 @@ function program(options) {
       isFollowing = true;
       if (!isWatching) {
         isWatching = true;
-        watches.add([file], () => following(track(file)));
-        claude.clock.every(leaseCheckMs, () => following(checkLease(file)));
+        const programs = interfaces.serveProvider(programsInterface);
+        programs.onChange({ mod: mod.name, program: ft(executable) }, () => following(track(file)));
+        claude.clock.every(leaseCheckMs, () => following(checkLease(file).then(() => isFollowing && state === "starting" ? track(file) : undefined)));
       }
       await track(file);
     };
@@ -11864,7 +12107,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -11885,7 +12128,7 @@ var preferenceTitles = {
   showsInstalledModErrors: "Show errors from installed mods",
   servesWebUi: "Show the Sidebar in your browser",
   servesTailnet: "Open web apps from your other devices, through Tailscale",
-  roundsBarEnds: "Round the ends of bars in every terminal, for a font with Nerd Font symbols. A session uses it once it reloads."
+  roundsBarEnds: "Round the ends of bars in every terminal, for a font with Nerd Font symbols."
 };
 var viewSection = "view:";
 var panelColumns = 4;
@@ -11987,6 +12230,7 @@ async function writePreference(mod, key, isOn) {
   await fs.write(path, `${JSON.stringify({ ...isObject(saved) ? saved : {}, [key]: isOn }, null, 2)}
 `);
   await fs.write(storeChangedPath(store), "");
+  engineOf(mod).storeChanged("preferences");
 }
 function timeOf(at) {
   const date = new Date(at);
@@ -12023,26 +12267,19 @@ function widgetsLayout(current, widgets) {
   return Box({ flexDirection: "column", gap: 1, children: [...groups, ...actions] });
 }
 function settings2(mod) {
-  return (pane, changed) => {
+  return (pane, changed, isShown) => {
     const { parts, widgets, claude } = engineOf(mod);
     if (parts === undefined || widgets === undefined)
       throw new Error("cmod draws no Settings, because the cmod plugin started without its pages and widgets.");
     const read = (path) => fs.read(path).catch(ifMissing(undefined));
+    const roots = new Map;
     const viewOf = async (store, name, root, version, isOn, rows, combos) => {
       const readIn = async (file) => root === undefined ? undefined : read(`${root}/${file}`);
       const manifest = await readIn("package.json").then((text) => text === undefined ? undefined : JSON.parse(text));
       const plugin = await readIn(".claude-plugin/plugin.json").then((text) => text === undefined ? undefined : JSON.parse(text));
       const steps = isObject(manifest) ? readSteps(manifest) : undefined;
-      const ask = async (method) => {
-        if (name === mod.name)
-          return [];
-        const answer = await claude.cmod.call({ to: name, method, input: null }).catch((error) => {
-          if (!isStillInstalling(name, error))
-            claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`);
-          return;
-        });
-        return Array.isArray(answer) ? answer : [];
-      };
+      const known = mod.state.memory.views.find((each) => each.name === name);
+      roots.set(name, root);
       return {
         name,
         version,
@@ -12050,11 +12287,26 @@ function settings2(mod) {
         isOn,
         hotkeys: Object.entries(steps?.hotkeys ?? {}).map(([hotkey, { title }]) => ({ name: hotkey, title, combo: combos.get(hotkeyCommand(name, hotkey)) })),
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
-        pendingSteps: await ask(pendingStepsMethod),
-        changelog: changelogSections(await readIn("CHANGELOG.md") ?? ""),
+        pendingSteps: known?.pendingSteps ?? [],
+        changelog: known?.changelog ?? [],
         isService: (await fs.list(serviceFolder(store, name)).catch(ifMissing([]))).some((entry) => entry.name.endsWith(".json")),
         webApps: await webAppsOf(store, name)
       };
+    };
+    const pendingStepsOf = async ({ name, isOn }) => {
+      if (name === mod.name || !isOn)
+        return [];
+      const answer = await claude.cmod.call({ to: name, method: pendingStepsMethod, input: null }).catch((error) => {
+        if (!isStillInstalling(name, error) && !isNotInstalled(name, error))
+          claude.ui.warn(`settings:${name}:${pendingStepsMethod}`, `cmod: ${name} did not answer ${pendingStepsMethod}: ${messageOf(error)}`);
+        return;
+      });
+      return Array.isArray(answer) ? answer : [];
+    };
+    const fill = async (view) => {
+      const root = roots.get(view.name);
+      const [pendingSteps, changelog] = await Promise.all([pendingStepsOf(view), root === undefined ? undefined : read(`${root}/CHANGELOG.md`)]);
+      mod.state.memory.views = mod.state.memory.views.map((each) => each.name === view.name ? { ...each, pendingSteps, changelog: changelogSections(changelog ?? "") } : each);
     };
     const webAppsOf = async (store, name) => {
       const folder = tailnetFolder(store, name);
@@ -12077,11 +12329,20 @@ function settings2(mod) {
       const views = await Promise.all(loaded.map(({ name, root, version }) => viewOf(store, name, root, version, !turnedOff.includes(name), rows, combos)));
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))];
     };
+    let isStale = true;
+    const fillAll = async () => {
+      isStale = false;
+      await Promise.all(mod.state.memory.views.map(fill));
+    };
     const refresh = async () => {
       const failed = (what) => (error) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`);
       await load().then((views) => void (mod.state.memory.views = views), failed("The mods"));
       await readLog(mod).then((log) => void (mod.state.memory.log = log), failed("The Log"));
       await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed("The preferences"));
+      if (isShown())
+        await fillAll();
+      else
+        isStale = true;
     };
     refresh();
     const act = (task) => task().then((notice) => {
@@ -12236,6 +12497,8 @@ function settings2(mod) {
         const { views } = mod.state.memory;
         if (views.length === 0)
           return Text({ dimColor: true, children: mod.state.session.notice ?? "Reading your mods…" });
+        if (isStale && isShown())
+          fillAll();
         const view = selectedView();
         return view === undefined ? modList(views) : detail(view, columns, isFocused, surface);
       },
@@ -12269,7 +12532,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12458,7 +12721,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -12632,7 +12895,7 @@ function sidebar(mod, settings, history, openInBrowser) {
     },
     onClose: () => tell()
   });
-  const view = settings(pane, () => tell());
+  const view = settings(pane, () => tell(), () => pane.isShown && mod.state.session.shown === settingsTab || settingsPart.isShown);
   let dashboardView;
   const hasDashboard = () => {
     const layout = widgets.layout();
@@ -12652,7 +12915,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   placeDashboard();
   widgets.onChange(placeDashboard);
   const historyPart = mod.views.add({ id: historyTab.id, title: historyView.title, render: () => drawHistory() });
-  mod.views.add({ id: settingsTab, title: "Settings", render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) });
+  const settingsPart = mod.views.add({ id: settingsTab, title: "Settings", render: (_current, { columns, isFocused, surface }) => view.draw(columns, isFocused, surface) });
   const isFixedTab = (name, id) => name === mod.name && (id === dashboardTab || id === settingsTab);
   const placeOf = (name, id) => declaredOf(name)?.views.find((each) => each.id === id)?.place;
   const addTab = (opened) => {
@@ -12744,7 +13007,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -12774,7 +13037,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12805,10 +13068,12 @@ var reloadToast = "reload";
 var oldReloadKey = /^cmod:(hiding-reload|versions-before-reload):/;
 var shownChanges = 3;
 async function tipOf(mod) {
-  const messages = await engineOf(mod).claude.session.messages();
+  const messages = await engineOf(mod).claude.session.messages({ last: newestMessages });
+  if (!Array.isArray(messages))
+    throw new Error(`Claude Code did not give the newest messages: ${messages.deny}`);
   if (messages.length === 0)
     return null;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([messages.length, messages.slice(-newestMessages)])));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(messages)));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 var cmodPlugin = defineMod({
@@ -13152,13 +13417,16 @@ var cmodPlugin = defineMod({
     };
     const startWatching = () => void watchIfLinked().catch((error) => report({ id: "watch", message: "Could not read which mods are linked", error }));
     startWatching();
-    fs.onChange({ path: [storeChangedPath(store), ...pluginsFile === undefined ? [] : [pluginsFile]] }, ({ path }) => {
-      startWatching();
-      checkPlugins({ isForced: false });
-      if (path === pluginsFile)
-        return checkChanges();
-      followBuildFailures();
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod), shown.refreshSettings()]);
+    engineOf(mod).onStoreChange((part) => {
+      const isAll = part === undefined;
+      if (isAll || part === "plugins" || part === "links") {
+        startWatching();
+        checkPlugins({ isForced: false });
+      }
+      if (isAll || part === "buildFailures")
+        followBuildFailures();
+      const reads = [isAll || part === "widgets" ? widgets.reload() : undefined, isAll || part === "plugins" || part === "links" ? checkChanges() : undefined, isAll || part === "preferences" ? refreshPreferences(mod) : undefined, isAll || part === "preferences" ? shown.refreshSettings() : undefined];
+      Promise.all(reads).catch((error) => report({ id: "store", message: "Could not read the cmod store again", error }));
     });
     settings.onChange({ source: "user" }, () => checkChanges());
     sessions.current.onPrompt(() => checkChanges());
@@ -13276,7 +13544,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-t1FdSR/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-VMdgoE/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
