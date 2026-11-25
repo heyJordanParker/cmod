@@ -596,11 +596,15 @@ test("a session lists another device's sessions with that device, and a message 
   const mac = await deviceHome('mac', '11111111-1111-1111-1111-111111111111')
   await listsDevices(mac, devbox)
   await sessionOn(mac.home).start()
+  const nextMailChange = await serveChanges(devbox.home).listen('cmod/Sessions', { session: 'devbox-1', part: 'mail' })
 
   const listed = await sessions.list({ everyProject: true })
-  await listed.find((each) => each.id === 'devbox-1')?.send({ type: 'prompt', text: 'Run it again' })
+  const sent = await listed.find((each) => each.id === 'devbox-1')?.send({ type: 'prompt', text: 'Run it again' })
+  await nextMailChange()
+  await nextMailChange()
 
   expect(listed.map((each) => [each.id, each.device])).toEqual([['devbox-1', devbox.device]])
+  expect(sent).toEqual({ id: 1, state: 'queued' })
   expect(readFileSync(join(devbox.home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'devbox-1', '--', 'Run it again'])
 })
 

@@ -134,7 +134,7 @@ declare module 'claude-code' {
         visit(session: string, at?: string): void
         delete(session: string, input?: null, context?: { project?: string; caller?: string }): void
       }
-      events: { Change: { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' } }
+      events: { Change: { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' | 'mail' } }
     }
     'cmod/Store': {
       methods: { changed(part: 'plugins' | 'widgets' | 'buildFailures' | 'preferences' | 'links'): void }

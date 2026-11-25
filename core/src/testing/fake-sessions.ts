@@ -251,7 +251,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       if (action === 'send') {
         const from = isObject(input['from']) ? String(input['from']['session']) : input['as'] === Session ? current : undefined
         sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(input['as'] === Person ? { as: Person } : {}), ...(from === undefined ? {} : { from }) })
-        return task === undefined ? { id: sent.length, state: 'delivered' } : null
+        return task === undefined ? { id: sent.length, state: 'queued' } : null
       }
       const text = (key: string) => (typeof input[key] === 'string' ? input[key] : undefined)
       const title = text('title') ?? ''

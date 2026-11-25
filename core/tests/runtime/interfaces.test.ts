@@ -1009,17 +1009,19 @@ test("a session lists another device's sessions over the message channel, and a 
 
 test('cmod serve acts on no session it does not hold while another device runs it, so a message never starts a second copy there and is not stored here, and acts on one no device runs', async () => {
   const resumed: unknown[] = []
+  const watched = watchedMail()
   const running = { id: 'shared', title: 'Release', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning: true, device: devboxDevice }
-  const devices = linkedDevices({ ...noSessions, session: (id) => (id === 'shared' ? running : undefined) }, { ...noSessions, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action) => void resumed.push([session, action]) })
+  const devices = linkedDevices({ ...noSessions, session: (id) => (id === 'shared' ? running : undefined) }, { ...noSessions, ...watched.mailbox, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action) => void resumed.push([session, action]) })
   const session = devices.connect(devices.mac, 'boat')
   await devices.linked()
 
   const shared = await session.client.request('cmod/Sessions.send', ['shared', { type: 'prompt', text: 'Go on' }, {}]).catch((error: unknown) => error as RpcError)
   const ended = await session.client.request('cmod/Sessions.send', ['ended', { type: 'prompt', text: 'Go on' }, {}])
+  await watched.deliveredTimes(1)
 
   expect([(shared as RpcError).code, (shared as RpcError).message]).toEqual([rpcCodes.notHeld, 'Session shared runs on devbox, so this computer takes no send for it.'])
   expect(await devices.mac.computer.mail('shared', {})).toEqual([])
-  expect(ended).toEqual({ id: 1, state: 'delivered' })
+  expect(ended).toEqual({ id: 1, state: 'queued' })
   expect(resumed).toEqual([['ended', 'send']])
   await devices.close()
 })
@@ -1058,13 +1060,29 @@ function heldBy(fetch: HttpFetch, session: string, act: (input: unknown) => unkn
   }
 }
 
+function watchedMail() {
+  const kept = memoryMail()
+  const waiting: { readonly count: number; readonly resolve: () => void }[] = []
+  let count = 0
+  const delivered = async (id: number, at: string) => {
+    await kept.delivered(id, at)
+    count += 1
+    for (const each of waiting.filter((wait) => count >= wait.count)) each.resolve()
+  }
+  return {
+    mailbox: { ...kept, delivered } satisfies Mailbox,
+    deliveredTimes: (times: number) => new Promise<void>((resolve) => (count >= times ? resolve() : waiting.push({ count: times, resolve }))),
+  }
+}
+
 function appOn(fetch: HttpFetch) {
   const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
   return { app, send: (session: string, message: object, context: object = {}) => app.request('cmod/Sessions.send', [session, message, context]) }
 }
 
-test('a send to a session a cmod plugin holds stores the mail, delivers it labelled with its sender through the act that cmod plugin answers, and answers delivered', async () => {
-  const { serve, fetch, computer, reported } = servedComputer()
+test('a send to a session a cmod plugin holds stores the mail, answers queued, and delivers it labelled with its sender through the act that cmod plugin answers', async () => {
+  const watched = watchedMail()
+  const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox } })
   const worker = heldBy(fetch, 'worker')
   await worker.hold()
   const { app, send } = appOn(fetch)
@@ -1072,11 +1090,12 @@ test('a send to a session a cmod plugin holds stores the mail, delivers it label
   const sent = await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: planner })
   const answered = await send('worker', { type: 'note', text: 'The deploy key rotated.', from: planner, replyTo: 1 })
   const bare = await send('worker', { type: 'prompt', text: 'Ship it.', as: 'person' })
+  await watched.deliveredTimes(3)
 
   expect([sent, answered, bare]).toEqual([
-    { id: 1, state: 'delivered' },
-    { id: 2, state: 'delivered' },
-    { id: 3, state: 'delivered' },
+    { id: 1, state: 'queued' },
+    { id: 2, state: 'queued' },
+    { id: 3, state: 'queued' },
   ])
   expect(worker.acted).toEqual([
     ['send', { type: 'prompt', text: fromPlanner(1, 'Rerun the deploy') }],
@@ -1094,8 +1113,32 @@ test('a send to a session a cmod plugin holds stores the mail, delivers it label
   serve.close()
 })
 
+test('a send to a session whose cmod plugin answers its act only once the running turn ends, as Claude Code holds a prompt until then, answers queued without waiting on the turn, and the mail turns delivered when the act answers', async () => {
+  const watched = watchedMail()
+  const { serve, fetch, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox } })
+  let endTurn = () => undefined as void
+  const worker = heldBy(fetch, 'worker', () => new Promise<null>((resolve) => (endTurn = () => resolve(null))))
+  await worker.hold()
+  const { app, send } = appOn(fetch)
+
+  const sent = await send('worker', { type: 'prompt', text: 'Rerun the deploy' })
+  await worker.actedTimes(1)
+  const duringTurn = (await watched.mailbox.mail('worker', {})).map((mail) => mail.deliveredAt === undefined)
+  endTurn()
+  await watched.deliveredTimes(1)
+
+  expect(sent).toEqual({ id: 1, state: 'queued' })
+  expect(duringTurn).toEqual([true])
+  expect((await watched.mailbox.mail('worker', {})).map((mail) => mail.deliveredAt === undefined)).toEqual([false])
+  expect(reported).toEqual([])
+  await app.close()
+  await worker.plugin.close()
+  serve.close()
+})
+
 test("a send to a session that runs with no cmod plugin holding it stays queued, and its cmod plugin's $/hold delivers each queued mail once, in the order it was sent", async () => {
-  const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, session: (id) => (id === 'worker' ? sessionNamed('worker', true) : undefined) } })
+  const watched = watchedMail()
+  const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox, session: (id) => (id === 'worker' ? sessionNamed('worker', true) : undefined) } })
   const { app, send } = appOn(fetch)
 
   const queued = [await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: planner }), await send('worker', { type: 'note', text: 'The deploy key rotated.' })]
@@ -1104,12 +1147,13 @@ test("a send to a session that runs with no cmod plugin holding it stays queued,
   await worker.actedTimes(2)
   await worker.hold()
   const after = await send('worker', { type: 'prompt', text: 'Ship it.' })
+  await watched.deliveredTimes(3)
 
-  expect(queued).toEqual([
+  expect([...queued, after]).toEqual([
     { id: 1, state: 'queued' },
     { id: 2, state: 'queued' },
+    { id: 3, state: 'queued' },
   ])
-  expect(after).toEqual({ id: 3, state: 'delivered' })
   expect(worker.acted).toEqual([
     ['send', { type: 'prompt', text: fromPlanner(1, 'Rerun the deploy') }],
     ['send', { type: 'note', text: 'The deploy key rotated.' }],
@@ -1123,7 +1167,8 @@ test("a send to a session that runs with no cmod plugin holding it stays queued,
 })
 
 test("a mail whose holder's act fails stays queued, holds back the session's later mail, is tried again at each send and $/hold, reports once for its id, and the holder's next accepting $/hold delivers both in order", async () => {
-  const { serve, fetch, computer, reported } = servedComputer()
+  const watched = watchedMail()
+  const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox } })
   let refuses = true
   const worker = heldBy(fetch, 'worker', () => {
     if (refuses) throw new Error('Claude Code dropped the prompt: the session is closing')
@@ -1141,14 +1186,15 @@ test("a mail whose holder's act fails stays queued, holds back the session's lat
   await worker.hold()
   await worker.actedTimes(5)
   const after = await send('worker', { type: 'prompt', text: 'Tag it.' })
+  await watched.deliveredTimes(3)
 
-  expect([sent, held]).toEqual([
+  expect([sent, held, after]).toEqual([
     { id: 1, state: 'queued' },
     { id: 2, state: 'queued' },
+    { id: 3, state: 'queued' },
   ])
   expect(kept).toEqual([1, 2])
   expect(reported).toEqual(['Error: Claude Code dropped the prompt: the session is closing'])
-  expect(after).toEqual({ id: 3, state: 'delivered' })
   expect(worker.acted.map((each) => (each as readonly [string, { readonly text: string }])[1].text)).toEqual(['Rerun the deploy', 'Rerun the deploy', 'Rerun the deploy', 'Rerun the deploy', 'Ship it.', 'Tag it.'])
   expect(await computer.queued('worker')).toEqual([])
   await app.close()
@@ -1180,13 +1226,15 @@ test('a note queued before a cmod serve restart reaches the holder with the mod 
 
 test('a send to a session that ended resumes it with the labelled text, marks the mail delivered, and a send to a session this computer has none of is not stored', async () => {
   const resumed: unknown[] = []
-  const { serve, fetch, computer } = servedComputer({}, {}, { computer: { ...noSessions, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action, input) => void resumed.push([session, action, input]) } })
+  const watched = watchedMail()
+  const { serve, fetch, computer } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action, input) => void resumed.push([session, action, input]) } })
   const { app, send } = appOn(fetch)
 
   const sent = await send('ended', { type: 'prompt', text: 'Run it again', from: planner })
   const gone = await send('gone', { type: 'prompt', text: 'Run it again' }).catch((error: unknown) => error as RpcError)
+  await watched.deliveredTimes(1)
 
-  expect(sent).toEqual({ id: 1, state: 'delivered' })
+  expect(sent).toEqual({ id: 1, state: 'queued' })
   expect(resumed).toEqual([['ended', 'send', { type: 'prompt', text: fromPlanner(1, 'Run it again') }]])
   expect((await computer.mail('ended', {})).map((mail) => mail.deliveredAt === undefined)).toEqual([false])
   expect([(gone as RpcError).code, (gone as RpcError).message]).toEqual([rpcCodes.notHeld, 'No session gone on this computer.'])

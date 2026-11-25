@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { scripts, version } from '../package.json'
-import { cmod, cmodExecutable, cmodWith, deleteTemporaryHomes, servedChanges, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodExecutable, cmodWith, deleteTemporaryHomes, servedChanges, serveChanges, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 setDefaultTimeout(spawningTestLimitMs)
 const clients: RpcClient[] = []
@@ -69,7 +69,8 @@ async function servedHome(status: object = {}, served?: string) {
   const act = (action: string, session: string, input: unknown = null, context: object = {}) => client.request(`cmod/Sessions.${action}`, [session, input, { project: project(home), ...context }])
   const nextHeard = () => new Promise<unknown>((resolve) => void (hear = resolve))
   const stop = () => serving.child.kill()
-  return { home, folder, client, act, nextHeard, heardAll, stop, stopped: () => (stop(), serving.done), exited: serving.done }
+  const mailChanges = (session: string) => serveChanges(home).listen('cmod/Sessions', { session, part: 'mail' })
+  return { home, folder, client, act, nextHeard, heardAll, mailChanges, waitForOutput: serving.waitForOutput, stop, stopped: () => (stop(), serving.done), exited: serving.done }
 }
 
 test.concurrent('a running cmod serve exits 0 once cmod/Store tells that the plugins changed and a newer cmod is in the cmod store, so its service starts the newer one', async () => {
@@ -174,15 +175,18 @@ test.concurrent('cmod serve answers the cmod/SessionStore and cmod/Session names
 })
 
 test.concurrent('cmod serve resumes an ended session in the background on a message, keeps a visit in visited.json, and deletes an ended session whole', async () => {
-  const { home, folder, act, stop } = await servedHome()
+  const { home, folder, act, mailChanges, stop } = await servedHome()
+  const nextMailChange = await mailChanges('ended')
 
   const resumed = await act('send', 'ended', { type: 'prompt', text: 'Run it again' })
+  await nextMailChange()
+  await nextMailChange()
   await act('visit', 'ended', '2026-11-19T11:00:00.000Z')
   const visited = JSON.parse(readFileSync(join(home, '.local/share/cmod/visited.json'), 'utf8')) as unknown
   await act('delete', 'ended')
   stop()
 
-  expect(resumed).toEqual({ id: 1, state: 'delivered' })
+  expect(resumed).toEqual({ id: 1, state: 'queued' })
   expect(readFileSync(join(home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'ended', '--', 'Run it again'])
   expect(visited).toEqual({ ended: '2026-11-19T11:00:00.000Z' })
   expect([existsSync(join(home, folder, 'ended.jsonl')), existsSync(join(home, '.local/share/cmod/data/cmod/goals/ended.txt'))]).toEqual([false, false])
@@ -190,10 +194,11 @@ test.concurrent('cmod serve resumes an ended session in the background on a mess
 })
 
 test.concurrent('cmod serve starts no copy of a session Claude Code still runs, even while no record or cmod plugin says it runs, and keeps the message queued here, so no other device answers for the session', async () => {
-  const { home, folder, act, stopped } = await servedHome()
+  const { home, folder, act, waitForOutput, stopped } = await servedHome()
   await writeFiles(home, { [`${folder}/alive.jsonl`]: transcript('alive', project(home)) })
 
   const queued = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' })
+  await waitForOutput('Session alive runs')
   const { stderr } = await stopped()
 
   expect(queued).toEqual({ id: 1, state: 'queued' })
@@ -202,14 +207,21 @@ test.concurrent('cmod serve starts no copy of a session Claude Code still runs, 
 })
 
 test.concurrent('two messages that reach an ended session at once resume it once, and the later one stays queued for the resumed copy', async () => {
-  const { home, act, stop } = await servedHome()
+  const { home, client, act, mailChanges, stop } = await servedHome()
+  const nextMailChange = await mailChanges('ended')
 
   const answers = (await Promise.all([act('send', 'ended', { type: 'prompt', text: 'Run it again' }), act('send', 'ended', { type: 'prompt', text: 'Run it again' })])) as readonly { readonly id: number; readonly state: string }[]
+  for (let change = 0; change < 3; change += 1) await nextMailChange()
+  const mail = await client.request<readonly { readonly id: number; readonly deliveredAt?: string }[]>('cmod/Sessions.read', ['ended', 'mail', {}])
   stop()
 
   expect(answers.map(({ id, state }) => [id, state]).toSorted()).toEqual([
-    [1, 'delivered'],
+    [1, 'queued'],
     [2, 'queued'],
+  ])
+  expect(mail.map((each) => [each.id, typeof each.deliveredAt])).toEqual([
+    [1, 'string'],
+    [2, 'undefined'],
   ])
   expect(readFileSync(join(home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'ended', '--', 'Run it again'])
 })
@@ -219,19 +231,21 @@ test.concurrent("a message to a running session no cmod plugin holds survives a 
   const queued = await first.act('send', 'older', { type: 'prompt', text: 'Go on', from: { session: '4b1e9c2a-7d3f-4e15-9a0b-2c6d8e1f3a57', title: 'Plan' } }, { caller: 'demo' })
   await first.stopped()
 
-  const { home, client, act, nextHeard, heardAll, stop } = await servedHome({}, first.home)
+  const { home, client, act, mailChanges, heardAll, stop } = await servedHome({}, first.home)
+  const nextMailChange = await mailChanges('older')
   const hold = () => client.request('$/hold', { session: 'older', project: project(home), cwd: project(home) })
-  const delivered = nextHeard()
   await hold()
-  await delivered
+  await nextMailChange()
   await hold()
   const after = await act('send', 'older', { type: 'note', text: 'Tests pass.' })
+  await nextMailChange()
+  await nextMailChange()
   const mail = await client.request<readonly { readonly id: number; readonly deliveredAt?: string }[]>('cmod/Sessions.read', ['older', 'mail', {}])
   stop()
 
   expect([queued, after]).toEqual([
     { id: 1, state: 'queued' },
-    { id: 2, state: 'delivered' },
+    { id: 2, state: 'queued' },
   ])
   expect(heardAll.map((each) => [(each as { readonly input: unknown }).input, (each as { readonly caller?: unknown }).caller])).toEqual([
     [{ type: 'prompt', text: '<cmod-message from="4b1e9c2a-7d3f-4e15-9a0b-2c6d8e1f3a57" title="Plan" reply="cmod sessions send 4b1e9c2a --reply-to 1">\nGo on\n</cmod-message>' }, 'demo'],

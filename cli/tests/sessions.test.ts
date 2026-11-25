@@ -4,7 +4,7 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { stoppedClock } from '@cmodjs/core/src/testing/fake-serve.js'
-import { cmodWith, deleteTemporaryHomes, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith, deleteTemporaryHomes, serveChanges, spawningTestLimitMs, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
 
 setDefaultTimeout(spawningTestLimitMs)
 const clients: RpcClient[] = []
@@ -26,6 +26,8 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
   expect(await serving.firstLine()).toBe(`unix:${join(home, '.local/share/cmod/serve.sock')}`)
   const socket = join(home, '.local/share/cmod/serve.sock')
   const acted: Acted[] = []
+  const waiting: { readonly session: string; readonly count: number; readonly resolve: () => void }[] = []
+  const actedOn = (session: string) => acted.filter((each) => each[0] === session).length
   for (const [session, answers] of Object.entries(held)) {
     const plugin = connectRpc({
       call: async (path, init) => {
@@ -36,6 +38,7 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
         if (method !== '$/act') throw new Error(`The fake cmod plugin answers no ${method}.`)
         const { action, input } = params as { readonly action: string; readonly input: unknown }
         acted.push([session, action, input])
+        for (const each of waiting.filter((wait) => actedOn(wait.session) >= wait.count)) each.resolve()
         return answers[action]?.(input) ?? null
       },
       clock: stoppedClock,
@@ -43,11 +46,12 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
     clients.push(plugin)
     await plugin.request('$/hold', { session, project: home, cwd: home })
   }
-  return { home, acted, stop: () => serving.child.kill() }
+  const actedTimes = (session: string, count: number) => new Promise<void>((resolve) => (actedOn(session) >= count ? resolve() : waiting.push({ session, count, resolve })))
+  return { home, acted, actedTimes, stop: () => serving.child.kill() }
 }
 
 test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, a send from inside Claude Code names that session as its sender, and read mail lists each mail with its state', async () => {
-  const { home, acted, stop } = await servedSessions({
+  const { home, acted, actedTimes, stop } = await servedSessions({
     worker: {},
     planner: {},
     stalled: {
@@ -57,11 +61,14 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
     },
   })
   await writeFiles(home, { [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/old.jsonl`]: `${JSON.stringify({ type: 'user', uuid: 'u1', sessionId: 'old', timestamp: '2026-11-20T10:00:00.000Z', cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } })}\n` })
+  const nextMailChange = await serveChanges(home).listen('cmod/Sessions', { session: 'worker', part: 'mail' })
 
   const fromOutside = await cmodWith(home, outside, 'sessions', 'send', 'worker', 'Rerun the deploy')
   const fromPlanner = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'planner' }, 'sessions', 'send', 'worker', 'Tests pass.', '--note')
   const answered = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'planner' }, 'sessions', 'send', 'worker', 'Merged.', '--reply-to', '1')
   const queued = await cmodWith(home, outside, 'sessions', 'send', 'stalled', 'Go on')
+  await actedTimes('stalled', 1)
+  for (let change = 0; change < 6; change += 1) await nextMailChange()
   const mail = await cmodWith(home, outside, 'sessions', 'read', 'mail', 'worker')
   const stopped = await cmodWith(home, outside, 'sessions', 'stop', 'worker')
   const ended = await cmodWith(home, outside, 'sessions', 'end', 'worker')
@@ -72,10 +79,10 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
   stop()
 
   expect([fromOutside, fromPlanner, answered, queued, stopped, ended, compacted, compactedHere, running, deleted]).toEqual([
-    { exitCode: 0, stdout: 'Delivered message 1 to session worker.\n', stderr: '' },
-    { exitCode: 0, stdout: 'Delivered message 2 to session worker.\n', stderr: '' },
-    { exitCode: 0, stdout: 'Delivered message 3 to session worker.\n', stderr: '' },
-    { exitCode: 0, stdout: "Queued message 4 for session stalled. Its cmod plugin has not reached cmod serve, which happens when Claude Code turns a session's mods off after its hooks worker crashes. It gets the message once the session is resumed.\n", stderr: '' },
+    { exitCode: 0, stdout: 'Sent message 1 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Sent message 2 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Sent message 3 to session worker. It arrives as soon as the session can take it, and cmod sessions read mail worker shows when.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Sent message 4 to session stalled. It arrives as soon as the session can take it, and cmod sessions read mail stalled shows when.\n', stderr: '' },
     { exitCode: 0, stdout: 'Stopped the turn of session worker.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker ends once its turn ends.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker compacts once its turn ends, and then carries on.\n', stderr: '' },
@@ -149,7 +156,7 @@ test.concurrent('cmod sessions list names the device each session runs on and wh
 test.concurrent('cmod sessions takes any unique start of a session id, refuses an ambiguous one by naming each match, and a send names the session it reached', async () => {
   const maintainer = '345d8519-d589-441b-947d-8f4fe33a0768'
   const fork = '345dfd97-1c2b-4d3e-8f40-516273849a0b'
-  const { home, acted, stop } = await servedSessions({ [maintainer]: {}, [fork]: {} })
+  const { home, acted, actedTimes, stop } = await servedSessions({ [maintainer]: {}, [fork]: {} })
   const transcript = (session: string, title: string, at: string) =>
     [
       { type: 'user', uuid: `${session}-u1`, sessionId: session, timestamp: at, cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Port the parser' } },
@@ -164,12 +171,28 @@ test.concurrent('cmod sessions takes any unique start of a session id, refuses a
   const sent = await cmodWith(home, outside, 'sessions', 'send', '345d85', 'Rerun the deploy')
   const ambiguous = await cmodWith(home, { ...outside, TZ: 'UTC' }, 'sessions', 'send', '345d', 'Rerun the deploy')
   const missing = await cmodWith(home, outside, 'sessions', 'send', 'abcdef12', 'Rerun the deploy')
+  await actedTimes(maintainer, 1)
   stop()
 
-  expect(sent).toEqual({ exitCode: 0, stdout: 'Delivered message 1 to session 345d8519 (php#).\n', stderr: '' })
+  expect(sent).toEqual({ exitCode: 0, stdout: 'Sent message 1 to session 345d8519 (php#). It arrives as soon as the session can take it, and cmod sessions read mail 345d8519 shows when.\n', stderr: '' })
   expect(ambiguous).toEqual({ exitCode: 1, stdout: '', stderr: `cmod sessions: 2 sessions start with 345d. Give more of the id:\n2026-11-25 11:00  ${fork}  php# fork  running  on ${device.name}\n2026-11-25 10:00  ${maintainer}  php#  running  on ${device.name}\n` })
   expect(missing).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod sessions: no session id starts with abcdef12. cmod sessions list --every-project lists the sessions.\n' })
   expect(acted).toEqual([[maintainer, 'send', { type: 'prompt', text: 'Rerun the deploy' }]])
+})
+
+test.concurrent('a session Claude Code records as running before cmod indexed any transcript of it is listed with every project, and its id start reaches it', async () => {
+  const started = 'b2349836-f62a-4c0c-9168-42dfcd23b400'
+  const { home, acted, actedTimes, stop } = await servedSessions({ [started]: {} })
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: started, cwd: home, procStart: await startOf(process.pid), name: 'Upgrade', status: 'busy', startedAt: Date.parse('2026-11-25T10:00:00.000Z') }) })
+
+  const listed = await cmodWith(home, outside, 'sessions', 'list', '--every-project', '--json')
+  const sent = await cmodWith(home, outside, 'sessions', 'send', 'b2349836', 'Rerun the deploy')
+  await actedTimes(started, 1)
+  stop()
+
+  expect([listed.exitCode, listed.stderr, (JSON.parse(listed.stdout) as readonly { readonly id: string; readonly title: string; readonly cwd: string; readonly startedAt: string; readonly isRunning: boolean; readonly status?: string }[]).map(({ id, title, cwd, startedAt, isRunning, status }) => ({ id, title, cwd, startedAt, isRunning, status }))]).toEqual([0, '', [{ id: started, title: 'Upgrade', cwd: home, startedAt: '2026-11-25T10:00:00.000Z', isRunning: true, status: 'busy' }]])
+  expect(sent).toEqual({ exitCode: 0, stdout: 'Sent message 1 to session b2349836 (Upgrade). It arrives as soon as the session can take it, and cmod sessions read mail b2349836 shows when.\n', stderr: '' })
+  expect(acted).toEqual([[started, 'send', { type: 'prompt', text: 'Rerun the deploy' }]])
 })
 
 test.concurrent("cmod terminal reads, types into, and shows a session's terminal through the program that provides cmod/Terminal", async () => {

@@ -94,10 +94,11 @@ computer, through an index of its own that lives only while the command runs,
 so cmod's own index of this computer's conversations never lists it.
 
 send sends the session a prompt, which it answers as its next turn, or with
---note a note it reads with its next prompt, and prints whether it delivered or
-queued the message, with its id, and the start of the id and the title of the
-session it reached. cmod serve stores the message before it delivers it, so a
-session whose cmod plugin does not reach cmod serve, as when Claude Code turns
+--note a note it reads with its next prompt, and prints the message's id and the
+start of the id and the title of the session it reached once cmod serve stored
+the message, without waiting on the session. The session takes it as soon as no
+turn runs, and read mail shows when it did. A session whose cmod plugin does
+not reach cmod serve, as when Claude Code turns
 its mods off after its hooks worker crashes, gets it once the session is
 resumed, even after a restart. Inside Claude Code the mail
 goes from this session, and arrives labelled with this session's id and title
@@ -267,11 +268,10 @@ async function onServe(script: Script, command: string, rest: readonly string[],
     const session = await resolved(given)
     const reached = await ask<SessionData | undefined>(conversationMethods.session, { session })
     const from = own === undefined ? {} : { from: { session: own, title: (await ask<SessionData>(conversationMethods.session, { session: own })).title } }
-    const receipt = ((await act(session, 'send', { type: values['note'] === true ? Note : Prompt, text, ...from, ...replyTo })) ?? { state: 'delivered' }) as SendReceipt
+    const receipt = (await act(session, 'send', { type: values['note'] === true ? Note : Prompt, text, ...from, ...replyTo })) as SendReceipt | null
     const named = `session ${session.slice(0, 8)}${reached === undefined || reached.title === '' ? '' : ` (${reached.title})`}`
-    const message = receipt.id === undefined ? 'the message' : `message ${receipt.id}`
-    const queued = `Queued ${message} for ${named}. Its cmod plugin has not reached cmod serve, which happens when Claude Code turns a session's mods off after its hooks worker crashes. It gets the message once the session is resumed.`
-    process.stdout.write(`${receipt.state === 'delivered' ? `Delivered ${message} to ${named}.` : queued}\n`)
+    const message = receipt?.id === undefined ? 'the message' : `message ${receipt.id}`
+    process.stdout.write(`Sent ${message} to ${named}. It arrives as soon as the session can take it, and cmod sessions read mail ${session.slice(0, 8)} shows when.\n`)
     return 0
   }
   if (command === 'start' && rest.length === 1) {

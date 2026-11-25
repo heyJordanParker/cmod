@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { dataFolder, devicePath, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
 import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { measureDevice, MissingMachineId } from '@cmodjs/core/src/runtime/device.js'
@@ -128,15 +128,21 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         const [visits, here] = await Promise.all([readVisits(), device])
         const project = typeof scope['project'] === 'string' ? scope['project'] : undefined
         const records = new Map(runningEntries().map((entry) => [entry.session, entry]))
-        const listed = await index.listSessions({ project: project ?? '', everyProject: scope['everyProject'] === true || project === undefined, since: typeof scope['since'] === 'string' ? scope['since'] : undefined, held: [...told.keys()], ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) })
-        return listed.map((session) => sessionData(session, here, visits, records, told))
+        const everyProject = scope['everyProject'] === true || project === undefined
+        const since = typeof scope['since'] === 'string' ? scope['since'] : ''
+        const listed = await index.listSessions({ project: project ?? '', everyProject, since, held: [...told.keys()], ...(typeof scope['running'] === 'boolean' ? { running: scope['running'] } : {}) })
+        const isInScope = (session: SessionData) => (everyProject || session.cwd === project || session.cwd.startsWith(`${project}${sep}`)) && session.startedAt >= since
+        const unindexed = scope['running'] === false ? [] : [...records.values()].filter((entry) => !listed.some((session) => session.id === entry.session)).map(recordedSession).filter(isInScope)
+        return [...unindexed, ...listed].map((session) => sessionData(session, here, visits, records, told))
       },
       async session(session, holding, told) {
         const [visits, here] = await Promise.all([readVisits(), device])
         const held = holding(session)
-        const found = (await index.getSession({ session, project: held?.project ?? '', held: [...told.keys()] })) ?? (held === undefined ? undefined : { id: session, title: '', project: held.project, cwd: held.cwd, model: '', startedAt: '', lastAt: '', isRunning: true })
+        const records = new Map(runningEntries().map((entry) => [entry.session, entry]))
+        const record = records.get(session)
+        const found = (await index.getSession({ session, project: held?.project ?? '', held: [...told.keys()] })) ?? (record === undefined ? undefined : recordedSession(record)) ?? (held === undefined ? undefined : { id: session, title: '', project: held.project, cwd: held.cwd, model: '', startedAt: '', lastAt: '', isRunning: true })
         if (found === undefined) return undefined
-        return sessionData(found, here, visits, new Map(runningEntries().map((entry) => [entry.session, entry])), told)
+        return sessionData(found, here, visits, records, told)
       },
       search(text, options) {
         const project = typeof options['project'] === 'string' ? options['project'] : undefined
@@ -325,6 +331,11 @@ function wantsMessages({ matcher }: Pick<Listening, 'matcher'>): boolean {
 
 function runsUnreached(session: string, action: string): Error {
   return new Error(`Session ${session} runs, but no cmod plugin in it reaches cmod serve, so it takes no ${action}, and cmod starts no copy of it. Run /reload-plugins in it.`)
+}
+
+function recordedSession(entry: RunningEntry): SessionData {
+  const startedAt = entry.startedAt === undefined ? '' : new Date(entry.startedAt).toISOString()
+  return { id: entry.session, title: entry.name ?? '', project: entry.cwd, cwd: entry.cwd, model: '', startedAt, lastAt: startedAt, isRunning: true }
 }
 
 function recordedStatus(entry: RunningEntry | undefined): Pick<SessionData, 'status' | 'waitingFor'> {

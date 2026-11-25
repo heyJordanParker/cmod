@@ -1269,7 +1269,7 @@ test("a send to another running session reaches cmod and resolves its receipt, a
     { session: 'older', type: Prompt, text: 'Switch to build mode.', as: Person },
     { session: 'older', type: Prompt, text: 'Merged.', from: 'test-session' },
   ])
-  expect(receipts).toEqual([{ id: 1, state: 'delivered' }, { id: 2, state: 'delivered' }, { state: 'delivered' }])
+  expect(receipts).toEqual([{ id: 1, state: 'queued' }, { id: 2, state: 'queued' }, { state: 'delivered' }])
   expect(failure).toBe('other: session test-session cannot send as itself to itself.')
   expect(tested.shown.prompts).toEqual(['Build mode is on.'])
 })

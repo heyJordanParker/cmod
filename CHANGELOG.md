@@ -4,6 +4,10 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Fixed
+- `send` to another session and `cmod sessions send` answer as soon as `cmod serve` stored the message, as an SMTP server does, where they waited for the session to take it, which lasts the whole of a running turn, as long as minutes, because Claude Code holds the prompt until then. `send` resolves `{ id, state: 'queued' }`, and `cmod sessions send` prints `Sent message <id> to session <id start> (<title>).`, where it printed `Delivered` or `Queued`. The mail turns `delivered` once the session takes it, which `cmod sessions read mail` shows, and `cmod/Sessions` tells a `Change` of `part: 'mail'` each time a session's mail is stored or delivered.
+- `cmod sessions list` lists a running session from the moment Claude Code records it, before cmod indexed its transcript, and every `cmod sessions` command reaches it by the start of its id, which failed with `no session id starts with` right after `cmod sessions start` printed the id.
+
 ## [8.10.0] - 2026-11-25
 
 ### Added

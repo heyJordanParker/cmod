@@ -74,7 +74,7 @@ export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPer
 
 export type VisitedAt = Readonly<Record<string, string>>
 
-export type SessionsChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' }
+export type SessionsChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' | 'mail' }
 
 export const storeInterface = 'cmod/Store'
 
@@ -500,9 +500,9 @@ export function routeSessions({
         }
         refused.delete(mail.id)
         await computer.delivered(mail.id, new Date(now()).toISOString())
+        changed({ session, part: 'mail' })
         done.push(mail.id)
       }
-      return done
     })
 
   const unheldSession = async (session: string) => {
@@ -518,8 +518,9 @@ export function routeSessions({
     const found = holderOf(session) === undefined ? await unheldSession(session) : undefined
     const caller = typeof context['caller'] === 'string' ? { caller: context['caller'] } : {}
     const id = await computer.queue({ session, ...sent, ...caller, sentAt: new Date(now()).toISOString() })
-    const done = await deliver(session, found?.isRunning === false)
-    return { id, state: done.includes(id) ? 'delivered' : 'queued' }
+    changed({ session, part: 'mail' })
+    void deliver(session, found?.isRunning === false).catch(report)
+    return { id, state: 'queued' }
   }
 
   const readMail = async (session: string, options: Readonly<Record<string, unknown>>) => {
