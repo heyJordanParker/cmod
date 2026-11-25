@@ -87,8 +87,10 @@ export async function checkoutFiles(folder: string): Promise<string[]> {
   return (await gitFiles(folder, '--cached', '--others', '--exclude-standard')) ?? filesIn(folder)
 }
 
-export function changesOf(folder: string, observed: Observed): Map<string, number> {
-  return new Map([...observed].map(([path, stamp]) => [relative(folder, path), stamp?.modifiedMs ?? Date.now()]))
+export type FileChange = { readonly at: number; readonly isNew: boolean }
+
+export function changesOf(folder: string, observed: Observed): Map<string, FileChange> {
+  return new Map([...observed].map(([path, stamp]) => [relative(folder, path), { at: stamp?.modifiedMs ?? Date.now(), isNew: stamp?.isNew ?? false }]))
 }
 
 export async function withoutIgnored(folder: string, files: readonly string[]): Promise<string[]> {
@@ -108,7 +110,7 @@ async function writeFailures(failures: ReadonlyMap<string, string>): Promise<voi
   await markStoreChanged('buildFailures')
 }
 
-export type LinkedChanges = { changed(folder: string, files: ReadonlyMap<string, number>): void; retry(folder: string): void; settled(): Promise<void>; close(): void }
+export type LinkedChanges = { changed(folder: string, files: ReadonlyMap<string, FileChange>): void; retry(folder: string): void; settled(): Promise<void>; close(): void }
 
 export function linkedChanges(
   failures: Map<string, string>,
@@ -118,7 +120,7 @@ export function linkedChanges(
   const failing = new Set<Timer>()
   const attempts = new Map<string, number>()
   const programsDue = new Set<string>()
-  const pending = new Map<string, Map<string, number>>()
+  const pending = new Map<string, Map<string, FileChange>>()
   const retriedAt = new Map<string, number>()
   const settling = new Map<string, Promise<void>>()
   const progress = { ...startProgress(process.stderr), note: () => {} }
@@ -126,10 +128,10 @@ export function linkedChanges(
   const settle = async (folder: string) => {
     const retried = retriedAt.get(folder)
     retriedAt.delete(folder)
-    const changed = pending.get(folder) ?? new Map<string, number>()
+    const changed = pending.get(folder) ?? new Map<string, FileChange>()
     pending.delete(folder)
     const tracked = changed.size === 0 ? undefined : await gitFiles(folder, '--cached')
-    const changes = [...changed].filter(([file]) => existsSync(join(folder, file)) || tracked === undefined || tracked.includes(file))
+    const changes = [...changed].filter(([file, { isNew }]) => existsSync(join(folder, file)) || (!isNew && (tracked === undefined || tracked.includes(file))))
     if (changes.length === 0 && retried === undefined) return
     const name = await nameOf(folder)
     let attempt = attempts.get(folder) ?? 0
@@ -140,7 +142,7 @@ export function linkedChanges(
       const output = program === undefined ? undefined : relative(plugin.root, resolve(program.folder, program.output))
       const sources = changes.filter(([file]) => output === undefined || relativePath(output, file) === undefined)
       if (sources.length === 0 && retried === undefined) return
-      at = Math.max(...sources.map(([, changedAt]) => changedAt), ...(retried === undefined ? [] : [retried]))
+      at = Math.max(...sources.map(([, change]) => change.at), ...(retried === undefined ? [] : [retried]))
       attempt += 1
       attempts.set(folder, attempt)
       if (program !== undefined && (retried !== undefined || (await buildReadsAny(program, sources.map(([file]) => join(plugin.root, file)))))) programsDue.add(folder)
@@ -176,8 +178,8 @@ export function linkedChanges(
 
   return {
     changed: (folder, files) => {
-      const known = pending.get(folder) ?? new Map<string, number>()
-      for (const [file, at] of files) known.set(file, at)
+      const known = pending.get(folder) ?? new Map<string, FileChange>()
+      for (const [file, change] of files) known.set(file, { at: change.at, isNew: known.get(file)?.isNew ?? change.isNew })
       pending.set(folder, known)
       settleSoon(folder)
     },

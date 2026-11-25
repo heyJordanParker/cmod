@@ -403,6 +403,19 @@ test('a change only to files git ignores, to node_modules, or to an untracked fi
   })
 })
 
+test("a file a build makes and deletes again counts nothing in a checkout that is no git repository, so a failing build never starts the next one", async () => {
+  const root = await demoCheckout({})
+  await onFakeClock(root, async ({ changes, marks, look }) => {
+    await changeAt(root, '.0000000000000001-00000000.bun-build', 'built\n')
+    await look()
+    await rm(join(root, '.0000000000000001-00000000.bun-build'))
+    await look()
+    jest.advanceTimersByTime(2000)
+    await changes.settled()
+    expect(marks).toEqual([])
+  })
+})
+
 test("a change only inside the program's output folder counts nothing, and a change outside it counts without a build", async () => {
   const home = await temporaryHome()
   const root = await linkedProgramMod(home)

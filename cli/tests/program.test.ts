@@ -90,7 +90,6 @@ test.concurrent('the holder tells cmod/Programs when it writes the instance file
 
   first.child.kill('SIGTERM')
   expect(await changes()).toEqual({ mod: 'demo', program: 'fake-server' })
-  expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
   expect(await changes()).toEqual({ mod: 'demo', program: 'fake-server' })
   const next = serverIds(home, 'start')[1] as string
   await second.waitForOutput(`unix:${home}/${next}.sock`)

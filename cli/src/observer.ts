@@ -4,7 +4,7 @@ import { ifMissing } from './files.js'
 
 export type Stamp = { readonly modifiedMs: number; readonly size: number }
 
-export type Observed = ReadonlyMap<string, Stamp | undefined>
+export type Observed = ReadonlyMap<string, (Stamp & { readonly isNew: boolean }) | undefined>
 
 export type Observer = { look(): Promise<void>; close(): void }
 
@@ -60,10 +60,10 @@ export function observe({ folders, isRecursive, list, onChange, report }: Observ
     const before = stamps
     stamps = found
     if (before === undefined) return
-    const changed = new Map<string, Stamp | undefined>()
+    const changed = new Map<string, (Stamp & { readonly isNew: boolean }) | undefined>()
     for (const [path, now] of found) {
       const was = before.get(path)
-      if (was?.modifiedMs !== now.modifiedMs || was.size !== now.size) changed.set(path, now)
+      if (was?.modifiedMs !== now.modifiedMs || was.size !== now.size) changed.set(path, { ...now, isNew: was === undefined })
     }
     for (const path of before.keys()) if (!found.has(path)) changed.set(path, undefined)
     if (changed.size === 0) return
