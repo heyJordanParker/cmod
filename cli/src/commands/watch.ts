@@ -48,8 +48,9 @@ left failing, so a failure an older cmod wrote goes once the mod builds. One cmo
 watch watches per device: another one exits at once while it runs. It touches
 its file in watch.lock every 5 seconds, and the cmod plugin of each session
 with a linked mod starts cmod watch again once that file is gone or 15 seconds
-old. At its start, each time it connects to cmod serve, and each time
-cmod/Store tells that the linked mods or the plugins changed, it reads the
+old. Once it listens to cmod serve, or finds no cmod serve to reach, each
+time it connects again or loses cmod serve, and each time cmod/Store tells
+that the linked mods or the plugins changed, it reads the
 linked folders and the newest cmod installed in the cmod store, and a cmod
 watch older than that exits and lets go of watch.lock, so the newer cmod
 watches with its own rules. It also exits once the process that started
@@ -249,8 +250,6 @@ export async function run(argv: string[]): Promise<number> {
         else await follow()
       })
       .catch((error: unknown) => void process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`)))
-  check()
-  await checking
   const serve = hearServe([listeningOf(storeInterface, 'on', 'Change', [], { part: ['links', 'plugins'] })], check, (error) => void process.stderr.write(`cmod watch: hears no change of the linked mods from cmod serve: ${messageOf(error)}\n`))
   try {
     await pollWhile(

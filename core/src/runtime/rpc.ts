@@ -389,6 +389,7 @@ export function connectRpc({
   handle,
   onConnect,
   onError,
+  onLost,
   clock,
   retryMs = 2000,
   keepsConnecting = false,
@@ -397,6 +398,7 @@ export function connectRpc({
   readonly handle: RpcHandler
   readonly onConnect?: (client: RpcClient) => unknown
   readonly onError?: (error: unknown) => void
+  readonly onLost?: () => void
   readonly clock: RpcClock
   readonly retryMs?: number
   readonly keepsConnecting?: boolean
@@ -436,6 +438,7 @@ export function connectRpc({
     queued = []
     link.peer.close(reason)
     reconnect()
+    onLost?.()
   }
 
   const pollLoop = async (link: Link) => {

@@ -226,6 +226,20 @@ test.concurrent('a cmod watch exits and lets go of watch.lock once cmod/Store te
   expect(existsSync(store(home, 'watch.lock'))).toBe(false)
 })
 
+test.concurrent('a cmod watch that loses cmod serve reads the newest cmod again, so a newer cmod that cmod serve exited for before it told the watcher still stops it', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
+  const serve = await servedChanges(home)
+  const watching = startCmod(home, 'watch')
+  await watching.waitForOutput('cmod watch: watching')
+
+  const newer = `${Number(version.split('.')[0]) + 1}.0.0`
+  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodExecutable, [`.local/share/cmod/bin/cmod/${newer}/cmod`]: cmodExecutable })
+  serve.serving.child.kill('SIGKILL')
+  expect(await watching.child.exited).toBe(0)
+  expect(existsSync(store(home, 'watch.lock'))).toBe(false)
+})
+
 test.concurrent('cmod watch watches a checkout linked while it runs once cmod/Store tells that the links changed', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')

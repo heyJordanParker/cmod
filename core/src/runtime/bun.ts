@@ -31,11 +31,13 @@ export function connectServe({
   handle,
   onConnect,
   onError,
+  onLost,
   keepsConnecting = false,
 }: {
   readonly handle: RpcHandler
   readonly onConnect?: (client: RpcClient) => unknown
   readonly onError?: (error: unknown) => void
+  readonly onLost?: () => void
   readonly keepsConnecting?: boolean
 }): RpcClient {
   return connectRpc({
@@ -43,6 +45,7 @@ export function connectServe({
     handle,
     ...(onConnect === undefined ? {} : { onConnect }),
     ...(onError === undefined ? {} : { onError }),
+    ...(onLost === undefined ? {} : { onLost }),
     clock: bunClock(keepsConnecting),
     keepsConnecting,
   })
@@ -62,6 +65,11 @@ export async function tellServe(method: string, args: readonly unknown[]): Promi
 export function hearServe<Payload>(listened: readonly Omit<Listening, 'id'>[], heard: (payload: Payload | undefined) => void, report: (error: unknown) => void): RpcClient {
   const listeners = interfaceListeners({ report })
   let isListening = false
+  let hasRead = false
+  const read = () => {
+    hasRead = true
+    heard(undefined)
+  }
   return connectServe({
     handle: async (method, params, signal) => {
       const answered = await listeners.handler(method, params, signal)
@@ -73,8 +81,12 @@ export function hearServe<Payload>(listened: readonly Omit<Listening, 'id'>[], h
       if (!isListening) for (const listening of listened) listeners.listen(client, listening, (payload: Payload) => heard(payload))
       isListening = true
       await listeners.replay(client)
-      heard(undefined)
+      read()
     },
+    onError: () => {
+      if (!hasRead) read()
+    },
+    onLost: read,
     keepsConnecting: true,
   })
 }
