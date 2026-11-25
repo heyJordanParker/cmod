@@ -4,6 +4,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.10.4] - 2026-11-26
+
 ### Fixed
 - The end of a background session no longer logs `Could not end session <id>: cmod task stop was stopped by a signal`. The cmod plugin asks `cmod serve` to stop its session, so `claude stop` runs outside the process tree it ends.
 
