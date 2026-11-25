@@ -16,7 +16,7 @@ Example: `cmod sessions list --running`
 
 ## 2. Message it
 
-`cmod sessions send <session> "<text>"` sends a prompt, which the session answers as its next turn, and prints `Delivered message <id>` or `Queued message <id>`, with the start of the id and the title of the session it reached. Check that line names the session you meant. A queued message reaches the session once it is resumed, so send it once. `--note` sends a note it reads with its next prompt instead, for a fact it should know without a turn of its own. A session that ended resumes on the prompt. A `<session>` is the full id or any start of it no other session shares. `cmod sessions read mail <session>` lists its mail with each one's state.
+`cmod sessions send <session> "<text>"` sends a prompt, which the session answers as its next turn, and prints `Sent message <id>`, with the start of the id and the title of the session it reached. Check that line names the session you meant. The message reaches the session as soon as no turn runs there, or once it is resumed, so send it once. `--note` sends a note it reads with its next prompt instead, for a fact it should know without a turn of its own. A session that ended resumes on the prompt. A `<session>` is the full id or any start of it no other session shares. `cmod sessions read mail <session>` lists its mail with each one's state.
 
 ### Answer a `<cmod-message>` with the command its `reply` names
 A message another session sent arrives inside `<cmod-message from="<id>" title="<title>" reply="…">`.
