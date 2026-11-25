@@ -426,7 +426,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.10.2";
+var coreVersion = "8.10.3";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -6294,7 +6294,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
     if (!isInterrupted)
       dispatch(conversation.endTurn(new Date().toISOString(), ending, task));
     if (task === undefined && endsAfterTurn)
-      claude.clock.after(0, () => void exitNow());
+      endSoon();
     if (task === undefined && compactsAfterTurn !== undefined && !isInterrupted)
       claude.clock.after(1, () => void compactNow());
     return below;
@@ -6855,8 +6855,11 @@ ${target}`;
   };
   const exitNow = async () => {
     endsAfterTurn = false;
-    await claude.command.run({ command: "exit" });
+    const { isStopped } = JSON.parse(await runCmod(claude, ["task", "stop", session, "--json"], session));
+    if (!isStopped)
+      await claude.command.run({ command: "exit" });
   };
+  const endSoon = () => claude.clock.after(0, () => void exitNow().catch((error) => report("end", `Could not end session ${session}`, error)));
   const perform = async (caller, action, input, task) => {
     await starting;
     if (action === "abort")
@@ -6868,11 +6871,12 @@ ${target}`;
     if (action === "surfaces")
       return [...await claude.session.surfaces()];
     if (action === "end") {
-      if (engineTurns.has(""))
+      if (engineTurns.has("")) {
         endsAfterTurn = true;
-      else
-        claude.clock.after(0, () => void exitNow());
-      return null;
+        return { ends: "afterTurn" };
+      }
+      endSoon();
+      return { ends: "now" };
     }
     if (action === "compact") {
       const { keep } = isObject(input) ? input : {};
@@ -12109,7 +12113,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12534,7 +12538,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12723,7 +12727,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13009,7 +13013,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13039,7 +13043,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13546,7 +13550,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-o8sTM0/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-TjR59x/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

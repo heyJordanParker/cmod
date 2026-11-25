@@ -37,7 +37,7 @@ A started session knows nothing of this conversation. A fork knows the conversat
 
 Each command acts on the session's own cmod plugin:
 - `cmod sessions stop <session>` stops its running turn, as Esc does
-- `cmod sessions end <session>` ends its Claude Code once its turn ends, and keeps its conversation
+- `cmod sessions end <session>` ends its Claude Code now between turns, or once its turn ends, says which, and keeps its conversation
 - `cmod sessions compact [<session>] --keep "<what the summary keeps>"` compacts it once its turn ends, then prompts it to carry on
 - `cmod sessions delete <session>` deletes a session that ended
 
