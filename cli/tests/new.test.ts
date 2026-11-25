@@ -1,4 +1,4 @@
-import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,6 +13,10 @@ setDefaultTimeout(15_000)
 afterAll(deleteTemporaryHomes)
 
 const made = newMod()
+
+beforeAll(async () => {
+  await made
+}, 120_000)
 
 async function newMod(): Promise<{ result: { exitCode: number; stdout: string; stderr: string }; root: string }> {
   const home = await temporaryHome()
