@@ -267,6 +267,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       sshConnection: async () => undefined,
       display: async () => undefined,
       waylandDisplay: async () => undefined,
+      terminal: async () => ({}),
     },
     device: { read: rejected('device.read', () => fakes.device.read ?? (async () => testDevice)) },
     cmod: { call: async (args) => cmodCall(clonedAsClaudeCodeDoes(args)) },

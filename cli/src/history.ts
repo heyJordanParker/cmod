@@ -813,7 +813,7 @@ export function readTasks(db: Database, request: { readonly session: string; rea
   return [...indexed, ...background].toSorted((first, second) => first.openedAt.localeCompare(second.openedAt))
 }
 
-function backgroundTasks(session: string): TaskData[] {
+export function backgroundTasks(session: string): TaskData[] {
   const folder = join(dataFolder(storeFolder(process.env), 'cmod'), 'tasks', session)
   if (!existsSync(folder)) return []
   return readdirSync(folder)

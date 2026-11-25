@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.9.0] - 2026-11-25
+
+### Added
+- `cmod sessions send`, `start`, `fork`, `stop`, `end`, `compact`, and `delete` drive any session on any device cmod reaches, so Claude works with other sessions through the `cmod` command. Inside Claude Code, `send` goes from the session it runs in, so the session it reaches knows who sent it.
+- `cmod terminal screen`, `press`, and `show` read, type into, and show a session's terminal.
+- The cmod plugin ships four Skills: `/cmod:sessions` to talk to and drive sessions, `/cmod:history` to search and read past work, `/cmod:mods` to install, configure, and fix mods, and `/cmod:build-mod` to build one.
+- `Progress` takes `buffer`, a lighter part of the track past the fill, as a usage bar draws the headroom under its expected pace. A `'neutral'` part draws gray, and a part takes a Claude Code `color` in place of a `tone`, such as `'diffRemoved'` for the part past pace of a nearly empty bar.
+
+### Changed
+- `cmod sessions list`, `search`, and `read` reach every device through cmod serve, as a mod's `sessions` import does. `list` names each session's device and whether it runs or waits on a dialog, `read messages` and `search` start each line with the message id, and `search` shows the words around each match and leaves out earlier searches.
+- The terminal `Progress` splits each boundary at an eighth of a column, draws its track at the fill's height, and rounds its ends in Herdr, Ghostty, and WezTerm, whose fonts hold Nerd Font's half circles, also inside tmux. Settings, under Preferences, adds `Round the ends of bars in every terminal`, for a session over ssh, where nothing names the terminal that shows it.
+
+### Removed
+- The cmod plugin's MCP tools, `list_sessions` through `delete_session` and `compact`, are gone. Run the `cmod sessions` and `cmod terminal` commands instead, which the Skills describe.
+
 ## [8.8.4] - 2026-11-25
 
 ### Added

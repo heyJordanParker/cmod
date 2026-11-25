@@ -335,7 +335,7 @@ export type SessionRouting = {
   close(): void
 }
 
-export const sessionActions = ['send', 'abort', 'end', 'fork', 'startTask', 'callTool', 'usage', 'surfaces', 'visit', 'delete'] as const
+export const sessionActions = ['send', 'abort', 'end', 'fork', 'startTask', 'callTool', 'usage', 'surfaces', 'visit', 'delete', 'compact', 'startBackgroundTask', 'sendTo'] as const
 
 export const showLeaseMs = 16_000
 

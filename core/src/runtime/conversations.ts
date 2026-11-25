@@ -46,6 +46,8 @@ const questionTool = 'AskUserQuestion'
 
 const permissionPrompt = 'permission prompt'
 
+const carryOn = 'The conversation was compacted. Carry on with the work from before the compaction.'
+
 export type Conversations = {
   answer(e: Frozen<Args<'cmod.call'>> & { readonly caller?: string }): Promise<EventResult<'cmod.call'> | undefined>
   moved(): void
@@ -114,6 +116,7 @@ export function serveConversations({
   const waitingRows = new Map<string, Row[]>()
   const engineTurns = new Map<string, string>()
   let endsAfterTurn = false
+  let compactsAfterTurn: { readonly keep?: string } | undefined
   let isWorking = false
   let waitingFor: HeldStatus['waitingFor']
   let waitingOn: string | undefined
@@ -184,7 +187,19 @@ export function serveConversations({
     engineTurns.delete(task ?? '')
     if (!isInterrupted) dispatch(conversation.endTurn(new Date().toISOString(), ending, task))
     if (task === undefined && endsAfterTurn) claude.clock.after(0, () => void exitNow())
+    if (task === undefined && compactsAfterTurn !== undefined && !isInterrupted) claude.clock.after(1, () => void compactNow())
     return below
+  }
+  const compactNow = async () => {
+    const asked = compactsAfterTurn
+    compactsAfterTurn = undefined
+    if (asked === undefined) return
+    try {
+      await claude.command.run({ command: 'compact', ...(asked.keep === undefined ? {} : { args: asked.keep }) })
+      await claude.prompt.submit({ text: carryOn })
+    } catch (error) {
+      report('compact', 'Could not compact the conversation', error)
+    }
   }
   router.add('classic.Stop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) })(await next(e), next.signal.aborted))
   router.add('classic.StopFailure', async (e, next) => {
@@ -213,7 +228,10 @@ export function serveConversations({
 
   const liveTasksOver = async (saved: readonly TaskData[], request: Readonly<Record<string, unknown>>): Promise<TaskData[]> => {
     await starting
-    const kept = liveTasks().filter((task) => request['all'] === true || task.parent === request['task'])
+    const closed = new Map(saved.flatMap((task) => (task.closedAt === undefined ? [] : [[task.id, task] as const])))
+    const kept = liveTasks()
+      .filter((task) => request['all'] === true || task.parent === request['task'])
+      .map((task) => (task.closedAt === undefined ? (closed.get(task.id) ?? task) : task))
     const running = await claude.agent.list().catch((error: unknown) => (claude.ui.warn('tasks:status', `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []))
     const background = saved.flatMap(({ id, status, isBackground }) => (status === undefined || isBackground !== true ? [] : [{ id, status }]))
     return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background])
@@ -330,7 +348,10 @@ export function serveConversations({
     throw last instanceof Error ? last : new Error(String(last))
   }
 
-  const read = <Value>(id: string, part: string, options: Request = {}): Promise<Value> => firstHolding((client) => client.request<Value>(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }]))
+  const read = <Value>(id: string, part: string, options: Request = {}): Promise<Value> =>
+    firstHolding((client) => client.request<Value>(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error: unknown) => {
+      throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error
+    })
 
   const listAll = async (scope: Request): Promise<SessionData[]> => {
     const lists = await Promise.all((await providers()).map((client) => client.request<SessionData[]>(`${sessionsInterface}.sessions`, [scope]).catch((error: unknown) => (client === local.client ? Promise.reject(error) : (report('store', 'Lists no sessions of another sessions provider', error), [])))))
@@ -730,6 +751,17 @@ export function serveConversations({
       else claude.clock.after(0, () => void exitNow())
       return null
     }
+    if (action === 'compact') {
+      const { keep } = (isObject(input) ? input : {}) as { readonly keep?: string }
+      compactsAfterTurn = typeof keep === 'string' && keep.trim() !== '' ? { keep } : {}
+      if (!engineTurns.has('')) claude.clock.after(0, () => void compactNow())
+      return null
+    }
+    if (action === 'sendTo') {
+      const { to, type, text } = input as Pick<SessionSend, 'type' | 'text'> & { readonly to: string }
+      if (to === session) throw new Error(`session ${session} cannot send as itself to itself.`)
+      return actElsewhere(caller, to, 'send', { type, text, as: Session } satisfies SessionSend, undefined)
+    }
     if (action === 'send') {
       const { type, text, as } = input as SessionSend
       if (as === Session) throw new Error(`session ${session} cannot send as itself to itself.`)
@@ -902,9 +934,10 @@ export function serveConversations({
     },
     async [conversationMethods.search](request) {
       const record = fields(request, ['session', 'task', 'turn', 'context', 'isAgent'])
-      const options = { project: project(), ...fields(request, ['since', 'everyProject', 'running', 'before']), record }
+      const options = { project: project(), ...fields(request, ['since', 'everyProject', 'running', 'before', 'limit']), record }
       const pages = await Promise.all((await providers()).map((client) => client.request<Message[]>(`${sessionsInterface}.search`, [String(request['text']), options]).catch((error: unknown) => (client === local.client ? Promise.reject(error) : []))))
-      return pages.flat().sort((first, second) => second.at.localeCompare(first.at))
+      const found = pages.flat().sort((first, second) => second.at.localeCompare(first.at))
+      return typeof request['limit'] === 'number' ? found.slice(0, request['limit']) : found
     },
     async [conversationMethods.messages](request) {
       const id = String(request['session'])

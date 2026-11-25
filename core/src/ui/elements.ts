@@ -40,7 +40,17 @@ type Terminal = Elements['terminal'] & Elements['desktop']
 
 type CompletedTable = Record<ElementName, (props: object) => RenderElement>
 
-type Drawing = { readonly table: CompletedTable; readonly markdown: ((props: MarkdownProps) => RenderElement) | undefined }
+export type DrawnIn = { readonly hasNerdFont: boolean }
+
+type Drawing = { readonly table: CompletedTable; readonly markdown: ((props: MarkdownProps) => RenderElement) | undefined; readonly drawnIn: DrawnIn }
+
+const tableFacts = new WeakMap<ElementTable, DrawnIn>()
+
+const plainTerminal: DrawnIn = { hasNerdFont: false }
+
+export function drawnIn(): DrawnIn {
+  return drawing?.drawnIn ?? plainTerminal
+}
 
 const unbuilt = Symbol('an element built outside a render')
 
@@ -61,7 +71,7 @@ function elementNamed(name: string, props: object): RenderElement {
 
 export function drawWith<Drawn>(table: ElementTable, draw: () => Drawn, markdown?: (props: MarkdownProps) => RenderElement): Drawn {
   const outer = drawing
-  const current = { table: table as CompletedTable, markdown }
+  const current = { table: table as CompletedTable, markdown, drawnIn: tableFacts.get(table) ?? plainTerminal }
   drawing = current
   try {
     return built(current, draw()) as Drawn
@@ -153,7 +163,7 @@ export function drawsFocusable(data: unknown, key: string): boolean {
   return Object.values(fields).some((each) => drawsFocusable(each, key))
 }
 
-export function forClaudeCode(table: ElementTable, surface: RenderSurface, open: (href: string, press: UiPressArgument) => void): ElementTable {
+export function forClaudeCode(table: ElementTable, surface: RenderSurface, open: (href: string, press: UiPressArgument) => void, { hasNerdFont }: DrawnIn = plainTerminal): ElementTable {
   const { Button: button, Link: link, Image: image, Svg: svg, Raster: raster } = table as CompletedTable
   const opening = (props: Readonly<Record<string, unknown>>) => {
     const { href, ...rest } = props
@@ -167,7 +177,9 @@ export function forClaudeCode(table: ElementTable, surface: RenderSurface, open:
     (draw: (props: object) => RenderElement) =>
     ({ label, ...rest }: Readonly<Record<string, unknown>>) =>
       draw({ alt: label, ...rest })
-  return { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }: Readonly<Record<string, unknown>>) => raster(rest) }
+  const resolved = { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }: Readonly<Record<string, unknown>>) => raster(rest) }
+  tableFacts.set(resolved, { hasNerdFont: hasNerdFont && surface === 'terminal' })
+  return resolved
 }
 
 export const Box = element('Box')

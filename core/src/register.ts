@@ -114,6 +114,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       sshConnection: () => $.env.get('SSH_CONNECTION'),
       display: () => $.env.get('DISPLAY'),
       waylandDisplay: () => $.env.get('WAYLAND_DISPLAY'),
+      terminal: async () => ({ program: await $.env.get('TERM_PROGRAM'), ghostty: await $.env.get('GHOSTTY_RESOURCES_DIR'), wezterm: await $.env.get('WEZTERM_EXECUTABLE') }),
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) },

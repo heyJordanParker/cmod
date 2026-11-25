@@ -408,6 +408,8 @@ const kit = {
       { $cmodElement: 'Toggle', props: { key: 'demo/kit:', label: 'Show errors', checked: true, onToggle: { $cmodHandler: 4 } } },
       { $cmodElement: 'Progress', props: { value: 40, width: 10, label: 'Context used' } },
       { $cmodElement: 'Progress', props: { value: 55, width: 10, label: 'Week used', sections: [{ value: 40 }, { value: 15, tone: 'warning' }] } },
+      { $cmodElement: 'Progress', props: { value: 33, width: 10, label: 'Pace', sections: [{ value: 33, tone: 'neutral' }], buffer: 50 } },
+      { $cmodElement: 'Progress', props: { value: 95, width: 10, label: 'Nearly empty', sections: [{ value: 50, tone: 'critical' }, { value: 45, color: 'diffRemoved' }], buffer: 50 } },
       { $cmodElement: 'Pagination', props: { page: 1, pages: 2, onNext: { $cmodHandler: 5 } } },
       { $cmodElement: 'Badge', props: { tone: 'warning', children: 'warning' } },
       { $cmodElement: 'Banner', props: { tone: 'warning', children: 'Needs setup: a branch', actions: [{ $cmodElement: 'Button', props: { key: 'demo/kit:finish', label: 'Finish setup', variant: 'primary', onPress: { $cmodHandler: 6 } } }] } },
@@ -440,6 +442,10 @@ test("cmod's Herdr mod draws each host component as Herdr's own control: a Panel
     ['40%', '#accent'],
     ['40%', '#accent'],
     ['15%', '#ansi3'],
+    ['33%', '#muted'],
+    ['17%', '#muted'],
+    ['50%', '#blocked'],
+    ['45%', '#ansi1'],
   ])
   expect(drawn.filter((each) => each.kind === 'Button' && each.calls['disabled'] !== undefined).map((each) => [each.calls['accessibility_label']?.[0], each.calls['disabled']?.[0]])).toEqual([
     ['Previous', true],

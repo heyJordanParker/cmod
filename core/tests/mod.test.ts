@@ -13,6 +13,7 @@ import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
 import { findElement, textOf } from '../src/testing/fake-elements.js'
+import { Progress } from '../src/ui/components.js'
 import { Box, Button, Input, Text } from '../src/ui/elements.js'
 import type { Signature } from './provider.js'
 
@@ -1367,6 +1368,19 @@ test('a Button with an href opens the page in the browser of the computer the te
 
   expect(ran).toEqual([['uname', '-s'], ['open', 'https://example.com/docs']])
   expect(tested.calls.some((call) => call.call === 'ui.copy')).toBe(false)
+})
+
+test('a bar rounds its ends in a terminal cmod does not know once the person turns on rounding them in every terminal', async () => {
+  const lines = async (files: Readonly<Record<string, string>>) => {
+    const tested = testMod(defineMod({ name: 'demo', async setup(mod) {
+          await mod.panes.add({ id: 'usage', title: 'Usage', render: () => Progress({ value: 50, width: 6 }) }).open()
+        } }), { files })
+    await tested.settle()
+    return tested.shown.pane.lines()
+  }
+
+  expect(await lines({ '/test/home/.local/share/cmod/preferences.json': '{ "roundsBarEnds": true }' })).toEqual(['\u{E0B6}████\u{E0B4}'])
+  expect(await lines({})).toEqual(['██████'])
 })
 
 test('a Button with an href copies the link where the computer has no browser to open, and says so', async () => {

@@ -57,7 +57,7 @@ export function pickedColor(args: string): string | undefined {
   return resetColors.includes(picked) ? undefined : picked
 }
 
-const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort', 'end', 'visit', 'delete'] as const
+const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort', 'end', 'visit', 'delete', 'compact', 'sendTo'] as const
 
 export type Act = (typeof acts)[number]
 

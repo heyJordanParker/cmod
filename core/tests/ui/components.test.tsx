@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import { defineMod } from '../../src/mod.js'
+import { isNerdFontTerminal } from '../../src/records.js'
 import { testMod } from '../../src/testing.js'
 import { Badge, Banner, Dialog, Help, List, ListItem, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
-import { Box, Button, drawWith, elementData, elementOf, Text } from '../../src/ui/elements.js'
+import { Box, Button, drawWith, elementData, elementOf, forClaudeCode, Text } from '../../src/ui/elements.js'
 
 const tabs = [
   { key: 'controls', label: 'Controls' },
@@ -108,7 +109,11 @@ test('Tooltip draws its children and keeps its card for the pointer alone', asyn
 })
 
 test('Progress fills its width in proportion to its percent', async () => {
-  expect(await testMod(kit).shown.pane.lines()).toContain('██░░░░░░')
+  expect(await testMod(kit).shown.pane.lines()).toContain('████████')
+  expect(cells(drawWith(table, () => Progress({ value: 25, width: 8 })))).toEqual([
+    ['██', 'claude'],
+    ['██████', 'subtle'],
+  ])
 })
 
 test('Progress draws its sections left to right in their tones, and fills no more than its width when they add past 100', async () => {
@@ -131,18 +136,74 @@ test('Progress draws its sections left to right in their tones, and fills no mor
   )
 
   await tested.start()
-  const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
-  const cells = (drawn: unknown) => ((drawn as { readonly props: { readonly children: readonly { readonly props: { readonly color: string; readonly children: string } }[] } }).props.children).map(({ props }) => [props.children, props.color])
 
-  expect((await tested.shown.pane.lines()).slice(0, 3)).toEqual(['██████░░', '████████', '██░░'])
+  expect((await tested.shown.pane.lines()).slice(0, 3)).toEqual(['████████', '████████', '████'])
   expect(cells(drawWith(table, () => Progress({ sections: [{ value: 75 }, { value: 50, tone: 'critical' }], width: 8 })))).toEqual([
     ['██████', 'claude'],
     ['██', 'error'],
-    ['', 'subtle'],
   ])
   expect(cells(drawWith(table, () => Progress({ value: 50, tone: 'success', width: 4 })))).toEqual([
     ['██', 'success'],
-    ['░░', 'subtle'],
+    ['██', 'subtle'],
+  ])
+})
+
+const table = { Box: (props: object) => ({ type: 'Box', props }), Text: (props: object) => ({ type: 'Text', props }), Button: (props: object) => ({ type: 'Button', props }) } as never
+
+type DrawnText = { readonly props: { readonly children: readonly { readonly props: { readonly color: string; readonly backgroundColor?: string; readonly children: string } }[] } }
+
+const cells = (drawn: unknown) => (drawn as DrawnText).props.children.map(({ props }) => (props.backgroundColor === undefined ? [props.children, props.color] : [props.children, props.color, props.backgroundColor]))
+
+test('Progress draws a section given a Claude Code color in it, and splits both the fill and the buffer mid-cell', () => {
+  const withNerdFont = forClaudeCode(table, 'terminal', () => undefined, { hasNerdFont: true })
+
+  expect(cells(drawWith(withNerdFont, () => Progress({ sections: [{ value: 50, tone: 'critical' }, { value: 45, color: 'diffRemoved' }], buffer: 50, width: 22 })))).toEqual([
+    ['\u{E0B6}', 'error'],
+    ['██████████', 'error'],
+    ['█████████', 'diffRemoved'],
+    ['█', 'subtle'],
+    ['\u{E0B4}', 'subtle'],
+  ])
+  expect(cells(drawWith(withNerdFont, () => Progress({ sections: [{ value: 33, tone: 'neutral' }], buffer: 50, width: 23 })))).toEqual([
+    ['\u{E0B6}', 'inactive'],
+    ['██████', 'inactive'],
+    ['▉', 'inactive', 'promptBorder'],
+    ['███', 'promptBorder'],
+    ['▌', 'promptBorder', 'subtle'],
+    ['██████████', 'subtle'],
+    ['\u{E0B4}', 'subtle'],
+  ])
+})
+
+test('a terminal has Nerd Font half circles in Herdr, Ghostty, and WezTerm, also inside tmux, which keeps Ghostty and WezTerm variables', () => {
+  expect([{ program: 'herdr' }, { program: 'ghostty' }, { program: 'WezTerm' }, { program: 'tmux', ghostty: '/Applications/Ghostty.app/Contents/Resources/ghostty' }, { program: 'tmux', wezterm: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' }, { program: 'tmux' }, { program: 'Apple_Terminal' }, {}].map(isNerdFontTerminal)).toEqual([true, true, true, true, true, false, false, false])
+})
+
+test('Progress splits a cell at an eighth where two parts meet, draws its buffer as raised track, and rounds its ends in a terminal whose font has the half circles', () => {
+  const underPace = () => Progress({ sections: [{ value: 33, tone: 'neutral' }], buffer: 50, width: 22 })
+  const overPace = () => Progress({ sections: [{ value: 50, tone: 'neutral' }, { value: 20, tone: 'warning' }], buffer: 50, width: 22 })
+  const withNerdFont = forClaudeCode(table, 'terminal', () => undefined, { hasNerdFont: true })
+
+  expect(cells(drawWith(withNerdFont, underPace))).toEqual([
+    ['\u{E0B6}', 'inactive'],
+    ['██████', 'inactive'],
+    ['▋', 'inactive', 'promptBorder'],
+    ['███', 'promptBorder'],
+    ['██████████', 'subtle'],
+    ['\u{E0B4}', 'subtle'],
+  ])
+  expect(cells(drawWith(withNerdFont, overPace))).toEqual([
+    ['\u{E0B6}', 'inactive'],
+    ['██████████', 'inactive'],
+    ['████', 'warning'],
+    ['██████', 'subtle'],
+    ['\u{E0B4}', 'subtle'],
+  ])
+  expect(cells(drawWith(forClaudeCode(table, 'terminal', () => undefined, { hasNerdFont: false }), () => Progress({ value: 33, buffer: 50, width: 20 })))).toEqual([
+    ['██████', 'claude'],
+    ['▋', 'claude', 'promptBorder'],
+    ['███', 'promptBorder'],
+    ['██████████', 'subtle'],
   ])
 })
 

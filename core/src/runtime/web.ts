@@ -176,10 +176,15 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
     const label = typeof props['label'] === 'string' ? props['label'] : undefined
     const value = numberOr(props['value'], 0)
     const shared = `${attribute('aria-label', label)}${attribute('style', `width:${across(numberOr(props['width'], 24))}`)}`
-    if (!Array.isArray(props['sections'])) return `<progress class="progress" max="100" value="${value}"${shared}></progress>`
-    const sections = props['sections'].filter((each): each is Props => typeof each === 'object' && each !== null)
-    const section = (each: Props) => `<span class="progress-section${each['tone'] === undefined ? '' : ` tone-${toneOf(each['tone'])}`}" style="width:${numberOr(each['value'], 0)}%"></span>`
-    return `<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"${shared}>${sections.map(section).join('')}</div>`
+    const buffer = Math.min(numberOr(props['buffer'], value), 100) - value
+    if (!Array.isArray(props['sections']) && buffer <= 0) return `<progress class="progress" max="100" value="${value}"${shared}></progress>`
+    const sections = Array.isArray(props['sections']) ? props['sections'].filter((each): each is Props => typeof each === 'object' && each !== null) : [{ value }]
+    const section = (each: Props) => {
+      const color = colorOf(each['color'])
+      return `<span class="progress-section${each['tone'] === undefined ? '' : ` tone-${toneOf(each['tone'])}`}" style="width:${numberOr(each['value'], 0)}%${color === undefined ? '' : `;background:${color}`}"></span>`
+    }
+    const buffered = buffer > 0 ? `<span class="progress-buffer" style="width:${buffer}%"></span>` : ''
+    return `<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"${shared}>${sections.map(section).join('')}${buffered}</div>`
   },
   List: (props, drawing) => `<ul class="list"${attribute('aria-label', textOr(props['label'], ''))}>${nodeHtml(props['children'], drawing)}</ul>`,
   ListItem: (props, drawing) => {

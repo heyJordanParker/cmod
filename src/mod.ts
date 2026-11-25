@@ -16,7 +16,6 @@ import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime
 import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { history, historyMemory, historySession, type HistoryState } from './history.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
-import { addClaudeTools } from './tools.js'
 import { webUi } from './web.js'
 
 export type CmodPluginState = {
@@ -113,7 +112,6 @@ export const cmodPlugin = defineMod({
 
     const server = mod.use(program({ command: ['cmod', 'serve'], isService: true, processType: 'Interactive' }))
     engineOf(mod).onServeUnreached(() => void server.ready().catch((error: unknown) => report({ id: 'serve', message: 'cmod serve did not start, so this session reaches no other session', error })))
-    addClaudeTools(mod)
     const web = webUi(mod, server)
     const shown = sidebar(mod, settingsView(mod), (isShown) => history(mod, isShown), web.openInBrowser)
     mod.hotkeys.sidebar.onPress(() => shown.toggle())

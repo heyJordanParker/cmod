@@ -185,6 +185,18 @@ test('a Progress with sections draws in the browser as one meter whose sections 
   expect(html).toBe('<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55" aria-label="Week used" style="width:20ch"><span class="progress-section" style="width:40%"></span><span class="progress-section tone-warning" style="width:15%"></span></div>')
 })
 
+test('a Progress section given a Claude Code color fills in that color', () => {
+  const { html } = drawn(Progress({ sections: [{ value: 50, tone: 'critical' }, { value: 45, color: 'diffRemoved' }], buffer: 50, width: 20 }))
+
+  expect(html).toBe('<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="95" style="width:20ch"><span class="progress-section tone-critical" style="width:50%"></span><span class="progress-section" style="width:45%;background:var(--diffRemoved)"></span></div>')
+})
+
+test('a Progress with a buffer draws the part between its fill and its buffer as raised track', () => {
+  const { html } = drawn(Progress({ sections: [{ value: 33, tone: 'neutral' }], buffer: 50, width: 20, label: 'Week used' }))
+
+  expect(html).toBe('<div class="progress-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="33" aria-label="Week used" style="width:20ch"><span class="progress-section tone-neutral" style="width:33%"></span><span class="progress-buffer" style="width:17%"></span></div>')
+})
+
 test('a tone a mod names that is not one of the tones draws as neutral, so no text reaches a class', () => {
   expect(htmlOf({ $cmodElement: 'Badge', props: { tone: '"><script>', children: 'x' } })).toBe('<span class="badge tone-neutral">x</span>')
 })
@@ -193,7 +205,7 @@ test("web.json holds the web UI's port, and preferences.json says whether the pe
   expect(parseWebUi({ port: 4567 }, 'web.json')).toEqual({ port: 4567 })
   expect(parseWebUi(undefined, 'web.json')).toBeUndefined()
   expect(() => parseWebUi({ port: '4567' }, 'web.json')).toThrow("web.json is not the web UI's port. Delete it, and cmod web serve writes it again.")
-  expect(parsePreferences({ servesWebUi: true }, 'preferences.json')).toEqual({ showsInstalledModErrors: false, servesWebUi: true, servesTailnet: true })
+  expect(parsePreferences({ servesWebUi: true }, 'preferences.json')).toEqual({ showsInstalledModErrors: false, servesWebUi: true, servesTailnet: true, roundsBarEnds: false })
   expect(() => parsePreferences({ servesWebUi: 'yes' }, 'preferences.json')).toThrow("preferences.json is not a map of cmod's preferences to true or false.")
 })
 

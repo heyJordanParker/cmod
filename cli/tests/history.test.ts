@@ -4,9 +4,30 @@ import { existsSync, readdirSync } from 'node:fs'
 import { appendFile, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { openHistory, readSession, runningEntries, searchQuery } from '../src/history.js'
-import { cmod, cmodWith, deleteTemporaryHomes, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith as cmodWithHere, deleteTemporaryHomes, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
+
+const serves = new Map<string, Promise<unknown>>()
+
+const served = (home: string, args: readonly string[]) => {
+  if (args[0] !== 'sessions' && args[0] !== 'history') return Promise.resolve()
+  const started = serves.get(home) ?? startCmod(home, 'serve').firstLine()
+  serves.set(home, started)
+  return started
+}
+
+const outside = { CLAUDE_CODE_SESSION_ID: '' }
+
+const cmod = async (home: string, ...args: string[]) => {
+  await served(home, args)
+  return cmodWithHere(home, outside, ...args)
+}
+
+const cmodWith = async (home: string, env: Record<string, string>, ...args: string[]) => {
+  await served(home, args)
+  return cmodWithHere(home, { ...outside, ...env }, ...args)
+}
 
 const at = (second: number, day = 11) => `2026-10-${String(day).padStart(2, '0')}T10:00:${String(second).padStart(2, '0')}.000Z`
 
@@ -118,7 +139,8 @@ test.concurrent('readers of a session longer than several write batches, running
     ['messages', 's1', '--project', project, '--task', 'a7', '--json'],
     ['turns', 's1', '--project', project, '--json'],
   ]
-  const results = await Promise.all(commands.map((args) => startCmod(home, 'sessions', 'read', ...args).done))
+  await served(home, ['sessions'])
+  const results = await Promise.all(commands.map((args) => cmodWithHere(home, outside, 'sessions', 'read', ...args)))
   expect(results.map(({ exitCode, stderr }, index) => ({ command: commands[index]?.join(' '), exitCode, stderr }))).toEqual(commands.map((args) => ({ command: args.join(' '), exitCode: 0, stderr: '' })))
   const [first, second, task, turns] = results.map((result, index) => {
     try {
@@ -158,8 +180,8 @@ test.concurrent('each cmod history form a released session or the inbox runs pri
     const [printed, expected] = [await cmod(home, ...(old as string[])), await cmod(home, ...(current as string[]))]
     expect({ form: old, ...printed }).toEqual({ form: old, ...expected, exitCode: 0, stderr: '' })
   }
-  expect((await cmod(home, 'history', 'messages', 's3', '--project', project)).stderr).toBe(`cmod history: No Claude Code transcript is named s3.jsonl under ${join(home, '.claude/projects')}. cmod sessions list --every-project lists the sessions.\n`)
-})
+  expect((await cmod(home, 'history', 'messages', 's3', '--project', project)).stderr).toBe('cmod history: no session s3 on any of your devices.\n')
+}, 60_000)
 
 test.concurrent('messages reads a conversation as typed messages placed in their context and turn, and --task reads a task', async () => {
   const home = await temporaryHome()
@@ -304,15 +326,15 @@ test.concurrent('messages and search print one line per message, with the local 
 
   expect(messages.stdout).toBe(
     [
-      '10:00  person   Rename the tree pane',
-      '10:00  claude   I will find it first.',
-      '10:00  claude   Agent  {"prompt":"find the pane file"}',
-      '10:00  →        found src/panes/tree.tsx',
-      '10:00  mod demo  Switch to build mode',
+      '10:00  u1  person   Rename the tree pane',
+      '10:00  a1:0  claude   I will find it first.',
+      '10:00  a1:1  claude   Agent  {"prompt":"find the pane file"}',
+      '10:00  r1  →        found src/panes/tree.tsx',
+      '10:00  p1  mod demo  Switch to build mode',
       '',
     ].join('\n'),
   )
-  expect(found.stdout).toBe('2026-10-11 10:00  s1  person   Rename the tree pane\n')
+  expect(found.stdout).toBe('2026-10-11 10:00  s1  u1  person   Rename the tree pane\n')
 })
 
 test.concurrent('messages after the last one read returns only the lines saved since', async () => {
@@ -384,12 +406,13 @@ test.concurrent('follow --running follows a session of the project that starts a
 test.concurrent('the conversation the command runs in has no messages before its first is saved, and another unsaved session id fails', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's2', cwd: project }) })
 
   const running = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 's2' }, 'sessions', 'read', 'messages', '--project', project, '--json')
   const unknown = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 's2' }, 'sessions', 'read', 'messages', 's3', '--project', project, '--json')
 
   expect([running.exitCode, running.stdout]).toEqual([0, '[]\n'])
-  expect([unknown.exitCode, unknown.stderr]).toEqual([1, `cmod sessions: No Claude Code transcript is named s3.jsonl under ${join(home, '.claude/projects')}. cmod sessions list --every-project lists the sessions.\n`])
+  expect([unknown.exitCode, unknown.stderr]).toEqual([1, 'cmod sessions: no session s3 on any of your devices.\n'])
 })
 
 test.concurrent("list lists the project's conversations newest first, and --every-project, --since, and --running change the scope", async () => {
@@ -398,8 +421,8 @@ test.concurrent("list lists the project's conversations newest first, and --ever
   await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project }), '.claude/sessions/2.json': JSON.stringify({ pid: 2 ** 22 + 7, sessionId: 's0', cwd: project }) })
 
   expect(await json(home, 'list', '--project', project)).toEqual([
-    { id: 's1', title: 'Tree pane rename', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's1.jsonl'), model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(6), isRunning: true },
-    { id: 's0', title: 'Add the tree pane', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's0.jsonl'), model: '', startedAt: at(0, 1), lastAt: at(0, 1), isRunning: false },
+    { id: 's1', title: 'Tree pane rename', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's1.jsonl'), model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(6), isRunning: true, device: expect.any(Object) },
+    { id: 's0', title: 'Add the tree pane', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's0.jsonl'), model: '', startedAt: at(0, 1), lastAt: at(0, 1), isRunning: false, device: expect.any(Object) },
   ])
   expect(ids(await json(home, 'list', '--project', project, '--every-project'))).toEqual(['s9', 's1', 's0'])
   expect(ids(await json(home, 'list', '--project', other, '--since', '2026-10-05'))).toEqual(['s9'])
@@ -484,7 +507,7 @@ test.concurrent("a subagent whose meta.json is empty still reads, as a task open
   await writeFiles(home, { [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: '' })
 
   expect(ids(await json(home, 'read', 'messages', 's1', '--project', project, '--task', 'a7'))).toEqual(['x1'])
-  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: '', agentType: 'general-purpose', openedBy: '', openedAt: at(2) }])
+  expect(await json(home, 'read', 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: '', agentType: 'general-purpose', openedBy: '', openedAt: at(2), closedAt: at(6), status: 'killed' }])
 })
 
 test.concurrent("a fork Claude's Agent tool started reads as a task forked from its session, with no agent type", async () => {
@@ -540,7 +563,7 @@ test.concurrent('sessions leaves out a session no one prompted, and lists one wh
     [`${projectFolder(project)}/quiet.jsonl`]: lines([hook('h1', 1)]),
     [`${projectFolder(project)}/late.jsonl`]: lines([hook('h2', 2), hook('h3', 3), { type: 'user', uuid: 'u9', timestamp: at(4), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Start the late session' } }]),
   })
-  const late = { id: 'late', title: 'Start the late session', project, cwd: project, transcriptPath: join(home, projectFolder(project), 'late.jsonl'), model: '', startedAt: at(4), lastAt: at(4), isRunning: false }
+  const late = { id: 'late', title: 'Start the late session', project, cwd: project, transcriptPath: join(home, projectFolder(project), 'late.jsonl'), model: '', startedAt: at(4), lastAt: at(4), isRunning: false, device: expect.any(Object) }
 
   expect(await json(home, 'list', '--project', project)).toEqual([late])
   await cmod(home, 'sessions', 'index')

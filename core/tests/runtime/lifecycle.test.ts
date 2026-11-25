@@ -241,7 +241,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   expect(rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())).toEqual([
     '>',
     `⠋  demo              Installing${' '.repeat(68)}✕`,
-    `${' '.repeat(21)}${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash`,
+    `${' '.repeat(21)}${'█'.repeat(24)}  Installing trash`,
   ])
 
   step.print('progress 4 4 Adding the zsh alias')

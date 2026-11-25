@@ -185,7 +185,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, the History view, the Settings view, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the Sidebar pane, the History view, the Settings view, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -1469,27 +1469,6 @@ test("the sessions service asks cmod serve with each request's options, and the 
   expect(spawned).toEqual([[cmodProgram, 'sessions', 'index']])
 })
 
-test('search_sessions names each session it finds by its title, project, and state, shows the words around each match, even deep in a tool call, and leaves out earlier searches', async () => {
-  const { tested } = cmodAnswering({})
-  const session = { id: 's1', title: 'Fix the CI lane', project: '/work/php', cwd: '/work/php', model: 'claude-opus-5-5', startedAt: '2026-11-23T15:00:00.000Z', lastAt: '2026-11-23T16:14:05.000Z', isRunning: true, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
-  const command = `cd /work/php && ${'echo warming up && '.repeat(8)}docker build -t php-sharp:dev . && docker run php-sharp:dev bun test`
-  tested.fakes.serve.sessions = () => [session]
-  tested.fakes.serve.read = (_id, part) => (part === 'state' ? null : [])
-  tested.fakes.serve.search = () => [
-    { id: 'm3', session: 's1', type: ToolCall, at: '2026-11-23T16:14:05.144Z', context: 1, turn: 'p1', callId: 'call-3', name: 'mcp__cmod__search_sessions', input: { text: 'docker build -t' } },
-    { id: 'm2', session: 's1', task: 'ac60737d', type: ToolCall, at: '2026-11-23T15:54:07.472Z', context: 1, turn: 'p1', callId: 'call-2', name: 'Bash', input: { description: 'Build the image', command } },
-  ]
-  await tested.start()
-
-  const { result } = (await tested.callTool('search_sessions', { text: 'docker build -t' })) as { readonly result: string }
-
-  expect(result.split('\n')).toEqual([
-    'Fix the CI lane · /work/php on test-computer · running',
-    '  session s1',
-    `  2026-11-23T15:54:07.472Z  subagent ac60737d, Bash call: …${command.slice(command.indexOf('docker build -t') - 60, command.indexOf('docker build -t'))}docker build -t php-sharp:dev . && docker run php-sharp:dev bun test  (message m2)`,
-  ])
-})
-
 test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
   const { tested, spawned } = cmodAnswering({}, { ...demoSetUp, [`${store}/consent.json`]: '{}' })
   await tested.start()
@@ -1793,61 +1772,6 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '')).toEqual({ showsInstalledModErrors: true })
   expect(await tested.fakes.fs.exists?.(`${store}/store-changed`)).toBe(true)
   expect(await shown()).toContain('[x] Show errors from installed mods')
-})
-
-test("Claude's start_session tool starts its task in a new background session through cmod task start, and names a device no mod starts sessions on", async () => {
-  const started = { id: 'bg-1', title: 'Upgrade', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
-  const { tested, spawned, sessions } = cmodAnswering({ 'task start': { code: 0, stdout: `${JSON.stringify(started)}\n` } })
-  await tested.start()
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tested.settle()
-
-  const answer = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', model: 'sonnet' })
-  const elsewhere = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', device: 'build-box' })
-
-  expect(answer).toEqual({ result: 'Started session bg-1. It answers there, not in this conversation. Read it with read_session.' })
-  expect(spawned.filter((argv) => argv[1] === 'task')).toEqual([[cmodProgram, 'task', 'start', '--title', 'Upgrade', '--model', 'sonnet', '--cwd', '/work/app', '--json', '--', 'Upgrade every dependency.']])
-  expect(sessions[spawned.findIndex((argv) => argv[1] === 'task')]).toBe('test-session')
-  expect(elsewhere).toEqual({ deny: 'The start_session tool failed: cmod: no mod starts sessions on build-box, so the task did not start. Leave device out to start it on test-computer.' })
-})
-
-test("Claude's session tools list, read, message, and end other sessions through cmod serve", async () => {
-  const other = { id: 's2', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: true, device: { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer' } }
-  const elsewhere = { id: 's3', title: 'Run the load test', project: '/srv/app', cwd: '/srv/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T09:00:00.000Z', lastAt: '2026-10-11T09:30:00.000Z', isRunning: false, device: { id: '9c41d07e2b5a4f86a3e1c8d2f07b6e95', name: 'build-box' } }
-  const { tested } = cmodAnswering({})
-  const acted: unknown[] = []
-  tested.fakes.serve.sessions = () => [other, elsewhere]
-  tested.fakes.serve.read = (_id, part) => (part === 'messages' ? [{ id: 'm1', session: 's2', type: Prompt, at: '2026-10-11T10:01:00.000Z', context: 1, turn: 'm1', text: 'rename it', from: { type: 'person' } }] : part === 'state' ? null : part === 'goal' ? { text: '' } : [])
-  tested.fakes.serve.unheld = async (id, action) => (acted.push([id, action]), null)
-  await tested.start()
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tested.settle()
-
-  expect(await tested.callTool('list_sessions', {})).toEqual({ result: 's2  running  Rename the tree pane\n  device test-computer, project /work/app, last active 2026-10-11T10:05:00.000Z\ns3  ended  Run the load test\n  device build-box, project /srv/app, last active 2026-10-11T09:30:00.000Z' })
-  expect(await tested.callTool('read_session', { session: 's2' })).toEqual({ result: 's2  running  Rename the tree pane\n  device test-computer, project /work/app, last active 2026-10-11T10:05:00.000Z\nm1  2026-10-11T10:01:00.000Z  prompt: rename it' })
-  expect(await tested.callTool('message_session', { session: 's2', text: 'use the new name' })).toEqual({ result: 'Sent session s2 the prompt.' })
-  expect(await tested.callTool('end_session', { session: 's2' })).toEqual({ result: 'Session s2 ends once its turn ends.' })
-  expect(await tested.callTool('read_screen', { session: 's2' })).toEqual({ deny: 'The read_screen tool failed: no program on this computer provides cmod/Terminal, so the terminal of session s2 is out of reach. A session claude --bg started has none.' })
-  expect(tested.calls.filter(({ call }) => call === 'session.send').map(({ args }) => args[0])).toEqual([{ to: { sessionId: 's2' }, text: 'use the new name' }])
-  expect(acted).toEqual([['s2', 'end']])
-})
-
-test("Claude's compact tool compacts the conversation once Claude's answer ends, keeping what it named, and then prompts Claude to carry on", async () => {
-  const { tested } = cmodAnswering({})
-  const ran: { command: string; args?: string }[] = []
-  tested.fakes.command.run = async (run) => (ran.push(run), {})
-  await tested.start()
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await prompt(tested, 'Build the parser')
-
-  expect(await tested.callTool('compact', { keep: 'the parser plan' })).toEqual({ result: 'The conversation compacts once this answer ends, and a prompt then lets you carry on. End your answer now.' })
-  expect(ran).toEqual([])
-
-  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
-  for (let waited = 0; tested.shown.prompts.length === 0 && waited < 50; waited += 1) await Bun.sleep(1)
-
-  expect(ran).toEqual([{ command: 'compact', args: 'the parser plan' }])
-  expect(tested.shown.prompts).toEqual(['The conversation was compacted. Carry on with the work from before the compaction.'])
 })
 
 const installedPlugins = '/test/home/.claude/plugins/installed_plugins.json'

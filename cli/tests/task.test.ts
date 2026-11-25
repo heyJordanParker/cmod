@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -96,10 +96,14 @@ test('cmod task start --clone --at forks the conversation from its first message
 
 test("the starting session's tasks list a background task, with the status claude agents gives it", async () => {
   const home = await backgroundHome()
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 'starter', cwd: home }) })
+  const serving = startCmod(home, 'serve')
+  await serving.firstLine()
   await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Upgrade', '--json', 'Upgrade every dependency.')
 
   const listed = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'sessions', 'read', 'tasks', '--json')
 
+  expect(listed.stderr).toBe('')
   expect(JSON.parse(listed.stdout)).toEqual([{ id: sessionId, title: 'Upgrade', openedBy: '', openedAt: expect.any(String), isBackground: true, status: 'running' }])
 })
 

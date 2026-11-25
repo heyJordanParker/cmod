@@ -894,9 +894,11 @@ export default class Cmod extends View {
     const label = typeof given.label === "string" ? given.label : `${Math.round(value)}%`;
     const width = typeof given.width === "number" ? given.width * UI.cell : undefined;
     const sections = Array.isArray(given.sections) ? given.sections.filter((each) => typeof each?.value === "number") : [{ value }];
+    const buffer = typeof given.buffer === "number" ? Math.min(given.buffer, 100) - value : 0;
+    const parts = [...sections.map((each) => [Math.max(each.value, 0), colorOf(each.color, t) ?? (each.tone === undefined ? t.accent : toneOf(each.tone, t))]), ...(buffer > 0 ? [[buffer, tint(t.muted, "66") ?? t.muted]] : [])];
     return Progress.new(`${drawn.key}:progress:${label}`).value(value).accessibility_label(label).flex().items_center().min_w(0).when(width === undefined, (el) => el.flex_1()).when(width !== undefined, (el) => el.w(width ?? 0))
       .child(ProgressTrack.new().w_full().h(6).rounded(3).bg(t.border).overflow_hidden().flex()
-        .children(sections.map((each) => ProgressIndicator.new().h_full().w(`${Math.max(each.value, 0)}%`).bg(each.tone === undefined ? t.accent : toneOf(each.tone, t)))));
+        .children(parts.map(([share, color]) => ProgressIndicator.new().h_full().w(`${share}%`).bg(color))));
   }
 
   list(given, drawn, path, t) {

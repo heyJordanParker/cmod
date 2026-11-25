@@ -454,7 +454,7 @@ test("toasts and a mod's AbovePrompt widget share Claude Code's band above the p
 
   expect((await lines(false)).map((row) => row.replace(/\d\d:\d\d$/, 'hh:mm'))).toEqual([
     `⠋  demo${' '.repeat(14)}Indexing files${' '.repeat(39)}✕`,
-    `${' '.repeat(21)}████░░░░`,
+    `${' '.repeat(21)}████████`,
     `✓  demo${' '.repeat(14)}Installed${' '.repeat(44)}✕`,
     `${' '.repeat(21)}Adds the Prompts widget.`,
     `${' '.repeat(21)}Settings  hh:mm`,

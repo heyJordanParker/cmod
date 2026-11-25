@@ -13,7 +13,7 @@ import { activeSessions, startBackground, startTask, withBackgroundStatus } from
 import { ifMissing, readJson, writeAtomically } from './files.js'
 import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
-import { foldersIn, hasTranscript, readUsage, runningEntries, runningFolder, type HistoryIndex, type RunningEntry } from './history.js'
+import { backgroundTasks, foldersIn, hasTranscript, readUsage, runningEntries, runningFolder, type HistoryIndex, type RunningEntry } from './history.js'
 
 export type SessionServer = SessionRouting & { visits(): Promise<VisitedAt> }
 
@@ -150,8 +150,8 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         const project = typeof options['project'] === 'string' ? options['project'] : (holding(session)?.project ?? '')
         const task = taskOf(options)
         if (!hasTranscript(session, project)) {
-          if (holding(session) !== undefined) return emptyPart(part)
-          throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+          if (holding(session) === undefined && !runningEntries().some((entry) => entry.session === session)) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+          return part === 'tasks' ? withBackgroundStatus(backgroundTasks(session), (error) => report('lists the background tasks with no status', error)) : emptyPart(part)
         }
         if (part === 'messages') return index.readMessages({ session, project, ...task, ...text('turn', options), ...text('after', options), ...count('last', options) })
         if (part === 'turns') return index.readTurns({ session, project, ...task, ...count('context', options), ...count('last', options) })

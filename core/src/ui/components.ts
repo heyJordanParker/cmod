@@ -1,4 +1,4 @@
-import { Box, Button, hostComponent, Text } from './elements.js'
+import { Box, Button, drawnIn, hostComponent, Text, type Color } from './elements.js'
 
 export type Tab = { readonly key: string; readonly label: string; readonly hotkey?: string }
 
@@ -117,38 +117,73 @@ export const Pagination = hostComponent(
     }),
 )
 
-export type ProgressSection = { readonly value: number; readonly tone?: Tone }
+export type ProgressSection = { readonly value: number } & ({ readonly tone?: Tone } | { readonly color: Color })
 
-type ProgressProps = ({ readonly value: number; readonly tone?: Tone } | { readonly sections: readonly ProgressSection[] }) & { readonly width?: number; readonly label?: string }
+type ProgressProps = ({ readonly value: number; readonly tone?: Tone } | { readonly sections: readonly ProgressSection[] }) & { readonly buffer?: number; readonly width?: number; readonly label?: string }
 
-type ProgressData = { readonly value: number; readonly width: number; readonly label?: string; readonly sections?: readonly ProgressSection[] }
+type ProgressData = { readonly value: number; readonly width: number; readonly label?: string; readonly sections?: readonly ProgressSection[]; readonly buffer?: number }
+
+const eighths = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉']
+
+const roundedLeft = '\u{E0B6}'
+
+const roundedRight = '\u{E0B4}'
+
+const barColors: Readonly<Record<Tone, string>> = { neutral: 'inactive', info: 'suggestion', success: 'success', warning: 'warning', critical: 'error' }
 
 function filledSections(sections: readonly ProgressSection[]): ProgressSection[] {
   let reached = 0
-  return sections.map(({ value, tone }) => {
-    const filled = Math.min(Math.max(value, 0), 100 - reached)
+  return sections.map((section) => {
+    const filled = Math.min(Math.max(section.value, 0), 100 - reached)
     reached += filled
-    return { value: filled, ...(tone === undefined ? {} : { tone }) }
+    return { ...section, value: filled }
   })
 }
 
 export const Progress = hostComponent(
   'Progress',
-  ({ width = 24, label, ...given }: ProgressProps): ProgressData => {
+  ({ width = 24, label, buffer, ...given }: ProgressProps): ProgressData => {
     const sections = 'sections' in given ? filledSections(given.sections) : given.tone === undefined ? undefined : filledSections([given])
     const value = sections === undefined && 'value' in given ? Math.min(Math.max(given.value, 0), 100) : (sections ?? []).reduce((sum, each) => sum + each.value, 0)
-    return { value, width, ...(label === undefined ? {} : { label }), ...(sections === undefined ? {} : { sections }) }
+    const buffered = buffer === undefined ? undefined : Math.min(Math.max(buffer, value), 100)
+    return { value, width, ...(label === undefined ? {} : { label }), ...(sections === undefined ? {} : { sections }), ...(buffered === undefined || buffered === value ? {} : { buffer: buffered }) }
   },
-  ({ value, width, sections }: ProgressData) => {
+  ({ value, width, sections, buffer }: ProgressData) => {
+    const isRounded = drawnIn().hasNerdFont && width > 2
+    const cells = isRounded ? width - 2 : width
+    const units = cells * eighths.length
     let reached = 0
-    const cells = (sections ?? [{ value }]).map(({ value: part, tone }) => {
-      const from = Math.round((reached / 100) * width)
-      reached += part
-      return Text({ ...(tone === undefined ? { color: 'claude' } : textOf(tone)), children: '█'.repeat(Math.round((reached / 100) * width) - from) })
+    const ends = (sections ?? [{ value }]).map((section) => {
+      reached += section.value
+      return { end: Math.round((reached / 100) * units), color: 'color' in section ? section.color : section.tone === undefined ? 'claude' : barColors[section.tone] }
     })
-    return Text({ children: [...cells, Text({ color: 'subtle', children: '░'.repeat(width - Math.round((reached / 100) * width)) })] })
+    const buffered = Math.round(((buffer ?? 0) / 100) * units)
+    const colorAt = (unit: number) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? 'promptBorder' : 'subtle')
+    const drawn: BarCell[] = []
+    for (let cell = 0; cell < cells; cell++) {
+      const from = cell * eighths.length
+      const left = colorAt(from)
+      const right = colorAt(from + eighths.length - 1)
+      let edge = 1
+      while (edge < eighths.length && colorAt(from + edge) === left) edge++
+      drawn.push(left === right ? { color: left, children: '█' } : { color: left, backgroundColor: right, children: eighths[edge] ?? '█' })
+    }
+    const capped = isRounded ? [{ color: colorAt(0), children: roundedLeft }, ...drawn, { color: colorAt(units - 1), children: roundedRight }] : drawn
+    return Text({ children: runsOf(capped).map((run) => Text(run)) })
   },
 )
+
+type BarCell = { color: string; backgroundColor?: string; children: string }
+
+function runsOf(cells: readonly BarCell[]): BarCell[] {
+  const runs: BarCell[] = []
+  for (const cell of cells) {
+    const last = runs.at(-1)
+    if (last !== undefined && last.color === cell.color && last.backgroundColor === cell.backgroundColor && last.children !== roundedLeft && cell.children !== roundedRight) last.children += cell.children
+    else runs.push({ ...cell })
+  }
+  return runs
+}
 
 export const List = hostComponent(
   'List',

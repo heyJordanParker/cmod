@@ -381,14 +381,14 @@ export function preferencesPath(store: string): string {
   return `${store}/preferences.json`
 }
 
-export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean }
+export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean; readonly roundsBarEnds: boolean }
 
-const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet'] as const satisfies readonly (keyof Preferences)[]
+const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet', 'roundsBarEnds'] as const satisfies readonly (keyof Preferences)[]
 
 export function parsePreferences(value: unknown, path: string): Preferences {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== 'boolean'))) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
   const saved = isObject(value) ? value : {}
-  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true, servesTailnet: saved['servesTailnet'] !== false }
+  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true, servesTailnet: saved['servesTailnet'] !== false, roundsBarEnds: saved['roundsBarEnds'] === true }
 }
 
 export function tailnetFolder(store: string, mod: string): string {
@@ -421,6 +421,14 @@ export function parseWebUi(value: unknown, path: string): WebUi | undefined {
 }
 
 export type BrowserEnv = { readonly os: string; readonly browser?: string | undefined; readonly sshConnection?: string | undefined; readonly display?: string | undefined; readonly waylandDisplay?: string | undefined }
+
+export type TerminalVariables = { readonly program?: string | undefined; readonly ghostty?: string | undefined; readonly wezterm?: string | undefined }
+
+const nerdFontTerminals: readonly string[] = ['herdr', 'ghostty', 'WezTerm']
+
+export function isNerdFontTerminal({ program, ghostty, wezterm }: TerminalVariables): boolean {
+  return nerdFontTerminals.includes(program ?? '') || (ghostty ?? '') !== '' || (wezterm ?? '') !== ''
+}
 
 export function browserCommand(env: BrowserEnv, href: string): readonly string[] | undefined {
   if (env.browser === 'true') return undefined
@@ -499,7 +507,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '8.8.4'
+export const coreVersion = '8.9.0'
 
 export const oldestCmodVersion = '8.0.0'
 

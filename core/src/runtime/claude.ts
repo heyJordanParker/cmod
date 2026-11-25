@@ -45,6 +45,7 @@ import type {
   UiScrollResult,
 } from 'claude-code'
 import type { Device } from '../session/context/turn/device.js'
+import type { TerminalVariables } from '../records.js'
 
 export const heldInput = 'the session was stopped and nobody has sent input since'
 
@@ -121,6 +122,7 @@ export type Claude = {
     sshConnection(): Promise<string | undefined>
     display(): Promise<string | undefined>
     waylandDisplay(): Promise<string | undefined>
+    terminal(): Promise<TerminalVariables>
   }
   readonly device: { read(): Promise<Device> }
   readonly cmod: { call(input: Args<'cmod.call'>): Promise<unknown> }

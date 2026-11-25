@@ -198,7 +198,7 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 
 - The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or cmod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
 
-## Read your conversations
+## Read and drive your sessions
 
 ### cmod sessions
 
@@ -213,28 +213,48 @@ cmod sessions read goal [<session>] [--task <id>] [--json]
 cmod sessions read usage [<session>] [--task <id>] [--json]
 cmod sessions read state [<session>] [--json]
 cmod sessions read <part> <session> --transcripts <folder> [--json]
+cmod sessions send <session> <text> [--note]
+cmod sessions start <prompt> --title <title> [--agent-type <type>] [--model <model>] [--cwd <folder>] [--device <name>] [--json]
+cmod sessions fork <prompt> --title <title> [--session <id>] [--at <message>] [--json]
+cmod sessions stop <session>
+cmod sessions end <session>
+cmod sessions compact [<session>] [--keep <text>]
+cmod sessions delete <session>
 cmod sessions follow [<session>...] [--running] [--json]
 cmod sessions index
 ```
 
-Reads every conversation Claude Code saved, as the sessions, contexts, turns, tasks, and messages `sessions` answers a mod ([session.md](session.md)), so a person or an agent reads them in a terminal without parsing a transcript. `list`, `search`, and `read` are the `sessions`, `search`, and `read` calls of the `cmod/Sessions` interface.
+Reads every conversation Claude Code saved, as the sessions, contexts, turns, tasks, and messages `sessions` answers a mod ([session.md](session.md)), and acts on them, so a person or an agent reads and drives them in a terminal as a mod does. `list`, `search`, `read`, and each action go through `cmod serve`, as a mod's `sessions` import does, so they reach the sessions of this computer and of each device a sessions provider serves. A `<session>` left out is the one the command runs in, which Claude Code names in `CLAUDE_CODE_SESSION_ID`.
 
-- `list` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--every-project` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
-- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--every-project`, `--since`, and `--running` scope it as they scope `list`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--agent` keeps the main agent's messages, or with `--task` that task's own, without the tasks it started.
-- `read messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
+- `list` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, title, whether it runs or waits on a dialog, and its device. `--every-project` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
+- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time, session, message id, and the words around the match, and leaves out earlier `cmod sessions search` calls. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--every-project`, `--since`, and `--running` scope it as they scope `list`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--agent` keeps the main agent's messages, or with `--task` that task's own, without the tasks it started.
+- `read messages` prints one conversation's messages in order, each with its id: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
 - `read turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end. With `--json`, a turn names the `device` it ran on, as `Turn.device` does ([session.md](session.md#turn-context-goal-and-task)).
 - `read contexts` prints the conversation's contexts, a new one after each compaction.
 - `read tasks` prints the tasks the conversation started, with `--task` the tasks that task started, and with `--nested` every task at any depth.
 - `read goal` prints what the conversation is for: the goal a mod set, or its first prompt.
 - `read usage` prints the model and the context's tokens as of the last reply.
 - `--task` reads the `turns`, `contexts`, `goal`, and `usage` of the session a task's owner runs, the way they read the conversation's.
-- `read state` prints what a running conversation resumes from. It reads the index without writing to it, so it never waits for another cmod that is writing the index.
+- `read state` prints what a running conversation on this computer resumes from. It reads the index without writing to it, so it never waits for another cmod that is writing the index.
 - `read --transcripts <folder>` reads the conversation from the transcripts in `<folder>/projects`, a Claude Code folder such as one copied from a computer that is off, through an index of its own that lives only while the command runs. So the index of this computer's conversations never lists it, and a mod that serves another device's sessions answers `cmod/Sessions` `read` in cmod's own shapes. It takes every flag each part takes.
-- `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later.
+- `send` sends the session a prompt, which it answers as its next turn, or with `--note` a note it reads with its next prompt. Inside Claude Code the prompt goes from this session, through Claude Code's message between sessions, so the session it reaches knows who sent it. When this session runs a cmod plugin older than 8.9.0, until it reloads, the prompt goes straight to the session instead, with no sender. A session that ended resumes on the prompt.
+- `start` starts a background session on a task this session owns, and `fork` one on a copy of this conversation, or of `--session`'s, whole or through the message `--at` names, owned by the session it copies. Each prints the task, as one line of JSON with `--json`. `--agent-type`, `--model`, `--cwd`, and `--device` pick a started session's agent, model, folder, and device.
+- `stop` stops the session's running turn, as Esc does. `end` ends its Claude Code once its turn ends. `compact` compacts its conversation once its turn ends, keeping what `--keep` names, then prompts Claude to carry on, and waits for the next turn when the person stopped this one with Esc. `delete` deletes a session that ended.
+- `follow` prints each message, turn, context, task, and goal change of this computer's sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later.
 - `--json` prints JSON instead of one line each.
 - `index` reads every saved conversation into the index at `~/.local/share/cmod/history-14.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, with the device each ran on, contexts, and tasks. While cmod has set up a mod other than cmod, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 A cmod plugin before 8.0.0 runs `cmod history`, with `sessions` for `list`, each part of `read` without `read`, and `--all` for `--every-project`, which still works.
+
+### cmod terminal
+
+```text
+cmod terminal screen <session>
+cmod terminal press <session> <keys>
+cmod terminal show <session> [focus|peek|tab|right|down|hide]
+```
+
+Reaches the terminal that runs a session through each program that provides `cmod/Terminal`, such as Herdr. `screen` prints it as the person sees it, `press` types keys into it, such as `"1\\r"` to answer a dialog's first choice, where `\\r` is Enter and `\\e` is Esc, and `show` shows it in a pane of the app, focused unless a place is given. A session `claude --bg` started has no terminal.
 
 ### cmod ui
 

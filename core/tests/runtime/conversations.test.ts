@@ -128,6 +128,56 @@ test('the cmod plugin aborts the engine turn that is running', async () => {
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
 })
 
+test('a session asked to compact compacts once its turn ends, keeping what it was asked to keep, and then prompts Claude to carry on', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const compact = () => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'compact', input: { keep: 'the parser plan' } }, caller: 'cmod' } as never)
+  const ran = () => tested.calls.filter((call) => call.call === 'command.run' || call.call === 'prompt.submit').map((call) => [call.call, call.args[0]])
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Plan the parser', turnId: 'turn-1' } as never)
+
+  expect(await compact()).toEqual({ value: null })
+  await tested.settle()
+  expect(ran()).toEqual([])
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Planned.' } as never)
+  await tested.settle()
+
+  expect(ran()).toEqual([
+    ['command.run', { command: 'compact', args: 'the parser plan' }],
+    ['prompt.submit', { text: 'The conversation was compacted. Carry on with the work from before the compaction.' }],
+  ])
+})
+
+test('a compaction asked for during a turn the person stops with Esc waits for the next turn that ends, because Claude Code runs no command until the person sends input', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const compacted = () => tested.calls.filter((call) => call.call === 'command.run').map((call) => call.args[0])
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Plan the parser', turnId: 'turn-1' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'compact', input: {} }, caller: 'cmod' } as never)
+  const stopped = new AbortController()
+  stopped.abort()
+
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Planned.' } as never, undefined, stopped.signal)
+  await tested.settle()
+  const afterEsc = compacted()
+  await claudeCodeOf(tested).fire('prompt.submit', { text: 'Go on', origin: { kind: 'composer' }, wait: false })
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Go on', turnId: 'turn-2' } as never)
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never)
+  await tested.settle()
+
+  expect(afterEsc).toEqual([])
+  expect(compacted()).toEqual([{ command: 'compact' }])
+})
+
+test('a session asked to send to another session sends it as itself, through Claude Code message between sessions, so the other session knows who to answer', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const send = (to: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'sendTo', input: { to, type: 'prompt', text: 'Rerun the deploy' } }, caller: 'cmod' } as never)
+
+  expect(await send('deployer')).toEqual({ value: null })
+  expect(await send('test-session')).toEqual({ deny: 'session test-session cannot send as itself to itself.' })
+  expect(tested.calls.filter((call) => call.call === 'session.send' || call.call === 'prompt.submit').map((call) => [call.call, call.args[0]])).toEqual([['session.send', { to: { sessionId: 'deployer' }, text: 'Rerun the deploy' }]])
+})
+
 test('a row the test appends with no stored row given is kept as it arrived, as Claude Code keeps it', async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })

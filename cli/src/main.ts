@@ -26,6 +26,7 @@ const commands: Record<string, () => Promise<Command>> = {
   rules: () => import('./commands/rules.js'),
   device: () => import('./commands/device.js'),
   sessions: () => import('./commands/sessions.js'),
+  terminal: () => import('./commands/terminal.js'),
   ui: () => import('./commands/ui.js'),
   log: () => import('./commands/log.js'),
   task: () => import('./commands/task.js'),

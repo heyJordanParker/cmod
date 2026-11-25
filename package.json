@@ -10,7 +10,7 @@
       "history": { "title": "Show or hide History", "default": "meta+h" }
     }
   },
-  "files": ["cli/bin/cmod", "cli/package.json", "hooks", "rules", "setup", "src", "types/index.d.ts"],
+  "files": ["cli/bin/cmod", "cli/package.json", "hooks", "rules", "setup", "skills", "src", "types/index.d.ts"],
   "dependencies": {
     "@cmodjs/core": "^8.4.0"
   }

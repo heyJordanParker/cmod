@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { cacheFolder, dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { cacheFolder, dataFolder, finishStepsMethod, isAtLeast, isNerdFontTerminal, parsePreferences, preferencesPath, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -140,6 +140,12 @@ const settingsLoadMs = 500
 
 
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
+
+async function roundsBarEnds(claude: Claude): Promise<boolean> {
+  const path = preferencesPath(await cmodStore(claude))
+  const text = await claude.fs.read(path).catch(ifMissing(undefined))
+  return parsePreferences(text === undefined ? undefined : (JSON.parse(text) as unknown), path).roundsBarEnds
+}
 
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
@@ -732,12 +738,13 @@ export function createLifecycle<State extends object, Declared extends Options =
           (done) => done === 'copied' && runtime?.toaster.toast.success('Copied the link', { description: 'Paste it in your browser.' }),
           (error: unknown) => toastFailure({ id: 'open-link', message: 'Could not open the link', error, isCritical: true }),
         )
+      let hasNerdFont = false
       const naming: Claude = {
         ...claudeCalls,
         ui: {
           ...claudeCalls.ui,
           warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)),
-          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open),
+          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, { hasNerdFont }),
         },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() },
       }
@@ -755,6 +762,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       readStarted = read
       try {
         drawCount = (await claudeCalls.clock.now()) * drawsPerMs
+        hasNerdFont = (await roundsBarEnds(claudeCalls).catch((error: unknown) => (claudeCalls.ui.warn('preferences:read', `${definition.name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false))) || isNerdFontTerminal(await claudeCalls.env.terminal())
         await programs.refresh()
         await begin().catch(report)
       } finally {
