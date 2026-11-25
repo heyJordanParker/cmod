@@ -80,6 +80,7 @@ const unfaked: Omit<SessionComputer, keyof Mailbox> = {
   unheld: (session) => Promise.reject(notHere(session)),
   visit: async () => undefined,
   remove: async () => undefined,
+  stop: async () => false,
 }
 
 const deviceLink: ProviderIdentity = { mod: 'testMod', program: 'devices' }
@@ -122,6 +123,7 @@ export function fakeServe(
       unheld: (...args) => answer('unheld')(...args),
       visit: (...args) => answer('visit')(...args),
       remove: (...args) => answer('remove')(...args),
+      stop: (...args) => answer('stop')(...args),
       queue: (...args) => answer('queue')(...args),
       queued: (...args) => answer('queued')(...args),
       delivered: (...args) => answer('delivered')(...args),

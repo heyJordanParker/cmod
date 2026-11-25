@@ -1,5 +1,6 @@
 import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
-import { chmod, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { chmod, mkdir, readFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
@@ -28,6 +29,7 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
   const acted: Acted[] = []
   const waiting: { readonly session: string; readonly count: number; readonly resolve: () => void }[] = []
   const actedOn = (session: string) => acted.filter((each) => each[0] === session).length
+  const plugins: RpcClient[] = []
   for (const [session, answers] of Object.entries(held)) {
     const plugin = connectRpc({
       call: async (path, init) => {
@@ -44,10 +46,11 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
       clock: stoppedClock,
     })
     clients.push(plugin)
+    plugins.push(plugin)
     await plugin.request('$/hold', { session, project: home, cwd: home })
   }
   const actedTimes = (session: string, count: number) => new Promise<void>((resolve) => (actedOn(session) >= count ? resolve() : waiting.push({ session, count, resolve })))
-  return { home, acted, actedTimes, stop: () => serving.child.kill() }
+  return { home, acted, actedTimes, plugins, servePid: serving.child.pid, stop: () => serving.child.kill() }
 }
 
 test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, a send from inside Claude Code names that session as its sender, and read mail lists each mail with its state', async () => {
@@ -197,6 +200,26 @@ test.concurrent('a session Claude Code records as running before cmod indexed an
   expect([listed.exitCode, listed.stderr, (JSON.parse(listed.stdout) as readonly { readonly id: string; readonly title: string; readonly cwd: string; readonly startedAt: string; readonly isRunning: boolean; readonly status?: string }[]).map(({ id, title, cwd, startedAt, isRunning, status }) => ({ id, title, cwd, startedAt, isRunning, status }))]).toEqual([0, '', [{ id: started, title: 'Upgrade', cwd: home, startedAt: '2026-11-25T10:00:00.000Z', isRunning: true, status: 'busy' }]])
   expect(sent).toEqual({ exitCode: 0, stdout: 'Sent message 1 to session b2349836 (Upgrade). It arrives as soon as the session can take it, and cmod sessions read mail b2349836 shows when.\n', stderr: '' })
   expect(acted).toEqual([[started, 'send', { type: 'prompt', text: 'Rerun the deploy' }]])
+})
+
+test.concurrent("cmod serve stops the background session whose cmod plugin asks it to with claude stop and its job id, from its own process and outside the session's, and stops no other", async () => {
+  const background = '515854d9-0c1a-4f2e-9d3b-6a7e8f901234'
+  const { home, plugins: [stopping, staying], servePid, stop } = await servedSessions({ [background]: {}, worker: {} })
+  const started = await startOf(process.pid)
+  await writeFiles(home, {
+    'bin/claude': '#!/bin/sh\n[ "$1" = stop ] || exit 1\nprintf \'%s\\n\' "$PPID" "$@" > "$HOME/stopped"\necho "stopped $2"\n',
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: background, cwd: home, procStart: started, kind: 'bg', jobId: '515854d9' }),
+    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 'worker', cwd: home, procStart: started, kind: 'interactive' }),
+  })
+
+  const kept = await staying?.request('$/stop', {})
+  const leftAlone = existsSync(join(home, 'stopped'))
+  const stopped = await stopping?.request('$/stop', {})
+  stop()
+
+  expect([kept, leftAlone]).toEqual([{ isStopped: false }, false])
+  expect(stopped).toEqual({ isStopped: true })
+  expect((await readFile(join(home, 'stopped'), 'utf8')).trimEnd().split('\n')).toEqual([String(servePid), 'stop', '515854d9'])
 })
 
 test.concurrent("cmod terminal reads, types into, and shows a session's terminal through the program that provides cmod/Terminal", async () => {

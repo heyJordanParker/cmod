@@ -9,6 +9,7 @@ import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../package.json'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
+import { runningEntries } from './history.js'
 import { readPlugin, type Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
 import { linkedEntries, linkedMarketplaceFile, linkedPlugins, pluginFolders, removePluginFolder, type LinkedEntry } from './settings.js'
@@ -247,9 +248,13 @@ export async function startTask(session: string, { title, prompt, cwd, agentType
   return { id, ...task }
 }
 
-export async function stopBackground(jobId: string): Promise<void> {
-  const { exitCode, stdout, stderr } = await capture([claudeCode(), 'stop', jobId])
-  if (exitCode !== 0) throw new Error(`claude stop ${jobId} exited ${exitCode}: ${`${stdout}${stderr}`.trim()}`)
+export async function stopBackground(session: string): Promise<boolean> {
+  const record = runningEntries().find((entry) => entry.session === session)
+  if (record?.kind !== 'bg') return false
+  if (record.jobId === undefined) throw new Error(`Claude Code's record of background session ${session} names no jobId, so cmod cannot run claude stop for it.`)
+  const { exitCode, stdout, stderr } = await capture([claudeCode(), 'stop', record.jobId])
+  if (exitCode !== 0) throw new Error(`claude stop ${record.jobId} exited ${exitCode}: ${`${stdout}${stderr}`.trim()}`)
+  return true
 }
 
 export async function backgroundAgents(): Promise<{ readonly id: string; readonly sessionId: string; readonly status: string }[]> {

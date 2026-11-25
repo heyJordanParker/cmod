@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util'
 import { dataFolder, storeFolder } from '@cmodjs/core/src/records.js'
 import { startTask, stopBackground } from '../claude.js'
 import { writeAtomically } from '../files.js'
-import { runningEntries, sessionTranscripts } from '../history.js'
+import { sessionTranscripts } from '../history.js'
 
 export const summary = 'Start a task in a new background Claude Code session, or stop one.'
 
@@ -62,11 +62,8 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function stop(session: string, isJson: boolean): Promise<number> {
-  const record = runningEntries().find((entry) => entry.session === session)
-  const isBackground = record?.kind === 'bg'
-  if (isBackground && record.jobId === undefined) throw new Error(`Claude Code's record of background session ${session} names no jobId, so cmod cannot run claude stop for it.`)
-  if (isBackground && record.jobId !== undefined) await stopBackground(record.jobId)
-  process.stdout.write(isJson ? `${JSON.stringify({ isStopped: isBackground })}\n` : isBackground ? `Stopped background session ${session}.\n` : `Session ${session} is no background session, so cmod task stop left it running.\n`)
+  const isStopped = await stopBackground(session)
+  process.stdout.write(isJson ? `${JSON.stringify({ isStopped })}\n` : isStopped ? `Stopped background session ${session}.\n` : `Session ${session} is no background session, so cmod task stop left it running.\n`)
   return 0
 }
 

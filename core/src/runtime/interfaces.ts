@@ -40,6 +40,7 @@ export const uiParts = ['widgets', 'views', 'pages'] as const
 
 export const sessionActs = {
   hold: '$/hold',
+  stop: '$/stop',
   act: '$/act',
   changed: '$/changed',
   status: '$/status',
@@ -363,6 +364,7 @@ export type SessionComputer = {
   unheld(session: string, action: string, input: unknown, context: SessionContext, holding: HoldingOf): Promise<unknown>
   visit(session: string, at: string, holding: HoldingOf): Promise<void>
   remove(session: string, context: SessionContext, holding: HoldingOf): Promise<void>
+  stop(session: string): Promise<boolean>
   queue(mail: Omit<Mail, 'id' | 'deliveredAt'>): Promise<number>
   queued(session: string): Promise<readonly Mail[]>
   delivered(id: number, at: string): Promise<void>
@@ -648,7 +650,7 @@ export function routeSessions({
       if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, listening.interface === providersInterface || isServed(listening.interface) ? `${listening.interface} tells only Change.` : `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
       after(0, () => onListen(listening))
     },
-    extraMethod: (connection, method, params) => {
+    extraMethod: async (connection, method, params) => {
       if (method === sessionActs.uiEvent) {
         const holder = holders.get(connection)
         const { event, payload } = (isObject(params) ? params : {}) as { readonly event?: unknown; readonly payload?: unknown }
@@ -670,6 +672,11 @@ export function routeSessions({
       if (method === sessionActs.changed) {
         changed(params as SessionsChange)
         return { result: null }
+      }
+      if (method === sessionActs.stop) {
+        const holder = holders.get(connection)
+        if (holder === undefined) throw new RpcError(rpcCodes.notHeld, `${sessionActs.stop} stops the session this connection holds, and it holds none.`)
+        return { result: { isStopped: await computer.stop(holder.session) } }
       }
       if (method === sessionActs.status) {
         const holder = holders.get(connection)

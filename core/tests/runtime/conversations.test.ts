@@ -961,16 +961,18 @@ test("a running task of the cmod plugin's session holds its status, its teammate
   expect(tasks.map(({ status, name, spawnedBy }) => [status, name, spawnedBy])).toEqual([['waiting', 'scout', 'demo']])
 })
 
-test('end stops an idle session now and a busy one at its turn end, through cmod task stop for a background session and /exit for any other, and answers which', async () => {
+test("end stops an idle session now and a busy one at its turn end, asking cmod serve to stop it from outside the session's processes, with /exit only for a session cmod serve did not stop, and answers which", async () => {
   const ended = async (isBackground: boolean) => {
     const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
     const router = createRouter()
     fake.fakes.fs = fakeFiles({})
     const ran: string[][] = []
-    fake.fakes.process.spawn = (request) => (ran.push([...request.argv]), printed(request.argv[1] === 'task' ? JSON.stringify({ isStopped: isBackground }) : '[]'))
-    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+    const reported: string[] = []
+    fake.fakes.process.spawn = (request) => (ran.push([...request.argv]), printed('[]'))
+    fake.fakes.serve.stop = async (session) => (ran.push(['cmod serve stops', session]), isBackground)
+    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message, error) => void reported.push(`${message}: ${String(error)}`), clear: () => {} })
     const end = () => served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'end', input: null }, caller: 'demo' })
-    const done = async () => (await fake.settle(), [...ran.filter((argv) => argv[1] === 'task'), ...fake.calls.filter((call) => call.call === 'command.run').map((call) => ['command.run', (call.args[0] as { readonly command: string }).command])])
+    const done = async () => (await fake.settle(), [...ran.filter((argv) => argv[0] === 'cmod serve stops' || argv[1] === 'task'), ...fake.calls.filter((call) => call.call === 'command.run').map((call) => ['command.run', (call.args[0] as { readonly command: string }).command])])
     await router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'startup' } as never, async () => ({}))
 
     const idle = await end()
@@ -979,12 +981,12 @@ test('end stops an idle session now and a busy one at its turn end, through cmod
     const busy = await end()
     const duringTurn = await done()
     await router.dispatch('classic.Stop', { stop_hook_active: false, last_assistant_message: 'Deployed.' } as never, async () => ({}))
-    return { idle, afterIdle, busy, duringTurn, afterTurn: await done() }
+    return { idle, afterIdle, busy, duringTurn, afterTurn: await done(), reported }
   }
-  const stop = ['cmod', 'task', 'stop', 'test-session', '--json']
+  const stop = ['cmod serve stops', 'test-session']
 
-  expect(await ended(true)).toEqual({ idle: { value: { ends: 'now' } }, afterIdle: [stop], busy: { value: { ends: 'afterTurn' } }, duringTurn: [stop], afterTurn: [stop, stop] })
-  expect(await ended(false)).toEqual({ idle: { value: { ends: 'now' } }, afterIdle: [stop, ['command.run', 'exit']], busy: { value: { ends: 'afterTurn' } }, duringTurn: [stop, ['command.run', 'exit']], afterTurn: [stop, stop, ['command.run', 'exit'], ['command.run', 'exit']] })
+  expect(await ended(true)).toEqual({ idle: { value: { ends: 'now' } }, afterIdle: [stop], busy: { value: { ends: 'afterTurn' } }, duringTurn: [stop], afterTurn: [stop, stop], reported: [] })
+  expect(await ended(false)).toEqual({ idle: { value: { ends: 'now' } }, afterIdle: [stop, ['command.run', 'exit']], busy: { value: { ends: 'afterTurn' } }, duringTurn: [stop, ['command.run', 'exit']], afterTurn: [stop, stop, ['command.run', 'exit'], ['command.run', 'exit']], reported: [] })
 })
 
 test('the cmod plugin asks the before listeners of its session, starts a background task through cmod task start, and closes it when the task’s session relays its answer', async () => {

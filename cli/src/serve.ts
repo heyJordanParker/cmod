@@ -10,7 +10,7 @@ import { routeSessions, sessionsInterface, storeInterface, type HoldingOf, type 
 import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
-import { activeSessions, startBackground, startTask, withBackgroundStatus } from './claude.js'
+import { activeSessions, startBackground, startTask, stopBackground, withBackgroundStatus } from './claude.js'
 import { ifMissing, readJson, writeAtomically } from './files.js'
 import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
@@ -188,6 +188,12 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         if (holding(session) === undefined && !hasTranscript(session, '')) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
         await writeVisits((visits) => {
           visits[session] = at
+        })
+      },
+      async stop(session) {
+        return stopBackground(session).catch((error: unknown) => {
+          report(`did not stop background session ${session}`, error)
+          throw error
         })
       },
       async remove(session, context, holding) {

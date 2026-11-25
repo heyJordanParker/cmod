@@ -29,6 +29,7 @@ const noSessions: Computer = {
   unheld: () => Promise.reject(new Error('no session')),
   visit: async () => undefined,
   remove: async () => undefined,
+  stop: async () => false,
 }
 
 function fetchOf(routesAt: (socketPath: string | undefined) => RpcRoutes | undefined): HttpFetch {

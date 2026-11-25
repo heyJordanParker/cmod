@@ -743,7 +743,7 @@ export function serveConversations({
 
   const exitNow = async () => {
     endsAfterTurn = false
-    const { isStopped } = JSON.parse(await runCmod(claude, ['task', 'stop', session, '--json'], session)) as { readonly isStopped: boolean }
+    const { isStopped } = await local.client.request<{ readonly isStopped: boolean }>(sessionActs.stop, {})
     if (!isStopped) await claude.command.run({ command: 'exit' })
   }
   const endSoon = () => claude.clock.after(0, () => void exitNow().catch((error: unknown) => report('end', `Could not end session ${session}`, error)))
