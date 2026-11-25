@@ -43,7 +43,7 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
 }
 
 test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, and a send from inside Claude Code goes from that session, or straight to the session when that cmod plugin is older', async () => {
-  const { home, acted, stop } = await servedSessions({ worker: {}, planner: {}, elder: { sendTo: () => { throw new Error('cmod takes no action named sendTo.') } } })
+  const { home, acted, stop } = await servedSessions({ worker: {}, planner: {}, elder: { sendTo: () => { throw new Error('Session elder runs cmod 8.8.4, which has no "sendTo" action.') } } })
   await writeFiles(home, { [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/old.jsonl`]: `${JSON.stringify({ type: 'user', uuid: 'u1', sessionId: 'old', timestamp: '2026-11-20T10:00:00.000Z', cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } })}\n` })
 
   const fromOutside = await cmodWith(home, outside, 'sessions', 'send', 'worker', 'Rerun the deploy')

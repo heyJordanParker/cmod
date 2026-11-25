@@ -19,6 +19,8 @@ import { followSessions, foldersIn, openHistory, readContexts, readFolders, read
 import { withScript, type Script } from '../script.js'
 import { storePath, takeLock } from '../store.js'
 
+const refusesSendTo = ['has no "sendTo" action.', 'answers no cmod/Sessions.sendTo.', 'takes no action named sendTo.']
+
 export const summary = 'Find, read, and drive Claude Code sessions on every device cmod reaches.'
 
 export const help = `Usage: cmod sessions list [--every-project] [--since 2d] [--running] [--project <folder>] [--json]
@@ -232,7 +234,7 @@ async function onServe(script: Script, command: string, rest: readonly string[],
     if (text.trim() === '') throw new Error('cmod sessions send takes the text to send.')
     const sent = { type: values['note'] === true ? Note : Prompt, text }
     await (own === undefined ? act(session, 'send', sent) : act(own, 'sendTo', { ...sent, to: session }).catch((error: unknown) => {
-      if (!/(takes no action named |answers no cmod\/Sessions\.)sendTo\.$/.test(messageOf(error))) throw error
+      if (!refusesSendTo.some((refusal) => messageOf(error).endsWith(refusal))) throw error
       return act(session, 'send', sent)
     }))
     process.stdout.write(`Sent session ${session} the ${values['note'] === true ? 'note' : 'prompt'}.\n`)
