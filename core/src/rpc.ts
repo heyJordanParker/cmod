@@ -55,7 +55,8 @@ export async function connect(): Promise<Connection> {
     },
     keepsConnecting: true,
   })
-  const after = (ms: number, run: () => void) => {
+  listeners.followProviders(client)
+  const after =(ms: number, run: () => void) => {
     const timer = setTimeout(run, ms)
     return { cancel: () => clearTimeout(timer) }
   }

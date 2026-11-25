@@ -1,11 +1,13 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { createCipheriv, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { run } from '../src/process.js'
-import { cmod, deleteTemporaryHomes, environment, temporaryHome } from './cmod.js'
+import { cmodBinary } from './cmod-binary.js'
+import { captured, cmod, deleteTemporaryHomes, environment, spawningTestLimitMs, temporaryHome } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 const keychainHomes: string[] = []
 
 afterAll(async () => {
@@ -16,7 +18,6 @@ afterAll(async () => {
   await deleteTemporaryHomes()
 })
 
-const main = join(import.meta.dir, '..', 'src', 'main.ts')
 
 const token = 'ghp_s3cret "quoted" é\nsecond line'
 
@@ -36,9 +37,7 @@ async function keychainHome(): Promise<string> {
 }
 
 async function secrets(home: string, args: string[], stdin = '', command = 'secrets'): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, main, command, ...args], { cwd: home, env: environment(home), stdin: new TextEncoder().encode(stdin), stdout: 'pipe', stderr: 'pipe' })
-  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  return { exitCode, stdout, stderr }
+  return captured([cmodBinary, command, ...args], { cwd: home, env: environment(home), stdin: { text: stdin } })
 }
 
 function sealedByOlderCmod(value: string, key: Buffer): string {

@@ -1,11 +1,12 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { lstat, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readRecord } from '@cmodjs/core/src/records.js'
 import { readText } from '../src/files.js'
-import { cmod, cmodWith, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodWith, deleteTemporaryHomes, hashOf, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const cycle = { title: 'Switch mode', default: 'shift+tab' }

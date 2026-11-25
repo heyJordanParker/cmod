@@ -1,8 +1,9 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith, deleteTemporaryHomes, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const sessionId = '1a2b3c4d-0000-4000-8000-000000000001'

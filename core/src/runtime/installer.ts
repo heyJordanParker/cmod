@@ -62,7 +62,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
     })
     waiting.show(() => open(true), next)
     if (isOpen) {
-      await send({ redraw: true }).catch(log('the installer did not redraw'))
+      await send({ redraw: true, changed: [installView] }).catch(log('the installer did not redraw'))
     } else {
       isOpen = true
       await open(false).catch((error: unknown) => {
@@ -76,7 +76,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
     return answer
   }
 
-  const redraw = () => void send({ redraw: true }).catch(log('the installer did not redraw'))
+  const redraw = () => void send({ redraw: true, changed: [installView] }).catch(log('the installer did not redraw'))
 
   const actions = (...buttons: readonly RenderElement[]) => Box({ gap: 2, flexShrink: 0, children: buttons })
 
@@ -188,7 +188,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
               } catch (error) {
                 notice = { color: 'error', text: `The ${step.title} step's isDone failed: ${messageOf(error)}` }
               }
-              await send({ redraw: true })
+              await send({ redraw: true, changed: [installView] })
             }
             return dialog(
               Text({ children: [Text({ bold: true, children: step.title }), Text({ dimColor: true, children: `  (${index} of ${total})` })] }),

@@ -58,6 +58,6 @@ jobs:
           rm -rf node_modules/@cmodjs/core
           mkdir node_modules/@cmodjs/core
           tar -xzf "$RUNNER_TEMP"/cmodjs-core-*.tgz -C node_modules/@cmodjs/core --strip-components=1
-          bun test
+          bun run test
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests

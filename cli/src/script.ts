@@ -53,15 +53,29 @@ export function connectScript(name: string, project: string = process.cwd()): Sc
   }
 }
 
-export async function withScript<Value>(name: string, project: string, run: (script: Script) => Promise<Value>): Promise<Value> {
+export function serveUnreached(name: string, reason: string): Error {
+  return new Error(`cmod ${name} reaches no cmod serve at ${serveSocketPath(storeFolder(process.env))}: ${reason}. A Claude Code session with the cmod plugin starts it.`)
+}
+
+export async function reachServe(name: string): Promise<void> {
   const socket = serveSocketPath(storeFolder(process.env))
-  const unreached = (reason: string) => new Error(`cmod ${name} reaches no cmod serve at ${socket}: ${reason}. A Claude Code session with the cmod plugin starts it.`)
-  if (!existsSync(socket)) throw unreached('there is no socket')
+  const refused = await fetch('http://localhost/', { unix: socket }).then(
+    () => undefined,
+    (error: Error & { readonly code?: string }) => error.code ?? error.message,
+  )
+  if (refused === 'EPERM' || refused === 'EACCES') {
+    throw new Error(`cmod ${name} may not open cmod serve's socket ${socket} (${refused}). In Claude Code's sandbox, list the socket in sandbox.network.allowUnixSockets on macOS, turn on sandbox.network.allowAllUnixSockets on Linux, or list cmod in sandbox.excludedCommands.`)
+  }
+  if (refused !== undefined) throw serveUnreached(name, refused === 'ENOENT' ? 'there is no socket' : refused)
+}
+
+export async function withScript<Value>(name: string, project: string, run: (script: Script) => Promise<Value>): Promise<Value> {
+  await reachServe(name)
   const script = connectScript(name, project)
   try {
     return await run(script)
   } catch (error) {
-    if (isConnectionGone(error)) throw unreached(messageOf(error))
+    if (isConnectionGone(error)) throw serveUnreached(name, messageOf(error))
     throw error
   } finally {
     await script.close()

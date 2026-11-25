@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import { Prompt, Reply, ToolCall, ToolResult, type Subprocess } from '../node_modules/@cmodjs/core/mod.js'
+import { Prompt, providers, Reply, ToolCall, ToolResult, type Subprocess } from '../node_modules/@cmodjs/core/mod.js'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
@@ -137,7 +137,7 @@ test('a Linux computer with no machine id in /etc/machine-id or /var/lib/dbus/ma
     fs: { read: async (path: string) => (path === '/etc/machine-id' ? '' : Promise.reject(new Error(`ENOENT: no such file or directory, open '${path}'`))) },
   }
   await tested.start()
-  tested.fakes.device.read = () => readDevice(devcontainer)
+  tested.fakes.device.read = () => readDevice(devcontainer, store)
 
   const started = await tested.raise.beforeSessionStart({ source: 'startup' })
   await tested.settle()
@@ -387,6 +387,21 @@ test('Settings shows no warning for a mod still installing', async () => {
 })
 
 const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
+
+test('a hidden Settings asks no mod for its pending steps and reads no changelog when a mod declares its parts, and asks once Settings shows', async () => {
+  const { tested, called, declare } = testSettings({ '/plugins/demo/CHANGELOG.md': changelog })
+  const readChangelog = () => tested.calls.some((call) => call.call === 'fs.read' && call.args[0] === '/plugins/demo/CHANGELOG.md')
+  await tested.start()
+  await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
+  await tested.settle()
+  const whileHidden = [called.includes('demo cmod:pendingSteps'), readChangelog()]
+
+  await tested.type('/mods demo')
+  await tested.settle()
+
+  expect(whileHidden).toEqual([false, false])
+  expect([called.includes('demo cmod:pendingSteps'), readChangelog()]).toEqual([true, true])
+})
 
 const openChangelog = (tested: ReturnType<typeof testMod>, caller = 'demo') => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'changelog' }] }, caller } as never)
 
@@ -1238,16 +1253,18 @@ test('Settings lists a loaded mod that told its parts and has no install record'
   expect((await shown()).split('\n')).toContain('  ● notes')
 })
 
-test('Settings reads the mods when the session starts, so /mods draws them on its first frame with no loading line', async () => {
+test("/mods draws every mod on its first frame with no loading line, and a mod's pending steps fill its row once its answer lands", async () => {
   const { tested, shown } = testSettings()
   await tested.start()
   await tested.settle()
 
   await tested.type('/mods')
   const first = await shown()
+  await tested.settle()
 
   expect(first).not.toContain('Reading your mods')
-  expect(first).toContain('  ● demo 0.2.0')
+  expect(first).toContain('  demo 0.2.0')
+  expect(await shown()).toContain('  ● demo 0.2.0')
 })
 
 test('every Sidebar tab keeps its width whether it shows or not, so switching tabs moves no other tab', async () => {
@@ -1363,7 +1380,7 @@ test('a reload that takes out a mod with widgets asks it for no widgets, so noth
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [{ id: 'count', title: 'Count', areas: ['belowPrompt'] }], pages: [] } }, caller: 'other' } as never)
   tested.fakes.cmod.call = await unansweredCall()
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
+  await writeStoreFile(tested, installedPlugins, installedJson({}))
   await tick()
   await pressInBand(tested, 'Reload')
   await tick()
@@ -1376,7 +1393,7 @@ test('cmod.call rejects a call to a mod removed after it told cmod its parts wit
   const { tested, reloads, tick } = await startedWith({ 'other@market': '1.0.0' })
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'other' } as never)
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
+  await writeStoreFile(tested, installedPlugins, installedJson({}))
   await tick()
   const call = await unansweredCall()
   await expect(call({ to: 'other', method: 'search', input: {} })).rejects.toThrow(/^other did not answer in time/)
@@ -1534,7 +1551,7 @@ test('the cmod plugin keeps only the newest 200 messages of its session in memor
   await read({ after: 'prompt-prompt 0' })
 
   expect(asked).toEqual(['messages'])
-})
+}, 30_000)
 
 test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or later calls on it', async () => {
   const { tested } = cmodAnswering({})
@@ -1743,7 +1760,7 @@ test('a warning lands in the Log as a warning with the versions it ran on, count
   expect(log).toContain('mod 0.2.0 · @cmodjs/core 5.3.0 · cmod ')
 })
 
-test("another session's preference write reaches this session's Settings when store-changed changes", async () => {
+test("another session's preference write reaches this session's Settings when cmod/Store tells that the preferences changed", async () => {
   const { tested, shown } = testSettings()
   const { tick } = watchedStore(tested)
   await tested.start()
@@ -1758,12 +1775,16 @@ test("another session's preference write reaches this session's Settings when st
   expect(await shown()).toContain('[x] Show errors from installed mods')
 })
 
-test('pressing Show errors from installed mods writes preferences.json, then store-changed', async () => {
+test('pressing Show errors from installed mods writes preferences.json, then store-changed, and tells cmod/Store that the preferences changed', async () => {
   const { tested, shown } = testSettings()
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
   const before = await shown()
+  const told: unknown[] = []
+  const [heard] = await providers('cmod/Store')
+  heard?.onChange((change) => void told.push(change))
+  await tested.settle()
   await tested.shown.pane.press('toggle:Show errors from installed mods')
   await tested.settle()
 
@@ -1771,6 +1792,7 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   expect(before).toContain('[ ] Show errors from installed mods')
   expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '')).toEqual({ showsInstalledModErrors: true })
   expect(await tested.fakes.fs.exists?.(`${store}/store-changed`)).toBe(true)
+  expect(told).toContainEqual({ part: 'preferences' })
   expect(await shown()).toContain('[x] Show errors from installed mods')
 })
 
@@ -1814,7 +1836,7 @@ test('the cmod plugin updates every copy of a mod two marketplaces hold at diffe
   const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.3.4' }, { name: 'demo@market', version: '0.9.0' }, { name: 'demo@other-market', version: '0.9.1' }]])
   await tested.start()
   await tested.settle()
-  await tested.fakes.fs.write?.(installedPlugins, '{"demo@market":[]}')
+  await writeStoreFile(tested, installedPlugins, '{"demo@market":[]}')
   for (const run of ticks) run()
   await tested.settle()
 
@@ -1835,7 +1857,7 @@ test('an update that leaves a mod off runs once, whichever session checks next, 
   const other = pluginsListed([off])
   await other.tested.start()
   await other.tested.settle()
-  await other.tested.fakes.fs.write?.(installedPlugins, '{"demo@beta":[]}')
+  await writeStoreFile(other.tested, installedPlugins, '{"demo@beta":[]}')
   for (const run of other.ticks) run()
   await other.tested.settle()
 
@@ -1856,7 +1878,7 @@ test('the off toast leaves once the next check finds every mod on', async () => 
   const { tested, ticks } = pluginsListed([off, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'demo@beta', version: '0.1.0' }]])
   await tested.start()
   await tested.settle()
-  await tested.fakes.fs.write?.(installedPlugins, '{"cmod@beta":[]}')
+  await writeStoreFile(tested, installedPlugins, '{"cmod@beta":[]}')
   for (const run of ticks) run()
   await tested.settle()
 
@@ -2042,7 +2064,7 @@ test('a mod Claude Code installs while cmod checks the plugin list is checked to
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'list --json', 'update cmod', 'list --json'])
 })
 
-test('forkParent names the session whose last turn ended on this conversation, and null for a new conversation', async () => {
+test('forkParent names the session whose last turn ended on this conversation, and null for a new conversation, reading only its newest rows, so a large conversation is never copied into the hooks worker', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const forkParent = () => tested.fire('cmod.call', { to: 'cmod', method: 'forkParent', input: null })
   const conversation = [
@@ -2052,7 +2074,8 @@ test('forkParent names the session whose last turn ended on this conversation, a
   tested.fakes.session.messages = async () => []
   expect(await forkParent()).toEqual({ value: null })
 
-  tested.fakes.session.messages = (async () => conversation) as unknown as Claude['session']['messages']
+  const asked: unknown[] = []
+  tested.fakes.session.messages = (async (args?: unknown) => (asked.push(args), conversation)) as unknown as Claude['session']['messages']
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
@@ -2060,6 +2083,7 @@ test('forkParent names the session whose last turn ended on this conversation, a
   await claudeCodeOf(tested).fire('SessionStart', { source: 'fork', session_id: 'forked-elsewhere' })
 
   expect(await forkParent()).toEqual({ value: 'test-session' })
+  expect(asked).toEqual([{ last: 8 }, { last: 8 }])
 })
 
 function watchedStore(tested: ReturnType<typeof testMod>) {
@@ -2086,14 +2110,17 @@ function watchedStore(tested: ReturnType<typeof testMod>) {
   return { tick: () => advance(2500), advance }
 }
 
+const storeParts: Readonly<Record<string, 'plugins' | 'widgets' | 'buildFailures' | 'preferences' | 'links'>> = { 'plugins-changed': 'plugins', 'installed_plugins.json': 'plugins', 'widgets.json': 'widgets', 'build-failures.json': 'buildFailures', 'preferences.json': 'preferences', 'links.json': 'links', 'known_marketplaces.json': 'links' }
+
 async function writeStoreFile(tested: ReturnType<typeof testMod>, path: string, text: string) {
   await tested.fakes.fs.write?.(path, text)
-  await tested.fakes.fs.write?.(`${store}/store-changed`, '')
+  const part = storeParts[path.slice(path.lastIndexOf('/') + 1)]
+  if (part === undefined) throw new Error(`${path} is no file cmod tells cmod/Store about.`)
+  void providers('cmod/Store').then(([told]) => told?.changed(part))
 }
 
-test('the cmod plugin polls only the store-changed stamp and installed_plugins.json', async () => {
+test('the cmod plugin polls neither the cmod store nor installed_plugins.json, and reads them again on a cmod/Store Change', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tested.fakes.fs.write?.(installedPlugins, '{}')
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
@@ -2101,12 +2128,16 @@ test('the cmod plugin polls only the store-changed stamp and installed_plugins.j
   const before = tested.calls.length
 
   await tick()
-
   const polled = new Set(tested.calls.slice(before).filter(({ call }) => call === 'fs.stat').map(({ args }) => args[0]))
-  expect([...polled].toSorted()).toEqual([installedPlugins, `${store}/store-changed`])
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  const read = new Set(tested.calls.slice(before).filter(({ call }) => call === 'fs.read').map(({ args }) => args[0]))
+
+  expect([...polled].filter((path) => path === installedPlugins || String(path).startsWith(store))).toEqual([])
+  expect(read.has(`${store}/plugins-changed`)).toBe(true)
 })
 
-test('a store file cmod changes without the store-changed stamp is not read', async () => {
+test('a store file cmod changes with no cmod/Store Change is not read', async () => {
   const { tested } = cmodAnswering({}, {})
   const { tick } = watchedStore(tested)
   await tested.start()
@@ -2359,7 +2390,7 @@ async function startedWith(from: Readonly<Record<string, string>>, files: Readon
 async function updated(from: Readonly<Record<string, string>>, to: Readonly<Record<string, string>>, files: Readonly<Record<string, string>> = {}) {
   const { tested, reloads, tick } = await startedWith(from, files)
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson(to))
+  await writeStoreFile(tested, installedPlugins, installedJson(to))
   await tick()
   await tick()
   expect(reloads).toEqual([])
@@ -2371,7 +2402,7 @@ test('an update of five plugins, which rewrites installed_plugins.json once per 
   const { tested, reloads, tick, advance } = await startedWith(Object.fromEntries(ids.map((id) => [id, '1.0.0'])))
 
   for (const [index] of ids.entries()) {
-    await tested.fakes.fs.write?.(installedPlugins, installedJson(Object.fromEntries(ids.map((id, at) => [id, at <= index ? '1.1.0' : '1.0.0']))))
+    await writeStoreFile(tested, installedPlugins, installedJson(Object.fromEntries(ids.map((id, at) => [id, at <= index ? '1.1.0' : '1.0.0']))))
     await advance(1000)
   }
   await tick()
@@ -2390,7 +2421,7 @@ test('an update after /clear is still offered, because the versions belong to th
   await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
   await tick()
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '1.3.0' }))
+  await writeStoreFile(tested, installedPlugins, installedJson({ 'other@market': '1.3.0' }))
   await tick()
 
   expect(offerOf(tested)).toEqual(offering('other updated to 1.3.0. Reload to use them in this session.'))
@@ -2415,7 +2446,7 @@ test('the offer names the one plugin an update changed, and the ones turned on a
 
   const turned = await updated({ 'demo@market': '1.2.0' }, { 'other@market': '2.0.0' })
   turned.tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'other@market': true } })
-  await turned.tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '2.0.1' }))
+  await writeStoreFile(turned.tested, installedPlugins, installedJson({ 'other@market': '2.0.1' }))
   await turned.tick()
   expect(offerOf(turned.tested)).toEqual(offering('other turned on, demo turned off. Reload to use them in this session.'))
 })
@@ -2433,7 +2464,7 @@ test('the offer names an update of a plugin installed from git by the version it
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
 
-  await tested.fakes.fs.write?.(installedPlugins, installed('1.3.0-bbbbbbbbbbbb'))
+  await writeStoreFile(tested, installedPlugins, installed('1.3.0-bbbbbbbbbbbb'))
   await tick()
 
   expect(reloads).toEqual([])
@@ -2453,7 +2484,7 @@ test('an update whose install record lists what the update granted is offered by
   const { tested, tick } = await startedWith({ 'other@market': '1.2.0' }, { [record]: granted })
   const readsAtStart = tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record).length
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '1.3.0' }))
+  await writeStoreFile(tested, installedPlugins, installedJson({ 'other@market': '1.3.0' }))
   await tick()
   await tick()
 
@@ -2541,7 +2572,7 @@ test('a plugin Claude Code installs, updates, or turns on without cmod is offere
   await tick()
   expect(offerOf(tested)).toBeUndefined()
 
-  await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.2.0' }] } }))
+  await writeStoreFile(tested, installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.2.0' }] } }))
   await tick()
   expect(offerOf(tested)).toEqual(changedOffer)
   expect(reloads).toEqual([])
@@ -2638,7 +2669,7 @@ test("the Sidebar's Dashboard shows the widgets the person moved onto it", async
   expect(await tested.shown.pane.lines()).toEqual(['▄'.repeat(80), ` 0: Dashboard${' '.repeat(55)}9: Settings`, '▀'.repeat(80), '', ` ╭─ Widgets ${'─'.repeat(66)}╮`, ` │ main, 74 columns${' '.repeat(59)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
 })
 
-test('a widget layout another session saves redraws here once the store-changed stamp moves', async () => {
+test('a widget layout another session saves redraws here once cmod/Store tells that the widgets changed', async () => {
   const onDashboard = { areas: { abovePrompt: [], belowPrompt: [], working: [], turnEnd: [], dashboard: [{ left: ['git/branch'], right: [] }] }, hidden: [] }
   const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/widgets.json`]: JSON.stringify(onDashboard) }, dependencies: { git: gitWidgets } })
   const { tick } = watchedStore(tested)

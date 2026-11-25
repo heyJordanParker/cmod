@@ -59,6 +59,12 @@ const [called, ...calledArgv] = process.argv.slice(2)
 const [name, ...argv] = called !== undefined && Object.hasOwn(renamedCommands, called) ? [...(renamedCommands[called] as readonly string[]), ...calledArgv] : process.argv.slice(2)
 const ownArguments = argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv
 
+if (process.env['CMOD_INSTALLED_VERSION'] !== undefined) {
+  delete process.env['CMOD_INSTALLED_VERSION']
+  const { markStoreChanged } = await import('./store.js')
+  await markStoreChanged('plugins')
+}
+
 if (name === '--version' || name === '-v') {
   process.stdout.write(`${version}\n`)
 } else if (name === undefined || name === '--help' || name === '-h' || name === 'help') {

@@ -1,11 +1,12 @@
 import { Database } from 'bun:sqlite'
-import { afterAll, afterEach, expect, spyOn, test } from 'bun:test'
-import { existsSync, readdirSync } from 'node:fs'
+import { afterAll, afterEach, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
+import { appendFileSync, existsSync, readdirSync } from 'node:fs'
 import { appendFile, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { openHistory, readSession, runningEntries, searchQuery } from '../src/history.js'
-import { cmodWith as cmodWithHere, deleteTemporaryHomes, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
+import { folderOf, followSessions, openHistory, readSession, runningEntries, searchQuery } from '../src/history.js'
+import { cmodWith as cmodWithHere, deleteTemporaryHomes, spawned, spawningTestLimitMs, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const serves = new Map<string, ReturnType<typeof startCmod>>()
@@ -122,7 +123,7 @@ test("the index names each message's agent type, a task's from its agent, and th
     ['p1', 'release-captain'],
   ])
   expect(task.map((message) => [message.id, message.agentType])).toEqual([['x1', 'explorer']])
-}, 60_000)
+})
 
 test('readers of a session longer than several write batches, running at once, each read it whole, with no row twice', async () => {
   const home = await temporaryHome()
@@ -167,7 +168,7 @@ test('readers of a session longer than several write batches, running at once, e
   expect(task?.map((message) => message.id)).toEqual(taskRows.map((row) => row.uuid))
   expect(turns).toHaveLength(20)
   expect(counts).toEqual({ total: counts?.ids ?? -1, ids: counts?.ids ?? -1, unordered: 0 })
-}, 120_000)
+})
 
 test('each cmod history form a released session or the inbox runs prints what its cmod sessions form prints, on the same store', async () => {
   const home = await temporaryHome()
@@ -188,7 +189,7 @@ test('each cmod history form a released session or the inbox runs prints what it
     expect({ form: old, ...printed }).toEqual({ form: old, ...expected, exitCode: 0, stderr: '' })
   }
   expect((await cmod(home, 'history', 'messages', 's3', '--project', project)).stderr).toBe('cmod history: no session s3 on any of your devices.\n')
-}, 60_000)
+})
 
 test('messages reads a conversation as typed messages placed in their context and turn, and --task reads a task', async () => {
   const home = await temporaryHome()
@@ -360,6 +361,7 @@ test('follow prints a row Claude Code was still writing when follow started', as
   const reply = JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: at(1), message: { role: 'assistant', content: [{ type: 'text', text: 'Renamed.' }] } })
   const half = Math.floor(reply.length / 2)
   await writeFiles(home, { [`${projectFolder(project)}/s1.jsonl`]: `${prompt}\n${reply.slice(0, half)}` })
+  await served(home, ['sessions'])
   const following = startCmod(home, 'sessions', 'follow', 's1', '--project', project, '--json')
   await following.waitForOutput('Following s1')
 
@@ -374,6 +376,7 @@ test('follow prints a row Claude Code was still writing when follow started', as
 test('follow prints each change saved after it started, and nothing saved before', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
+  await served(home, ['sessions'])
   const following = startCmod(home, 'sessions', 'follow', 's1', '--project', project, '--json')
   await following.waitForOutput('Following s1')
 
@@ -388,26 +391,72 @@ test('follow prints each change saved after it started, and nothing saved before
   ])
 })
 
-test('follow --running follows a session of the project that starts after it, and no other project', async () => {
+test('follow --running prints a session of the project that starts after it from its first row, whenever follow notices it, and no other project', async () => {
   const home = await temporaryHome()
   const { project, other } = await writeHistory(home)
+  await served(home, ['sessions'])
   const following = startCmod(home, 'sessions', 'follow', '--running', '--project', project, '--json')
   await following.waitForOutput('Following every running session of the project')
 
+  const startedAt = Date.now()
+  const now = new Date(startedAt).toISOString()
   await writeFiles(home, {
-    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's2', cwd: project }),
-    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 's8', cwd: other }),
-  })
-  await Bun.sleep(500)
-  await writeFiles(home, {
-    [`${projectFolder(other)}/s8.jsonl`]: lines([{ type: 'user', uuid: 'w2', timestamp: at(40), cwd: other, origin: { kind: 'human' }, message: { role: 'user', content: 'Ship the site' } }]),
-    [`${projectFolder(project)}/s2.jsonl`]: lines([{ type: 'user', uuid: 'n1', timestamp: at(41), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Add a search pane' } }]),
+    [`${projectFolder(other)}/s8.jsonl`]: lines([{ type: 'user', uuid: 'w2', timestamp: now, cwd: other, origin: { kind: 'human' }, message: { role: 'user', content: 'Ship the site' } }]),
+    [`${projectFolder(project)}/s2.jsonl`]: lines([{ type: 'user', uuid: 'n1', timestamp: now, cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Add a search pane' } }]),
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's2', cwd: project, startedAt }),
+    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 's8', cwd: other, startedAt }),
   })
   await following.waitForOutput('"Add a search pane"')
   following.child.kill()
   const { stdout } = await following.done
 
   expect([...new Set(stdout.trim().split('\n').map((line) => (JSON.parse(line) as { session: string }).session))]).toEqual(['s2'])
+})
+
+test('follow --running prints a session resumed after it only from the rows the resume added', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await served(home, ['sessions'])
+  const following = startCmod(home, 'sessions', 'follow', '--running', '--project', project, '--json')
+  await following.waitForOutput('Following every running session of the project')
+
+  const startedAt = Date.now()
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project, startedAt }) })
+  await appendFile(join(home, `${projectFolder(project)}/s1.jsonl`), lines([{ type: 'user', uuid: 'n1', timestamp: new Date(startedAt).toISOString(), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Add a search pane' } }]))
+  await following.waitForOutput('"Add a search pane"')
+  following.child.kill()
+  const { stdout } = await following.done
+
+  const changes = stdout
+    .trim()
+    .split('\n')
+    .map((line) => (JSON.parse(line) as { change: { type: string; message?: { id: string }; turn?: { prompt: { id: string } } } }).change)
+  expect(changes.map(({ type, message, turn }) => [type, message?.id ?? turn?.prompt.id])).toEqual([
+    ['turnEnd', 'p1'],
+    ['turnStart', 'n1'],
+    ['message', 'n1'],
+  ])
+})
+
+test('follow reads a session again only when told to, as cmod serve tells it each time the messages change', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  const configRoot = process.env['CLAUDE_CONFIG_DIR']
+  process.env['CLAUDE_CONFIG_DIR'] = join(home, '.claude')
+  const heard: unknown[] = []
+  try {
+    const follower = followSessions(openHistory({ isInMemory: true }), { sessions: ['s1'], isEveryRunning: false }, project, (_session, change) => void heard.push(change))
+
+    appendFileSync(join(folderOf(project), 's1.jsonl'), lines([{ type: 'user', uuid: 'n1', timestamp: at(41), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Add a search pane' } }]))
+    const beforeTold = heard.length
+    follower.step('s1')
+
+    expect(beforeTold).toBe(0)
+    expect(heard).toContainEqual({ type: 'message', message: expect.objectContaining({ id: 'n1', text: 'Add a search pane' }) })
+  } finally {
+    if (configRoot === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+    else process.env['CLAUDE_CONFIG_DIR'] = configRoot
+  }
 })
 
 test('the conversation the command runs in has no messages before its first is saved, and another unsaved session id fails', async () => {
@@ -422,10 +471,10 @@ test('the conversation the command runs in has no messages before its first is s
   expect([unknown.exitCode, unknown.stderr]).toEqual([1, 'cmod sessions: no session s3 on any of your devices.\n'])
 })
 
-test("list lists the project's conversations newest first, and --every-project, --since, and --running change the scope", async () => {
+test("list lists the project's conversations newest first, and --every-project, --since, and --running change the scope, --running to every project's running sessions unless --project names one", async () => {
   const home = await temporaryHome()
   const { project, other } = await writeHistory(home)
-  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project }), '.claude/sessions/2.json': JSON.stringify({ pid: 2 ** 22 + 7, sessionId: 's0', cwd: project }) })
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project }), '.claude/sessions/2.json': JSON.stringify({ pid: 2 ** 22 + 7, sessionId: 's0', cwd: project }), '.claude/sessions/3.json': JSON.stringify({ pid: process.pid, sessionId: 's9', cwd: other }) })
 
   expect(await json(home, 'list', '--project', project)).toEqual([
     { id: 's1', title: 'Tree pane rename', project, cwd: project, transcriptPath: join(home, projectFolder(project), 's1.jsonl'), model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(6), isRunning: true, device: expect.any(Object) },
@@ -435,6 +484,7 @@ test("list lists the project's conversations newest first, and --every-project, 
   expect(ids(await json(home, 'list', '--project', other, '--since', '2026-10-05'))).toEqual(['s9'])
   expect(ids(await json(home, 'list', '--project', project, '--since', '2026-10-05'))).toEqual(['s1'])
   expect(ids(await json(home, 'list', '--project', project, '--running'))).toEqual(['s1'])
+  expect(ids(await json(home, 'list', '--running'))).toEqual(['s9', 's1'])
   expect(ids(await json(home, 'search', 'tree pane', '--project', project, '--running'))).toEqual(['u1'])
 })
 
@@ -450,7 +500,7 @@ test('a running session whose process started at another time than Claude Code r
 test('a registry write that changes only a status starts no process, and only a new pid is checked, in one ps run', async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
-  const other = Bun.spawn(['/bin/sleep', '30'])
+  const other = spawned(['/bin/sleep', '30'])
   const record = (session: string, pid: number, procStart: string, status: string) => JSON.stringify({ pid, sessionId: session, cwd: project, procStart, status })
   const ownStart = await startOf(process.pid)
   const otherStart = await startOf(other.pid)
@@ -464,7 +514,7 @@ test('a registry write that changes only a status starts no process, and only a 
       else process.env['CLAUDE_CONFIG_DIR'] = configRoot
     }
   }
-  const spawned = spyOn(Bun, 'spawnSync')
+  const spawnedSync = spyOn(Bun, 'spawnSync')
   const psRuns: unknown[] = []
   try {
     await writeFiles(home, { '.claude/sessions/1.json': record('s1', process.pid, ownStart, 'busy') })
@@ -473,9 +523,9 @@ test('a registry write that changes only a status starts no process, and only a 
     expect(listed()).toEqual(['s1 idle'])
     await writeFiles(home, { '.claude/sessions/2.json': record('s2', other.pid, otherStart, 'busy') })
     expect(listed().sort()).toEqual(['s1 idle', 's2 busy'])
-    for (const [command] of spawned.mock.calls) if (Array.isArray(command) && command[0] === '/bin/ps') psRuns.push(command.at(-1))
+    for (const [command] of spawnedSync.mock.calls) if (Array.isArray(command) && command[0] === '/bin/ps') psRuns.push(command.at(-1))
   } finally {
-    spawned.mockRestore()
+    spawnedSync.mockRestore()
     other.kill()
   }
 
@@ -652,7 +702,16 @@ test("sessions read state reads the lines the index has not yet saved while anot
 
   expect([state.exitCode, Date.now() - startedAt < 5000]).toEqual([0, true])
   expect(JSON.parse(state.stdout)).toMatchObject({ session: 's1', context: 1, turn: { prompt: { id: 'u9', text: 'Now the file pane' } } })
-}, 15_000)
+})
+
+test('sessions read state of a session with no transcript on this computer says it reads only this computer, and which command reads it on any device', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+
+  const state = await cmod(home, 'sessions', 'read', 'state', 'elsewhere', '--project', project)
+
+  expect([state.exitCode, state.stderr]).toEqual([1, 'cmod sessions: cmod sessions read state reads what a conversation on this computer resumes from, and session elsewhere has no transcript on this computer. cmod sessions read turns elsewhere reads it on any device.\n'])
+})
 
 test('a transcript rewritten under the index returns its new messages', async () => {
   const home = await temporaryHome()
@@ -715,4 +774,12 @@ test('a conversation whose transcript was deleted leaves the sessions list and t
 
   expect(ids(await json(home, 'list', '--project', project))).toEqual(['s1'])
   expect(ids(await json(home, 'search', 'tree pane', '--project', project))).toEqual(['u1'])
+})
+
+test("each save's two questions about a session's order seek one index entry, so a session with millions of messages costs a save no walk of its rows", () => {
+  const db = openHistory({ isInMemory: true })
+  const plan = (query: string) => db.query<{ detail: string }, [string]>(`explain query plan ${query}`).all('s1').map((step) => step.detail).join('\n')
+
+  expect(plan('select exists (select 1 from messages where session = ? and seq is null) as found')).toContain('messages_by_seq (session=? AND seq=?)')
+  expect(plan('select coalesce(max(seq), 0) from messages where session = ?')).toContain('messages_by_seq')
 })

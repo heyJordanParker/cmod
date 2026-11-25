@@ -37,7 +37,7 @@ env -C core bun test
 bun run --cwd core check
 bun run --cwd cli test
 bun run --cwd cli check
-env -C . bun test
+bun run test
 env -C . bun x tsc --noEmit
 env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
 ```

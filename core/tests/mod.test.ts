@@ -3,7 +3,7 @@ import type { RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type View, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
+import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, Session, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type View, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
@@ -1246,14 +1246,18 @@ test('sessions.search finds messages of the project newest first, and sessions.l
   expect((await sessions.list({ running: true })).map((session) => session.id)).toEqual(['test-session'])
 })
 
-test("a send to another running session reaches cmod, and a Prompt to the current one asks Claude for a turn", async () => {
+test("a send to another running session reaches cmod and resolves its receipt, as: Session names the current session as its sender, and a Prompt to the current one asks Claude for a turn", async () => {
+  const receipts: unknown[] = []
+  let failure = ''
   const tested = testMod(
     defineMod({
       name: 'other',
       async setup() {
         const other = (await sessions.list()).find((session) => session.id === 'older')
-        await other?.send({ type: Prompt, text: 'Switch to build mode.', as: Person })
-        await sessions.current.send({ type: Prompt, text: 'Build mode is on.' })
+        receipts.push(await other?.send({ type: Prompt, text: 'Switch to build mode.', as: Person }))
+        receipts.push(await other?.send({ type: Prompt, text: 'Merged.', as: Session }))
+        receipts.push(await sessions.current.send({ type: Prompt, text: 'Build mode is on.' }))
+        await sessions.current.send({ type: Prompt, text: 'Me again.', as: Session }).catch((error: Error) => void (failure = error.message))
       },
     }),
     { sessions: [{ ...older, isRunning: true }] },
@@ -1261,7 +1265,12 @@ test("a send to another running session reaches cmod, and a Prompt to the curren
 
   await tested.start()
 
-  expect(tested.shown.sent).toEqual([{ session: 'older', type: Prompt, text: 'Switch to build mode.', as: Person }])
+  expect(tested.shown.sent).toEqual([
+    { session: 'older', type: Prompt, text: 'Switch to build mode.', as: Person },
+    { session: 'older', type: Prompt, text: 'Merged.', from: 'test-session' },
+  ])
+  expect(receipts).toEqual([{ id: 1, state: 'delivered' }, { id: 2, state: 'delivered' }, { state: 'delivered' }])
+  expect(failure).toBe('other: session test-session cannot send as itself to itself.')
   expect(tested.shown.prompts).toEqual(['Build mode is on.'])
 })
 
@@ -1381,6 +1390,38 @@ test('a bar rounds its ends in a terminal cmod does not know once the person tur
 
   expect(await lines({ '/test/home/.local/share/cmod/preferences.json': '{ "roundsBarEnds": true }' })).toEqual(['\u{E0B6}████\u{E0B4}'])
   expect(await lines({})).toEqual(['██████'])
+})
+
+test("a bar follows the bar-ends preference and the person's theme without a reload, from the first draw 2 seconds after it last read them", async () => {
+  let now = 0
+  let theme = 'dark'
+  const tested = testMod(defineMod({ name: 'demo', async setup(mod) {
+        await mod.panes.add({ id: 'usage', title: 'Usage', render: () => Progress({ value: 50, width: 6 }) }).open()
+      } }))
+  tested.fakes.config.list = async () => [{ key: 'theme', value: theme } as never]
+  tested.fakes.clock.now = async () => now
+  await tested.settle()
+  const colors = async () => {
+    const drawn = await tested.fire('ui.render', { surface: 'terminal', component: 'Pane', requestId: 'usage', plugin: 'demo', props: {} } as never)
+    return JSON.stringify(drawn)
+  }
+  expect(await tested.shown.pane.lines()).toEqual(['██████'])
+  expect(await colors()).toContain('"subtle"')
+
+  const redraws = () => tested.calls.filter((call) => call.call === 'ui.invalidate').length
+  const before = redraws()
+  await tested.fakes.fs.write?.('/test/home/.local/share/cmod/preferences.json', '{ "roundsBarEnds": true }')
+  theme = 'dark-ansi'
+  await tested.shown.pane.lines()
+  await tested.settle()
+  expect(redraws()).toBe(before)
+  now = 2000
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect(redraws()).toBe(before + 1)
+  expect(await tested.shown.pane.lines()).toEqual(['\u{E0B6}████\u{E0B4}'])
+  expect(await colors()).toContain('"ansi:blackBright"')
 })
 
 test('a Button with an href copies the link where the computer has no browser to open, and says so', async () => {

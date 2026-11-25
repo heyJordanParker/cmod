@@ -1,12 +1,14 @@
 import { Database } from 'bun:sqlite'
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
+import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
+import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { scripts, version } from '../package.json'
-import { cmod, cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodExecutable, cmodWith, deleteTemporaryHomes, servedChanges, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 const clients: RpcClient[] = []
 
 afterAll(async () => {
@@ -34,46 +36,73 @@ esac
 
 const olderRecord = (home: string, status: object = {}) => JSON.stringify({ pid: process.pid, sessionId: 'older', cwd: project(home), kind: 'interactive', entrypoint: 'cli', ...status })
 
-async function servedHome(status: object = {}) {
-  const home = await temporaryHome()
+async function servedHome(status: object = {}, served?: string) {
+  const home = served ?? (await temporaryHome())
   const folder = `.claude/projects/${project(home).replace(/[^A-Za-z0-9]/g, '-')}`
-  await writeFiles(home, {
-    'bin/claude': backgroundClaude,
-    'work/app/.keep': '',
-    [`${folder}/ended.jsonl`]: transcript('ended', project(home)),
-    [`${folder}/older.jsonl`]: transcript('older', project(home)),
-    '.claude/sessions/1.json': olderRecord(home, status),
-    '.local/share/cmod/data/cmod/goals/ended.txt': 'Fix the login test',
-  })
+  if (served === undefined) {
+    await writeFiles(home, {
+      'bin/claude': backgroundClaude,
+      'work/app/.keep': '',
+      [`${folder}/ended.jsonl`]: transcript('ended', project(home)),
+      [`${folder}/older.jsonl`]: transcript('older', project(home)),
+      '.claude/sessions/1.json': olderRecord(home, status),
+      '.local/share/cmod/data/cmod/goals/ended.txt': 'Fix the login test',
+    })
+  }
+  const heardAll: unknown[] = []
   let hear: (heard: unknown) => void = () => undefined
   const serving = startCmod(home, 'serve')
   await serving.waitForOutput('unix:')
   const socket = join(home, '.local/share/cmod/serve.sock')
   const client = connectRpc({
-    call: async (path, init) => {
-      const answer = await fetch(`http://localhost${path}`, { method: init.method, ...(init.body === undefined ? {} : { body: init.body, headers: { 'content-type': 'application/json' } }), unix: socket } as RequestInit)
-      return { status: answer.status, text: await answer.text() }
+    call: addressCall(bunFetch, `unix:${socket}`),
+    handle: async (method, params) => {
+      if (method !== '$/on' && method !== '$/act') throw new Error(`no ${method}`)
+      heardAll.push(params)
+      hear(params)
+      return null
     },
-    handle: (method, params) => (method === '$/on' ? hear(params) : Promise.reject(new Error(`no ${method}`))),
-    wait: (ms) => new Promise((resolve) => void setTimeout(resolve, ms)),
+    clock: bunClock(true),
+    keepsConnecting: true,
   })
   clients.push(client)
-  const act = (action: string, session: string, input: unknown = null) => client.request(`cmod/Sessions.${action}`, [session, input, { project: project(home) }])
+  const act = (action: string, session: string, input: unknown = null, context: object = {}) => client.request(`cmod/Sessions.${action}`, [session, input, { project: project(home), ...context }])
   const nextHeard = () => new Promise<unknown>((resolve) => void (hear = resolve))
   const stop = () => serving.child.kill()
-  return { home, folder, client, act, nextHeard, stop, stopped: () => (stop(), serving.done) }
+  return { home, folder, client, act, nextHeard, heardAll, stop, stopped: () => (stop(), serving.done), exited: serving.done }
 }
+
+test.concurrent('a running cmod serve exits 0 once cmod/Store tells that the plugins changed and a newer cmod is in the cmod store, so its service starts the newer one', async () => {
+  const { home, client, exited } = await servedHome()
+  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodExecutable, [`.local/share/cmod/bin/cmod/${Number(version.split('.')[0]) + 1}.0.0/cmod`]: cmodExecutable })
+
+  await client.request('cmod/Store.changed', ['plugins'])
+
+  expect((await exited).exitCode).toBe(0)
+  expect(existsSync(join(home, '.local/share/cmod/serve.sock'))).toBe(false)
+})
+
+test.concurrent('a cmod the launcher just installed tells cmod/Store that the plugins changed, so every older cmod watch and cmod serve reads the newest cmod', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
+  const serve = await servedChanges(home)
+  const changes = await serve.listen('cmod/Store', { part: 'plugins' })
+
+  expect((await cmodWith(home, { CMOD_INSTALLED_VERSION: version }, '--version')).exitCode).toBe(0)
+
+  expect(await changes()).toEqual({ part: 'plugins' })
+})
 
 test.concurrent('a cmod serve older than the newest cmod installed exits 0 and takes its socket away, so its service starts the newer one', async () => {
   const home = await temporaryHome()
-  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodFromSource, [`.local/share/cmod/bin/cmod/${Number(version.split('.')[0]) + 1}.0.0/cmod`]: cmodFromSource })
+  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodExecutable, [`.local/share/cmod/bin/cmod/${Number(version.split('.')[0]) + 1}.0.0/cmod`]: cmodExecutable })
 
   const { exitCode, stdout } = await cmod(home, 'serve')
 
   expect(exitCode).toBe(0)
   expect(stdout).toStartWith('unix:')
   expect(existsSync(join(home, '.local/share/cmod/serve.sock'))).toBe(false)
-}, 60000)
+})
 
 test.concurrent("cmod serve lists each of this computer's sessions with the name and id of the device cmod device reads", async () => {
   const { home, client, stop } = await servedHome()
@@ -86,7 +115,25 @@ test.concurrent("cmod serve lists each of this computer's sessions with the name
     ['ended', { id, name }],
     ['older', { id, name }],
   ])
-}, 30_000)
+})
+
+test.concurrent('cmod serve measures this computer at each start and writes it to device.json in the cmod store, which cmod device reads', async () => {
+  const deviceFile = (home: string) => JSON.parse(readFileSync(join(home, '.local/share/cmod/device.json'), 'utf8')) as Record<string, unknown>
+  const first = await servedHome()
+  await first.client.request('cmod/Sessions.sessions', [{ project: project(first.home), everyProject: true }])
+  await first.stopped()
+  const written = deviceFile(first.home)
+  await writeFiles(first.home, { '.local/share/cmod/device.json': JSON.stringify({ ...written, name: 'renamed' }) })
+  const read: unknown = JSON.parse((await cmod(first.home, 'device', '--json')).stdout)
+
+  const second = await servedHome({}, first.home)
+  await second.client.request('cmod/Sessions.sessions', [{ project: project(first.home), everyProject: true }])
+  second.stop()
+
+  expect(written).toEqual({ id: expect.stringMatching(/^[0-9a-f]{32}$/), name: expect.any(String), os: process.platform, arch: process.arch })
+  expect(read).toEqual({ ...written, name: 'renamed' })
+  expect(deviceFile(first.home)).toEqual(written)
+})
 
 test.concurrent('cmod serve lists a session Claude Code records as waiting with the dialog it waits on, and tells a Change of its status when the record changes', async () => {
   const { home, client, nextHeard, stopped } = await servedHome({ status: 'waiting', waitingFor: 'permission prompt' })
@@ -107,7 +154,7 @@ test.concurrent('cmod serve lists a session Claude Code records as waiting with 
   expect(change).toEqual({ id: '1', payload: { session: 'older', part: 'status' }, cursor: '1' })
   expect(busy.find(({ id }) => id === 'older')).toEqual({ id: 'older', status: 'busy', waitingFor: undefined })
   expect(stderr).toBe('')
-}, 30_000)
+})
 
 test.concurrent('cmod serve answers the cmod/SessionStore and cmod/Session names a cmod plugin from 7.0.0 calls, and refuses its listener on another session', async () => {
   const { home, client, stop } = await servedHome()
@@ -124,7 +171,7 @@ test.concurrent('cmod serve answers the cmod/SessionStore and cmod/Session names
   expect(unknown).toBe('No session gone on this computer.')
   expect(change).toEqual({})
   expect(listener).toBe('cmod/Session tells only Change, because a mod hears only the session it runs in.')
-}, 30_000)
+})
 
 test.concurrent('cmod serve resumes an ended session in the background on a message, keeps a visit in visited.json, and deletes an ended session whole', async () => {
   const { home, folder, act, stop } = await servedHome()
@@ -135,35 +182,66 @@ test.concurrent('cmod serve resumes an ended session in the background on a mess
   await act('delete', 'ended')
   stop()
 
-  expect(resumed).toEqual({ session: 'ended' })
+  expect(resumed).toEqual({ id: 1, state: 'delivered' })
   expect(readFileSync(join(home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'ended', '--', 'Run it again'])
   expect(visited).toEqual({ ended: '2026-11-19T11:00:00.000Z' })
   expect([existsSync(join(home, folder, 'ended.jsonl')), existsSync(join(home, '.local/share/cmod/data/cmod/goals/ended.txt'))]).toEqual([false, false])
   expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/visited.json'), 'utf8'))).toEqual({})
-}, 30_000)
+})
 
-test.concurrent('cmod serve sends no message to a session Claude Code still runs, so a message never starts a second copy of it, even while no record or cmod plugin says it runs, and its refusal is final, so no other device answers for the session', async () => {
-  const { home, folder, act, stop } = await servedHome()
+test.concurrent('cmod serve starts no copy of a session Claude Code still runs, even while no record or cmod plugin says it runs, and keeps the message queued here, so no other device answers for the session', async () => {
+  const { home, folder, act, stopped } = await servedHome()
   await writeFiles(home, { [`${folder}/alive.jsonl`]: transcript('alive', project(home)) })
 
-  const refused = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' }).catch((error: unknown) => error as RpcError)
-  stop()
+  const queued = await act('send', 'alive', { type: 'prompt', text: 'Did this reach you?' })
+  const { stderr } = await stopped()
 
-  expect(refused).toBeInstanceOf(RpcError)
-  expect([(refused as RpcError).message, (refused as RpcError).code === rpcCodes.notHeld]).toEqual(['Session alive runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.', false])
+  expect(queued).toEqual({ id: 1, state: 'queued' })
+  expect(stderr).toContain('Session alive runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.')
   expect(existsSync(join(home, 'bg-args'))).toBe(false)
-}, 30_000)
+})
 
-test.concurrent('two messages that reach an ended session at once resume it once, and the later one is refused because the resumed copy runs', async () => {
+test.concurrent('two messages that reach an ended session at once resume it once, and the later one stays queued for the resumed copy', async () => {
   const { home, act, stop } = await servedHome()
 
-  const [first, second] = await Promise.allSettled([act('send', 'ended', { type: 'prompt', text: 'Run it again' }), act('send', 'ended', { type: 'prompt', text: 'Run it again' })])
+  const answers = (await Promise.all([act('send', 'ended', { type: 'prompt', text: 'Run it again' }), act('send', 'ended', { type: 'prompt', text: 'Run it again' })])) as readonly { readonly id: number; readonly state: string }[]
   stop()
 
-  expect([first.status, second.status].toSorted()).toEqual(['fulfilled', 'rejected'])
-  expect([first, second].flatMap((each) => (each.status === 'rejected' ? [(each.reason as Error).message] : []))).toEqual(['Session ended runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.'])
+  expect(answers.map(({ id, state }) => [id, state]).toSorted()).toEqual([
+    [1, 'delivered'],
+    [2, 'queued'],
+  ])
   expect(readFileSync(join(home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'ended', '--', 'Run it again'])
-}, 30_000)
+})
+
+test.concurrent("a message to a running session no cmod plugin holds survives a cmod serve restart in mail.sqlite, and its cmod plugin's $/hold after the restart delivers it once", async () => {
+  const first = await servedHome()
+  const queued = await first.act('send', 'older', { type: 'prompt', text: 'Go on', from: { session: '4b1e9c2a-7d3f-4e15-9a0b-2c6d8e1f3a57', title: 'Plan' } }, { caller: 'demo' })
+  await first.stopped()
+
+  const { home, client, act, nextHeard, heardAll, stop } = await servedHome({}, first.home)
+  const hold = () => client.request('$/hold', { session: 'older', project: project(home), cwd: project(home) })
+  const delivered = nextHeard()
+  await hold()
+  await delivered
+  await hold()
+  const after = await act('send', 'older', { type: 'note', text: 'Tests pass.' })
+  const mail = await client.request<readonly { readonly id: number; readonly deliveredAt?: string }[]>('cmod/Sessions.read', ['older', 'mail', {}])
+  stop()
+
+  expect([queued, after]).toEqual([
+    { id: 1, state: 'queued' },
+    { id: 2, state: 'delivered' },
+  ])
+  expect(heardAll.map((each) => [(each as { readonly input: unknown }).input, (each as { readonly caller?: unknown }).caller])).toEqual([
+    [{ type: 'prompt', text: '<cmod-message from="4b1e9c2a-7d3f-4e15-9a0b-2c6d8e1f3a57" title="Plan" reply="cmod sessions send 4b1e9c2a --reply-to 1">\nGo on\n</cmod-message>' }, 'demo'],
+    [{ type: 'note', text: 'Tests pass.' }, undefined],
+  ])
+  expect(mail.map((each) => [each.id, typeof each.deliveredAt])).toEqual([
+    [1, 'string'],
+    [2, 'string'],
+  ])
+})
 
 test.concurrent('cmod serve reads a session record Claude Code left with bytes after its JSON, so a running session lists as running, and finds one session by its id', async () => {
   const { home, client, stop } = await servedHome()
@@ -177,7 +255,7 @@ test.concurrent('cmod serve reads a session record Claude Code left with bytes a
   expect(running.map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'older', status: 'idle' }])
   expect({ id: found.id, isRunning: found.isRunning, status: found.status }).toEqual({ id: 'older', isRunning: true, status: 'idle' })
   expect(missing).toBe('No session gone on this computer.')
-}, 30_000)
+})
 
 test.concurrent("cmod serve reads and types into the herdr-core terminal that runs a session's process, though no cmod plugin in the session reaches it, and answers not held for a session no terminal of this computer runs", async () => {
   const { home, client, stop } = await servedHome()
@@ -201,7 +279,7 @@ esac
   expect(screen).toBe('the screen')
   expect(readFileSync(join(home, 'hc-calls'), 'utf8').trimEnd().split('\n').map((line) => (JSON.parse(line) as { readonly params: unknown }).params)).toEqual([{ terminal: 't4' }, { terminal: 't4', keys: ['1', 'enter'] }])
   expect([(ended as RpcError).message, (ended as RpcError).code]).toEqual(['No session ended runs in a herdr-core terminal on this computer.', rpcCodes.notHeld])
-}, 30_000)
+})
 
 test.concurrent('cmod serve keeps the replies cmod web serve before 7.0.0 marked read as the visits of their sessions', async () => {
   const home = await temporaryHome()
@@ -212,24 +290,24 @@ test.concurrent('cmod serve keeps the replies cmod web serve before 7.0.0 marked
 
   expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/visited.json'), 'utf8'))).toEqual({ s1: '2026-11-18T09:00:00.000Z' })
   expect(existsSync(join(home, '.local/share/cmod/web-read.json'))).toBe(false)
-}, 30_000)
+})
 
 test.concurrent('cmod serve refuses an action on a session no transcript names, on a session an older cmod plugin runs, the delete of a running session, and the visit of a session another device serves', async () => {
   const { act, stop } = await servedHome()
 
   const unknown = await act('abort', 'gone').catch((error: unknown) => (error as Error).message)
-  const older = await act('send', 'older', { type: 'prompt', text: 'Go on' }).catch((error: unknown) => (error as Error).message)
+  const older = await act('send', 'older', { type: 'prompt', text: 'Go on' })
   const running = await act('delete', 'older').catch((error: unknown) => (error as Error).message)
   const ended = await act('abort', 'ended').catch((error: unknown) => (error as Error).message)
   const elsewhere = await act('visit', 'gone', '2026-11-19T11:00:00.000Z').catch((error: unknown) => (error as Error).message)
   stop()
 
   expect(unknown).toBe('No session gone on this computer.')
-  expect(older).toBe('Session older runs, but no cmod plugin in it reaches cmod serve, so it takes no send, and cmod starts no copy of it. Run /reload-plugins in it.')
+  expect(older).toEqual({ id: 1, state: 'queued' })
   expect(running).toBe('session older runs, so it stays. End it first.')
   expect(ended).toBe('session ended has ended, so it takes no abort. Message it to resume it.')
   expect(elsewhere).toBe('No session gone on this computer.')
-}, 30_000)
+})
 
 test.concurrent("cmod serve answers every connection and every call outside the conversation index while another process holds the index's write lock, and answers the index read once the lock is free", async () => {
   const { home, folder, client, stop } = await servedHome()
@@ -253,7 +331,7 @@ test.concurrent("cmod serve answers every connection and every call outside the 
   expect(isWaiting).toBe(true)
   expect(after.length).toBe(before.length + 1)
   expect(after.at(-1)?.text).toBe('Ran it again.')
-}, 30_000)
+})
 
 test.concurrent('cmod serve finds one session while a search of every project waits on the conversation index, so a lookup never queues behind a whole-index read', async () => {
   const { home, folder, client, stop } = await servedHome()
@@ -271,7 +349,20 @@ test.concurrent('cmod serve finds one session while a search of every project wa
   stop()
 
   expect([found.id, isSearchWaiting]).toEqual(['older', true])
-}, 30_000)
+})
+
+test.concurrent('a cmod command that changes the set of mods tells every listener of cmod/Store that the plugins changed, after it wrote plugins-changed', async () => {
+  const { home, client, nextHeard, stop } = await servedHome()
+  await client.request('$/listen', { id: 'store', interface: 'cmod/Store', event: 'Change', kind: 'on' })
+  const heard = nextHeard()
+
+  await cmod(home, 'remove', 'ghost')
+  const told = await heard
+  stop()
+
+  expect(told).toEqual({ id: 'store', payload: { part: 'plugins' }, cursor: '1' })
+  expect(existsSync(join(home, '.local/share/cmod/plugins-changed'))).toBe(true)
+})
 
 test('the build compiles each worker the cmod program starts, because a compiled cmod loads no file its build did not name', async () => {
   const source = join(import.meta.dir, '../src')

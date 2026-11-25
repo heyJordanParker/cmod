@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util'
 import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
 import { syncRules } from '../rules.js'
+import { installedCopyOf } from './setup.js'
 
 export const summary = "Link each mod's rules into Claude Code's rules folder."
 
@@ -16,14 +17,16 @@ linked, placed, removed, watched }: placed and removed name the mods whose link
 this run made or took away, and watched lists the files and folders whose
 change can change the next run. --plugin names the cmod plugin's own folder,
 whose rules link for every project, because the cmod plugin has no install
-record. cmod runs it after install, update, remove, enable, disable, setup,
+record. The link goes to the copy Claude Code installed when it lists one, as
+cmod setup picks, so sessions on older copies never move it. cmod runs it after install, update, remove, enable, disable, setup,
 teardown, link, and unlink, and the cmod plugin runs it at each session start.`
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'string' }, plugin: { type: 'string' }, json: { type: 'boolean', default: false } } })
   const [action = 'sync', ...rest] = positionals
   if (action !== 'sync' || rest.length > 0) throw new Error(`cmod rules takes sync.\n\n${help}`)
-  const synced = await syncRules(values.project ?? process.cwd(), [], values.plugin === undefined ? undefined : { mod: cmodPluginName, root: values.plugin })
+  const root = values.plugin === undefined ? undefined : ((await installedCopyOf(cmodPluginName)) ?? values.plugin)
+  const synced = await syncRules(values.project ?? process.cwd(), [], root === undefined ? undefined : { mod: cmodPluginName, root })
   process.stdout.write(values.json ? `${JSON.stringify(synced)}\n` : synced.linked.map(({ mod, folder, rules }) => `${mod}  ${folder}  ${rules.map((rule) => rule.name).join(', ')}\n`).join(''))
   return 0
 }

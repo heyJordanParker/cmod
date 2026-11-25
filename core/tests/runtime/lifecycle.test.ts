@@ -563,29 +563,6 @@ test('each hotkey of a mod is a command that runs at once', async () => {
   expect(fake.shown.commands).toEqual(['demo--cycle'])
 })
 
-test("the cmod plugin hides every mod's hotkey command from the slash command list, and no other command, whose provider Claude Code names with its marketplace", async () => {
-  const fake = fakeClaude({ name: 'cmod', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
-  await fake.settle()
-  const described = (command: string, plugin: string) => fire(lifecycle, 'command.describe', { command, provider: { plugin, tier: 'user' } }, { description: 'Switch mode', isHidden: false })
-
-  expect(await described('demo--cycle', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('cmod--sidebar', 'cmod@cmod')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('demo--cycle', 'demo')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('review', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: false })
-  expect(await described('notes--cycle', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: false })
-})
-
-test('the cmod plugin asks Claude Code to list the commands again once it can hide hotkey commands, because Claude Code keeps the list it made before the plugin started', async () => {
-  const fake = fakeClaude({ name: 'cmod', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
-  await fake.settle()
-
-  expect(fake.calls.filter(({ call, args }) => call === 'ui.invalidate' && args[0] === 'command.describe')).toHaveLength(1)
-})
-
 test('a failed install draws the sentence cmod setup wrote and its fix, and setup never runs', async () => {
   const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
@@ -796,6 +773,27 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   expect(opened).toEqual([{ mod: 'other', requests: [{ open: 'runs' }] }])
   expect(passedOn).toEqual([])
   expect(answer).toEqual({})
+})
+
+test('the cmod plugin redraws only the parts a mod names as changed or opens, and every part for a released core that says redraw', () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const updated: unknown[] = []
+  const told: unknown[] = []
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: (_mod, update) => void updated.push(update) }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: (event, payload) => void (event === 'Redraw' && told.push(payload)) })
+  served.update('demo', { parts: { widgets: [{ id: 'branch', title: 'Branch', areas: ['belowPrompt'] }], pages: [{ id: 'runs', title: 'Runs', place: 'sidebar' }, { id: 'logs', title: 'Logs' }] } })
+  updated.length = 0
+
+  served.update('demo', { redraw: true, changed: ['runs'] })
+  served.update('demo', { requests: [{ open: 'logs' }] })
+  served.update('demo', { redraw: true })
+
+  expect(updated).toEqual([{ changed: ['runs'] }, { changed: ['logs'] }, { redraw: true }])
+  expect(told).toEqual([
+    { mod: 'demo', id: 'runs' },
+    { mod: 'demo', id: 'branch' },
+    { mod: 'demo', id: 'runs' },
+    { mod: 'demo', id: 'logs' },
+  ])
 })
 
 test("the cmod plugin's parts tell which interfaces a mod's session code starts or stops providing, and nothing for parts that provide the same", () => {
@@ -1891,7 +1889,7 @@ test("an installer step redraws when the mod's state changes while it shows", as
   started.state.memory.status = 'Signed in as octocat'
   await fake.settle()
 
-  expect(installRequests(fake)).toEqual([installerOpen, { redraw: true }])
+  expect(installRequests(fake)).toEqual([installerOpen, { redraw: true, changed: ['cmod:install'] }])
   expect(await installerText(lifecycle, 'other')).toContain('Signed in as octocat')
 })
 
@@ -2568,12 +2566,40 @@ test('a memory value change redraws the pane', async () => {
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
+  fake.shown.openPanes.add('files')
+  await fire(lifecycle, 'ui.render', filesPane, prompt)
+  await fake.settle()
   redraws.length = 0
 
   ;(lifecycle.mod as Mod<{ memory: { changed: string[] } }>).state.memory.changed = ['README.md']
 
   expect(redraws).toEqual(['ui.render'])
   expect(textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))).toBe('README.md')
+})
+
+test('a state change while every pane of the mod is closed asks Claude Code for no redraw', async () => {
+  const fake = fakeClaude({ name: 'other', root })
+  const redraws: string[] = []
+  fake.claude.ui.invalidate = (event) => {
+    redraws.push(event)
+  }
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'other',
+      state: { memory: { changed: [] as string[] } },
+      setup(mod) {
+        mod.panes.add({ id: 'files', title: 'Files', render: (drawn) => Text({ children: drawn.state.memory.changed.join(',') }) })
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
+  await fake.settle()
+  redraws.length = 0
+
+  ;(lifecycle.mod as Mod<{ memory: { changed: string[] } }>).state.memory.changed = ['README.md']
+  await fake.settle()
+
+  expect(redraws).toEqual([])
 })
 
 test("after the project root changes, the mod reads that project's saved value and redraws", async () => {
@@ -2595,6 +2621,9 @@ test("after the project root changes, the mod reads that project's saved value a
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
+  fake.shown.openPanes.add('files')
+  await fire(lifecycle, 'ui.render', filesPane, prompt)
+  await fake.settle()
   ;(lifecycle.mod as Mod<{ project: { expanded: string[] } }>).state.project.expanded = ['src']
   projectRoot = '/work/b'
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
@@ -2630,11 +2659,13 @@ function folderPane() {
     }),
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
+  const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
   const start = async () => {
     await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
+    fake.shown.openPanes.add('files')
+    await drawn()
     await fake.settle()
   }
-  const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
   return { fake, lifecycle, session, redraws, redrawnFolders, moves, start, drawn }
 }
 
@@ -3008,10 +3039,32 @@ test('a SessionStart before session.start, as claude -p sends it, passes on at o
 
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fake.settle()
 
   expect(sources).toEqual(['startup'])
   expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])
   expect(fake.shown.debug).toEqual([])
+})
+
+test("a mod's start settles once it is active, so session.start and the person's first prompt never wait on the SessionStart it replays", async () => {
+  const fake = fakeClaude({ name: 'demo', root })
+  let answerNote: (note: string) => void = () => undefined
+  const definition = defineMod({
+    name: 'demo',
+    setup() {
+      sessions.current.beforeSessionStart(() => new Promise((resolve) => (answerNote = (note) => resolve({ note }))))
+    },
+  })
+  const lifecycle = createLifecycle(definition)
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  const prompt = await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  answerNote('demo saw startup')
+  await fake.settle()
+
+  expect(prompt).toEqual({})
+  expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])
 })
 
 test('a SessionStart held past the limit passes on and replays once the mod starts', async () => {
@@ -3044,6 +3097,7 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   finishRead()
   await starting
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fake.settle()
 
   expect(sources).toEqual(['startup'])
   expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])

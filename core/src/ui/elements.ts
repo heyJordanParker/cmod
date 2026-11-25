@@ -40,13 +40,13 @@ type Terminal = Elements['terminal'] & Elements['desktop']
 
 type CompletedTable = Record<ElementName, (props: object) => RenderElement>
 
-export type DrawnIn = { readonly hasNerdFont: boolean }
+export type DrawnIn = { readonly hasNerdFont: boolean; readonly theme: string }
 
 type Drawing = { readonly table: CompletedTable; readonly markdown: ((props: MarkdownProps) => RenderElement) | undefined; readonly drawnIn: DrawnIn }
 
 const tableFacts = new WeakMap<ElementTable, DrawnIn>()
 
-const plainTerminal: DrawnIn = { hasNerdFont: false }
+const plainTerminal: DrawnIn = { hasNerdFont: false, theme: 'dark' }
 
 export function drawnIn(): DrawnIn {
   return drawing?.drawnIn ?? plainTerminal
@@ -163,7 +163,7 @@ export function drawsFocusable(data: unknown, key: string): boolean {
   return Object.values(fields).some((each) => drawsFocusable(each, key))
 }
 
-export function forClaudeCode(table: ElementTable, surface: RenderSurface, open: (href: string, press: UiPressArgument) => void, { hasNerdFont }: DrawnIn = plainTerminal): ElementTable {
+export function forClaudeCode(table: ElementTable, surface: RenderSurface, open: (href: string, press: UiPressArgument) => void, facts: Partial<DrawnIn> = {}): ElementTable {
   const { Button: button, Link: link, Image: image, Svg: svg, Raster: raster } = table as CompletedTable
   const opening = (props: Readonly<Record<string, unknown>>) => {
     const { href, ...rest } = props
@@ -178,7 +178,7 @@ export function forClaudeCode(table: ElementTable, surface: RenderSurface, open:
     ({ label, ...rest }: Readonly<Record<string, unknown>>) =>
       draw({ alt: label, ...rest })
   const resolved = { ...table, Button: opening, Image: named(image), Svg: named(svg), Raster: ({ label, ...rest }: Readonly<Record<string, unknown>>) => raster(rest) }
-  tableFacts.set(resolved, { hasNerdFont: hasNerdFont && surface === 'terminal' })
+  tableFacts.set(resolved, surface === 'terminal' ? { ...plainTerminal, ...facts } : plainTerminal)
   return resolved
 }
 

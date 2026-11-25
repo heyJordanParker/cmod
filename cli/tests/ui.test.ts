@@ -1,8 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { cmod, deleteTemporaryHomes, startCmod, temporaryHome } from './cmod.js'
+import { stoppedClock } from '@cmodjs/core/src/testing/fake-serve.js'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, startCmod, temporaryHome } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 const clients: RpcClient[] = []
 
 afterAll(async () => {
@@ -36,7 +38,7 @@ async function servedSession(answers: Answers) {
       asked.push([called, ...args])
       return answers[called]?.(...args) ?? null
     },
-    wait: () => new Promise<void>(() => undefined),
+    clock: stoppedClock,
   })
   clients.push(session)
   await session.request('$/hold', { session: 'worker', project: home, cwd: home })
@@ -83,7 +85,7 @@ test.concurrent("cmod ui lists a session's views, draws one, presses its handler
     ['press', 'worker', 3, { surface: 'herdr', key: 'demo/runs:rerun' }],
     ['open', 'worker', { mod: 'demo', id: 'runs' }],
   ])
-}, 30_000)
+})
 
 test.concurrent("cmod ui show tells the session the parts a client shows, tells nothing on a renewal of the same parts, and tells the empty list when the client clears them", async () => {
   const { home, asked, stop } = await servedSession({})
@@ -104,7 +106,7 @@ test.concurrent("cmod ui show tells the session the parts a client shows, tells 
     ['shown', 'worker', [{ mod: 'cmod', id: 'dashboard' }, { mod: 'demo', id: 'runs' }], false],
     ['shown', 'worker', [], false],
   ])
-}, 30_000)
+})
 
 test.concurrent('cmod ui refuses a session no cmod plugin on this computer holds, a surface no app is, and an area no widget shows in', async () => {
   const { home, stop } = await servedSession({})
@@ -117,7 +119,7 @@ test.concurrent('cmod ui refuses a session no cmod plugin on this computer holds
   expect(unheld).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod ui: No session gone runs on this computer, so it shows no UI.\n' })
   expect(surface).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod ui: --surface takes terminal, desktop, mobile, vscode, browser, herdr, not kiosk.\n' })
   expect(area).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod ui: --area takes abovePrompt, belowPrompt, working, turnEnd, dashboard, not BelowPrompt.\n' })
-}, 30_000)
+})
 
 test.concurrent('cmod ui draws for every surface an app is', async () => {
   const { home, asked, stop } = await servedSession({ draw: () => runsDrawing })
@@ -129,7 +131,7 @@ test.concurrent('cmod ui draws for every surface an app is', async () => {
 
   expect(drawn).toEqual([0, 0, 0, 0, 0, 0])
   expect(asked.map((call) => (call[3] as { readonly surface: string }).surface)).toEqual(every)
-}, 30_000)
+})
 
 test.concurrent('cmod ui follow prints the Redraw, Change, Open, and Close events after its cursor, waits for the next one, and counts every earlier one as missed on its first run', async () => {
   const { home, tell, stop } = await servedSession({})
@@ -154,7 +156,7 @@ test.concurrent('cmod ui follow prints the Redraw, Change, Open, and Close event
     { event: 'Close', session: 'worker', mod: 'demo', id: 'log' },
   ])
   expect([opened.missed, opened.cursor.split(':').slice(1)]).toEqual([false, ['4', '1', '1', '1']])
-}, 30_000)
+})
 
 test.concurrent('cmod ui follow counts the events as missed once cmod serve started again since its cursor', async () => {
   const { home, tell, restart, stop } = await servedSession({})
@@ -166,7 +168,7 @@ test.concurrent('cmod ui follow counts the events as missed once cmod serve star
   stop()
 
   expect([after.events, after.missed]).toEqual([[], true])
-}, 30_000)
+})
 
 async function appConnection(home: string) {
   const { url, token } = JSON.parse(await Bun.file(join(home, '.local/share/cmod/serve.json')).text()) as { readonly url: string; readonly token: string }
@@ -209,7 +211,7 @@ test.concurrent("an app reaches cmod/UI over the WebSocket serve.json names, wit
   expect([listed, drawn, pressed]).toEqual([[{ mod: 'demo', id: 'runs', title: 'Runs' }], runsDrawing, null])
   expect(asked.at(-1)).toEqual(['press', 'worker', 3, { surface: 'herdr', key: 'demo/runs:rerun' }])
   expect(refused.status).toBe(401)
-}, 30_000)
+})
 
 test.concurrent("an app hears Change for a session's widgets, views, and pages when its cmod plugin holds the session again, as after /reload-plugins", async () => {
   const { home, stop } = await servedSession({})
@@ -222,7 +224,7 @@ test.concurrent("an app hears Change for a session's widgets, views, and pages w
       return { status: answer.status, text: await answer.text() }
     },
     handle: async () => null,
-    wait: () => new Promise<void>(() => undefined),
+    clock: stoppedClock,
   })
   clients.push(reloaded)
 
@@ -238,4 +240,4 @@ test.concurrent("an app hears Change for a session's widgets, views, and pages w
     { session: 'worker', part: 'views' },
     { session: 'worker', part: 'pages' },
   ])
-}, 30_000)
+})

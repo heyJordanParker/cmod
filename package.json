@@ -10,6 +10,9 @@
       "history": { "title": "Show or hide History", "default": "meta+h" }
     }
   },
+  "scripts": {
+    "test": "bun run --cwd cli build:host > /dev/null && bun test"
+  },
   "files": ["cli/bin/cmod", "cli/package.json", "hooks", "rules", "setup", "skills", "src", "types/index.d.ts"],
   "dependencies": {
     "@cmodjs/core": "^8.4.0"

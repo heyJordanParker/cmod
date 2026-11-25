@@ -1,6 +1,6 @@
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Claude } from './claude.js'
-import type { Providers } from './interfaces.js'
+import type { Providers, StorePart } from './interfaces.js'
 import type { Parts } from './parts.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
@@ -22,6 +22,8 @@ export type Engine = {
   readonly widgets?: Widgets
   readonly parts?: Parts
   readonly onServeUnreached: (listener: () => void) => void
+  readonly onStoreChange: (listener: (part: StorePart | undefined) => void) => void
+  readonly storeChanged: (part: StorePart) => void
 }
 
 const engines = new WeakMap<object, Engine>()

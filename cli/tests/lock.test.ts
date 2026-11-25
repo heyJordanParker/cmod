@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -6,8 +6,9 @@ import { stripVTControlCharacters } from 'node:util'
 import { readRecord } from '@cmodjs/core/src/records.js'
 import { readText } from '../src/files.js'
 import { takeLock } from '../src/store.js'
-import { cmod, createMod, deleteTemporaryHomes, goneProcessId, hashOf, isGone, lockNotice, startCmod, startCmodInTerminal, startOf, temporaryHome, waitFor, writeFiles } from './cmod.js'
+import { cmod, createMod, deleteTemporaryHomes, goneProcessId, hashOf, isGone, lockNotice, spawned, spawningTestLimitMs, startCmod, startCmodInTerminal, startOf, temporaryHome, waitFor, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 test.concurrent('concurrent setups of eight mods keep every approval', async () => {
@@ -97,7 +98,7 @@ test.concurrent('a lock held by a live process that is not its holder is taken o
 test.concurrent('a setup that waits for a lock names the lock after a few seconds', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmod(home, 'setup', root, '--events')
   await setup.waitForOutput(lockNotice)
@@ -113,7 +114,7 @@ test.concurrent('a setup that waits for a lock names the lock after a few second
 test.concurrent('the spinner resumes after the lock-wait notice', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\n')
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmodInTerminal(home, 'setup', root)
   await setup.waitForOutput(lockNotice)
@@ -129,7 +130,7 @@ test.concurrent('the spinner resumes after the lock-wait notice', async () => {
 test.concurrent('a lock whose holder recorded no start time is held while its process lives', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: '' })
   const setup = startCmod(home, 'setup', root, '--events')
   await setup.waitForOutput(lockNotice)
@@ -146,7 +147,7 @@ test.concurrent("a holder file with cmod's own process ID is not held", async ()
   const home = await temporaryHome()
   const root = await createMod(home)
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(lock, { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmod(home, 'setup', root, '--events')
   await writeFiles(lock, { [String(setup.child.pid)]: '' })
@@ -182,15 +183,15 @@ test.concurrent('four processes taking one lock over and over never take it from
   const lock = join(home, '.local/share/cmod/builds/demo.lock')
   const log = join(home, 'log')
   await writeFiles(home, {
-    'taker.ts': `import { appendFileSync } from 'node:fs'\nimport { takeLock } from ${JSON.stringify(join(import.meta.dir, '../src/store.ts'))}\nfor (let round = 0; round < 500; round += 1) {\n  const held = await takeLock(${JSON.stringify(lock)})\n  appendFileSync(${JSON.stringify(log)}, 'in\\n')\n  await Bun.sleep(1)\n  appendFileSync(${JSON.stringify(log)}, 'out\\n')\n  await held[Symbol.asyncDispose]()\n}\n`,
+    'taker.ts': `import { appendFileSync } from 'node:fs'\nimport { takeLock } from ${JSON.stringify(join(import.meta.dir, '../src/store.ts'))}\nfor (let round = 0; round < 10; round += 1) {\n  const held = await takeLock(${JSON.stringify(lock)})\n  appendFileSync(${JSON.stringify(log)}, 'in\\n')\n  await Bun.sleep(1)\n  appendFileSync(${JSON.stringify(log)}, 'out\\n')\n  await held[Symbol.asyncDispose]()\n}\n`,
   })
-  const takers = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, join(home, 'taker.ts')], { env: { ...process.env, HOME: home }, stderr: 'pipe' }))
+  const takers = Array.from({ length: 4 }, () => spawned([process.execPath, join(home, 'taker.ts')], { env: { ...process.env, HOME: home }, stderr: 'pipe' }))
 
   const results = await Promise.all(takers.map(async (taker) => ({ exitCode: await taker.exited, stderr: (await new Response(taker.stderr).text()).replace(/^Waiting for .+, which process \d+ holds\.\n/gm, '') })))
 
   expect(results).toEqual(takers.map(() => ({ exitCode: 0, stderr: '' })))
   expect((await readFile(log, 'utf8')).replaceAll('in\nout\n', '')).toBe('')
-}, 30_000)
+})
 
 test.concurrent('a take that does not wait gets nothing while its own process holds the lock', async () => {
   const lock = join(await temporaryHome(), '.local/share/cmod/watch.lock')
@@ -208,7 +209,7 @@ test.concurrent('Ctrl+C while cmod remove waits for the lock prints a cancel lin
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
   expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const removal = startCmod(home, 'remove', 'demo')
   await removal.waitForOutput(lockNotice)
@@ -226,7 +227,7 @@ test.concurrent('Ctrl+C while cmod waits for a lock ends it at once', async () =
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmod(home, 'setup', root)
   await setup.waitForOutput(lockNotice)

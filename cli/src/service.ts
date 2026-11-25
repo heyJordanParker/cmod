@@ -7,7 +7,7 @@ import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './f
 import { capture, run } from './process.js'
 import { programsFolder } from './program.js'
 
-type Service = { readonly label: string; readonly unit: string }
+type Service = { readonly label: string; readonly unit: string; readonly environment?: Readonly<Record<string, string>> }
 
 type Manager = {
   unit(label: string): string
@@ -28,14 +28,18 @@ export async function startService(mod: string, command: readonly string[], vari
   const unit = manager.unit(label)
   const record = servicePath(storeFolder(process.env), mod, executable)
   const log = serviceLogPath(storeFolder(process.env), mod, executable)
-  const passed = Object.fromEntries([...passedVariables, ...variables].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])))
-  const launcher = claudeCodeLauncher()
-  const environment = { HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), ...(launcher === undefined ? {} : { CLAUDE_CODE_EXECPATH: launcher }), ...passed }
-  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, ...flags, '--', ...command], environment, log, processType)
+  const sessionNames = ['HOME', 'PATH', 'CLAUDE_CODE_EXECPATH', ...passedVariables]
+  const names = [...sessionNames, ...variables]
+  const own: Record<string, string | undefined> = { ...process.env, HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), CLAUDE_CODE_EXECPATH: claudeCodeLauncher() }
+  const environmentOf = (values: Readonly<Record<string, string | undefined>>) => Object.fromEntries(names.flatMap((name) => (values[name] ? [[name, values[name]]] : [])))
+  const textOf = (environment: Readonly<Record<string, string>>) => manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, ...flags, '--', ...command], environment, log, processType)
   try {
-    await writeAtomically(record, `${JSON.stringify({ label, unit } satisfies Service)}\n`)
-    const isChanged = (await readText(unit)) !== text
-    if (isChanged) await writeAtomically(unit, text, { mode: 0o600 })
+    const written = (await readService(record))?.environment
+    const kept = written === undefined ? {} : Object.fromEntries(sessionNames.filter((name) => !variables.includes(name)).map((name) => [name, written[name]]))
+    const environment = environmentOf(own)
+    const isChanged = (await readText(unit)) !== textOf(environmentOf({ ...own, ...kept }))
+    if (isChanged || written === undefined) await writeAtomically(record, `${JSON.stringify({ label, unit, environment } satisfies Service)}\n`)
+    if (isChanged) await writeAtomically(unit, textOf(environment), { mode: 0o600 })
     await manager.start(label, unit, isChanged)
     return { label, status: manager.status(label, log) }
   } catch (error) {
@@ -79,7 +83,8 @@ async function readService(path: string): Promise<Service | undefined> {
   const service = await readJson(path)
   if (service === undefined) return undefined
   if (!isObject(service) || typeof service['label'] !== 'string' || typeof service['unit'] !== 'string') throw new Error(`${path} is not a cmod service record. Delete it, and the mod's next session writes it again.`)
-  return { label: service['label'], unit: service['unit'] }
+  const environment = service['environment']
+  return { label: service['label'], unit: service['unit'], ...(isObject(environment) ? { environment: environment as Record<string, string> } : {}) }
 }
 
 async function removeRecord(record: string): Promise<void> {

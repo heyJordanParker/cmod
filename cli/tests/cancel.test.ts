@@ -1,11 +1,27 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readdir, readFile, readlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { ifMissing, listFiles } from '../src/files.js'
-import { cmod, cmodInTerminal, cmodOfStep, createMod, createProgramMod, deleteTemporaryHomes, hashOf, helloBuild, isGone, serveRelease, sha256Sums, startCmod, temporaryHome, waitFor, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, cmodOfStep, createMod, createProgramMod, deleteTemporaryHomes, hashOf, helloBuild, isGone, temporaryHome, serveRelease, sha256Sums, startCmod, waitFor, writeFiles, spawningTestLimitMs } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
+
+const manyStepFiles = setUpWithManyStepFiles()
+
+beforeAll(async () => {
+  await manyStepFiles
+})
+
+async function setUpWithManyStepFiles(): Promise<{ home: string; root: string }> {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
+  const files = { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), ...Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`setup/lib/${index}.sh`, `echo ${index}\n`])) }
+  await Promise.all(Object.entries(files).map(([path, text]) => writeFiles(root, { [path]: text })))
+  return { home, root }
+}
 
 test('Ctrl+C during the install step of cmod setup leaves no program link', async () => {
   const home = await temporaryHome()
@@ -155,7 +171,7 @@ sleep 1
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'consent.json.lock')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
-}, 15_000)
+})
 
 test("Ctrl+C during cmod remove's uninstall step still removes the mod", async () => {
   const home = await temporaryHome()
@@ -211,12 +227,8 @@ test('a record write that fails in an upgrade keeps the new saved uninstall step
 })
 
 test('a crash between the saved step and the record leaves a record whose uninstall step exists', async () => {
-  const home = await temporaryHome()
-  const root = await createMod(home)
-  const store = join(home, '.local/share/cmod')
-  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
-  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), ...Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`setup/lib/${index}.sh`, `echo ${index}\n`])) })
-  const recordFile = join(store, 'records/demo.json')
+  const { home, root } = await manyStepFiles
+  const recordFile = join(home, '.local/share/cmod/records/demo.json')
 
   const setup = startCmod(home, 'setup', root)
   while (setup.child.exitCode === null && !(await readFile(recordFile, 'utf8')).includes('"version": "0.2.0"')) await Bun.sleep(0)
@@ -227,7 +239,7 @@ test('a crash between the saved step and the record leaves a record whose uninst
   expect(record.version).toBe('0.2.0')
   expect(existsSync(record.uninstall)).toBe(true)
   expect(await listFiles(join(dirname(record.uninstall), 'root/setup'))).toEqual(await listFiles(join(root, 'setup')))
-}, 30_000)
+})
 
 test('Ctrl+C while cmod setup downloads the program installs nothing', async () => {
   const home = await temporaryHome()

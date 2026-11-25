@@ -1,9 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, spawned, spawningTestLimitMs, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
@@ -19,7 +20,7 @@ async function committedMod(home: string, build: string, manifest: Record<string
     'cli/src/main.ts': 'console.log("hello")\n',
     'CHANGELOG.md': releasedChangelog,
   })
-  const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
+  const git = (...args: string[]) => spawned(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
   await git('init', '-q')
   await git('add', '.')
   await git('commit', '-q', '-m', 'mod')
@@ -70,7 +71,7 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   const assets = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   expect(assets.map((asset) => basename(asset))).toEqual(['cmod-0.2.0.zip', ...platforms.map((platform) => `hello-${platform}`), 'SHA256SUMS'])
   const archive = assets[0] as string
-  const entries = await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()
+  const entries = await new Response(spawned(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()
   expect(entries.split('\n').filter((entry) => entry !== '').sort()).toEqual(['.claude-plugin/', '.claude-plugin/plugin.json', 'CHANGELOG.md', 'package.json'])
   const sums = await readFile(join(dirname(archive), 'SHA256SUMS'), 'utf8')
   const expected = []
@@ -100,9 +101,9 @@ test('publish uploads the release files before it pushes the marketplace, so no 
   const home = await temporaryHome()
   const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)
   const remote = join(home, 'remote.git')
-  await Bun.spawn(['git', 'init', '-q', '--bare', remote]).exited
-  await Bun.spawn(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
-  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await Bun.spawn(['git', '-C', root, 'config', key as string, value as string]).exited
+  await spawned(['git', 'init', '-q', '--bare', remote]).exited
+  await spawned(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
+  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await spawned(['git', '-C', root, 'config', key as string, value as string]).exited
   await answerAsGitHub(home, remote, 'main')
 
   const result = await cmod(home, 'publish', root)
@@ -111,9 +112,9 @@ test('publish uploads the release files before it pushes the marketplace, so no 
   expect(result.exitCode).toBe(0)
   expect(await Bun.file(join(home, 'gh-edits')).exists()).toBe(false)
   const atRelease = (await readFile(join(home, 'refs-at-release'), 'utf8')).trim().split('\n')
-  const after = (await new Response(Bun.spawn(['git', '--git-dir', remote, 'for-each-ref', '--format=%(refname)'], { stdout: 'pipe' }).stdout).text()).trim().split('\n')
-  const branch = (await new Response(Bun.spawn(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
-  const commitOf = async (ref: string) => (await new Response(Bun.spawn(['git', '--git-dir', remote, 'rev-parse', `${ref}^{commit}`], { stdout: 'pipe' }).stdout).text()).trim()
+  const after = (await new Response(spawned(['git', '--git-dir', remote, 'for-each-ref', '--format=%(refname)'], { stdout: 'pipe' }).stdout).text()).trim().split('\n')
+  const branch = (await new Response(spawned(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
+  const commitOf = async (ref: string) => (await new Response(spawned(['git', '--git-dir', remote, 'rev-parse', `${ref}^{commit}`], { stdout: 'pipe' }).stdout).text()).trim()
   expect(atRelease).toContain('refs/tags/v0.2.0')
   expect(atRelease).toContain('refs/tags/cmod--v0.2.0')
   expect(await commitOf('refs/tags/cmod--v0.2.0')).toBe(await commitOf('refs/heads/release'))
@@ -125,16 +126,16 @@ test("a first publish into an empty repository, where GitHub made the release br
   const home = await temporaryHome()
   const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)
   const remote = join(home, 'remote.git')
-  await Bun.spawn(['git', 'init', '-q', '--bare', remote]).exited
-  await Bun.spawn(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
-  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await Bun.spawn(['git', '-C', root, 'config', key as string, value as string]).exited
+  await spawned(['git', 'init', '-q', '--bare', remote]).exited
+  await spawned(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
+  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await spawned(['git', '-C', root, 'config', key as string, value as string]).exited
   await answerAsGitHub(home, remote, 'release')
 
   const result = await cmod(home, 'publish', root)
 
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
-  const branch = (await new Response(Bun.spawn(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
+  const branch = (await new Response(spawned(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
   expect(await readFile(join(home, 'gh-edits'), 'utf8')).toBe(`repo edit owner/cmod --default-branch ${branch}\n`)
 })
 
@@ -313,7 +314,7 @@ async function committedHooksMod(home: string, files: Record<string, string> = {
     'CHANGELOG.md': releasedChangelog,
     ...files,
   })
-  const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
+  const git = (...args: string[]) => spawned(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
   await git('init', '-q')
   await git('add', '.')
   await git('commit', '-q', '-m', 'mod')
@@ -322,7 +323,7 @@ async function committedHooksMod(home: string, files: Record<string, string> = {
 }
 
 async function zipText(archive: string, entry: string): Promise<string> {
-  return new Response(Bun.spawn(['unzip', '-p', archive, entry], { stdout: 'pipe' }).stdout).text()
+  return new Response(spawned(['unzip', '-p', archive, entry], { stdout: 'pipe' }).stdout).text()
 }
 
 test('publish --dry-run bundles the hooks module into one file, and leaves out .github/ and .claude/', async () => {
@@ -334,7 +335,7 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
-  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  const entries = (await new Response(spawned(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
   expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'demo hooks module', modules: ['./register.js'] })
   const bundle = await zipText(archive, 'hooks/register.js')
@@ -379,7 +380,7 @@ test('a "files" list in package.json limits the release to its paths, .claude-pl
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
-  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  const entries = (await new Response(spawned(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts', 'tsconfig.json'])
 })
 
@@ -395,7 +396,7 @@ test('a "files" list releases a path it names in cli/, and leaves out the rest o
 
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
-  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry.startsWith('cli/') && !entry.endsWith('/'))
+  const entries = (await new Response(spawned(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry.startsWith('cli/') && !entry.endsWith('/'))
   expect(entries).toEqual(['cli/bin/launch'])
 })
 
@@ -411,7 +412,7 @@ test('a "files" list that leaves out the install step still releases its folder,
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
-  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  const entries = (await new Response(spawned(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
   expect(entries).toContain('setup/install.sh')
 })
 
@@ -490,7 +491,7 @@ test('publish asks the build for every machine in CMOD_MACHINES, and refuses a r
   const home = await temporaryHome()
   const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in darwin-arm64 darwin-x64 linux-x64; do echo hello > dist/hello-$machine; done')
   await writeFiles(root, { 'cli/dist/hello-linux-arm64': 'built by an earlier run\n' })
-  await Bun.spawn(['touch', '-t', '202001010000', join(root, 'cli/dist/hello-linux-arm64')]).exited
+  await spawned(['touch', '-t', '202001010000', join(root, 'cli/dist/hello-linux-arm64')]).exited
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
@@ -503,7 +504,7 @@ test('publish builds only the machines the "os" and "cpu" keys of package.json l
   const home = await temporaryHome()
   const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in $CMOD_MACHINES; do echo hello > dist/hello-$machine; done')
   await writeFiles(root, { 'package.json': JSON.stringify({ name: 'cmod', os: ['darwin'], cpu: ['arm64'], cmod: { program: 'hello' } }) })
-  await Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', 'macOS on arm64']).exited
+  await spawned(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', 'macOS on arm64']).exited
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 

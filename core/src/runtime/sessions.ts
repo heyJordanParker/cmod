@@ -10,7 +10,7 @@ import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import { forkAgentType, searchLimit, type ContextData, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type ForkArgs, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type ForkArgs, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SendReceipt, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type Matcher, type SentMatcher } from '../utils/matcher.js'
 import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
@@ -33,6 +33,7 @@ export const conversationMethods = {
   contexts: 'cmod:contexts',
   tasks: 'cmod:tasks',
   goal: 'cmod:goal',
+  mail: 'cmod:mail',
   updateGoal: 'cmod:updateGoal',
   subscribe: 'cmod:subscribe',
   watchBefore: 'cmod:watchBefore',
@@ -57,7 +58,7 @@ export function pickedColor(args: string): string | undefined {
   return resetColors.includes(picked) ? undefined : picked
 }
 
-const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort', 'end', 'visit', 'delete', 'compact', 'sendTo'] as const
+const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort', 'end', 'visit', 'delete', 'compact'] as const
 
 export type Act = (typeof acts)[number]
 
@@ -416,10 +417,15 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       messages: (options: { readonly after?: string; readonly last?: number } = {}) => messagesFrom(conversationMethods.messages, { ...where(), ...options }),
       usage: async (): Promise<Usage> => (isHere() ? usageOf(claude) : act<Usage>(id(), 'usage', null, owned)),
       surfaces: async (): Promise<Surface[]> => (isHere() ? surfacesHere() : act<Surface[]>(id(), 'surfaces', null, owned)),
-      async send(message: SessionSend) {
+      async send(message: SessionSend): Promise<SendReceipt> {
         if (message.text.trim() === '') throw new Error(`${name}: send needs text.`)
-        if (isHere() && message.as !== Session) return sendHere(message)
-        await act(id(), 'send', message, owned)
+        if (message.as === Session && isHere()) throw new Error(`${name}: session ${id()} cannot send as itself to itself.`)
+        if (message.as === Session && current.id === '') throw new Error(`${name}: as: Session sends from the session the code runs in, and a cmod run script runs in none.`)
+        if (isHere()) {
+          await sendHere(message)
+          return { state: 'delivered' }
+        }
+        return (await act<SendReceipt | null>(id(), 'send', message, owned)) ?? { state: 'delivered' }
       },
       async end() {
         await act(id(), 'end', null, owned)

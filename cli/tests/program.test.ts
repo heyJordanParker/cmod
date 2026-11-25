@@ -1,9 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import { chmod, mkdir, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, isGone, startCmod, startProcess, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodExecutable, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, isGone, servedChanges, spawned, spawningTestLimitMs, startCmod, startProcess, temporaryHome, writeFiles, until } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const fakeServer = `#!/bin/sh
@@ -40,14 +41,6 @@ function owner(home: string): number {
   return Number(readdirSync(join(instances(home), 'fake-server.json.lock'))[0])
 }
 
-async function until(isDone: () => boolean): Promise<void> {
-  const deadline = Date.now() + 20000
-  while (!isDone()) {
-    if (Date.now() > deadline) throw new Error('waited 20 seconds')
-    await Bun.sleep(100)
-  }
-}
-
 test.concurrent('two cmod program processes started together run one copy, and both print its address', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'demo', '--', 'fake-server')
@@ -63,7 +56,7 @@ test.concurrent('two cmod program processes started together run one copy, and b
   first.child.kill()
   second.child.kill()
   await Promise.all([first.done, second.done])
-}, 60000)
+})
 
 test.concurrent("SIGTERM to the owner stops its copy, and the waiter starts the next copy and prints that copy's address", async () => {
   const home = await serverHome()
@@ -82,7 +75,28 @@ test.concurrent("SIGTERM to the owner stops its copy, and the waiter starts the 
   expect(serverLog(home)).toEqual([`start ${copy}`, `stop ${copy}`, `start ${next}`])
   second.child.kill()
   await second.done
-}, 60000)
+})
+
+test.concurrent('the holder tells cmod/Programs when it writes the instance file and when it deletes it, and a waiting cmod program prints the next address it reads then', async () => {
+  const home = await serverHome()
+  const serve = await servedChanges(home)
+  const changes = await serve.listen('cmod/Programs', { mod: 'demo' })
+  const first = startCmod(home, 'program', 'demo', '--', 'fake-server')
+  expect(await changes()).toEqual({ mod: 'demo', program: 'fake-server' })
+  const [copy] = serverIds(home, 'start')
+  expect(JSON.parse(readFileSync(join(instances(home), 'fake-server.json'), 'utf8'))).toMatchObject({ address: `unix:${home}/${copy}.sock` })
+  const second = startCmod(home, 'program', 'demo', '--', 'fake-server')
+  await second.waitForOutput(`unix:${home}/${copy}.sock`)
+
+  first.child.kill('SIGTERM')
+  expect(await changes()).toEqual({ mod: 'demo', program: 'fake-server' })
+  expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
+  expect(await changes()).toEqual({ mod: 'demo', program: 'fake-server' })
+  const next = serverIds(home, 'start')[1] as string
+  await second.waitForOutput(`unix:${home}/${next}.sock`)
+  second.child.kill()
+  await Promise.all([first.done, second.done])
+})
 
 test.concurrent('cmod program --no-wait with no holder runs the copy and prints its address', async () => {
   const home = await serverHome()
@@ -94,7 +108,7 @@ test.concurrent('cmod program --no-wait with no holder runs the copy and prints 
   expect(owner(home)).toBe(first.child.pid)
   first.child.kill()
   await first.done
-}, 60000)
+})
 
 test.concurrent("cmod program --no-wait beside a holder touches the holder's lock file, prints held, and exits 0 without a second copy", async () => {
   const home = await serverHome()
@@ -113,7 +127,7 @@ test.concurrent("cmod program --no-wait beside a holder touches the holder's loc
   expect(serverIds(home, 'start')).toEqual([copy as string])
   first.child.kill()
   await first.done
-}, 60000)
+})
 
 test.concurrent("cmod program --no-wait of a program with a service record, as a session on another copy of the mod runs it, prints held and starts no copy while the service's holder is away, so the copy never lives in a session", async () => {
   const home = await serverHome()
@@ -125,7 +139,7 @@ test.concurrent("cmod program --no-wait of a program with a service record, as a
   expect(stdout.trim()).toBe('held')
   expect(serverIds(home, 'start')).toEqual([])
   expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
-}, 60000)
+})
 
 test.concurrent('the holder touches its file in the lock every 5 seconds', async () => {
   const home = await serverHome()
@@ -139,7 +153,7 @@ test.concurrent('the holder touches its file in the lock every 5 seconds', async
   expect(Date.now() - statSync(holder).mtimeMs).toBeLessThan(5000)
   first.child.kill()
   await first.done
-}, 60000)
+})
 
 test.concurrent('after the owner is killed with SIGKILL, the next owner stops the orphaned copy before it starts its own', async () => {
   const home = await serverHome()
@@ -158,11 +172,11 @@ test.concurrent('after the owner is killed with SIGKILL, the next owner stops th
   await second.waitForOutput(`unix:${home}/${next}.sock`)
   second.child.kill()
   await second.done
-}, 60000)
+})
 
 test.concurrent('the owner stops its copy and gives up the election when its parent process dies', async () => {
   const home = await serverHome()
-  await writeFiles(home, { 'bin/cmod': cmodFromSource })
+  await writeFiles(home, { 'bin/cmod': cmodExecutable })
   const parent = startProcess(home, ['sh', '-c', 'cmod program demo -- fake-server & wait'])
   await until(() => serverIds(home, 'start').length === 1)
   const [copy] = serverIds(home, 'start')
@@ -173,11 +187,11 @@ test.concurrent('the owner stops its copy and gives up the election when its par
   expect(serverLog(home)).toEqual([`start ${copy}`, `stop ${copy}`])
   await until(() => !existsSync(join(instances(home), 'fake-server.json.lock')))
   expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
-}, 60000)
+})
 
 test.concurrent("SIGTERM stops the owner's copy even after the session's working folder is deleted", async () => {
   const home = await serverHome()
-  await writeFiles(home, { 'bin/cmod': cmodFromSource, 'project/.keep': '' })
+  await writeFiles(home, { 'bin/cmod': cmodExecutable, 'project/.keep': '' })
   const first = startProcess(home, [join(home, 'bin/cmod'), 'program', 'demo', '--', 'fake-server'], join(home, 'project'))
   await until(() => serverIds(home, 'start').length === 1)
   await rm(join(home, 'project'), { recursive: true })
@@ -186,7 +200,7 @@ test.concurrent("SIGTERM stops the owner's copy even after the session's working
 
   expect(await first.exited).toBe(0)
   expect(serverIds(home, 'stop')).toEqual(serverIds(home, 'start'))
-}, 60000)
+})
 
 test.concurrent('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves every session', async () => {
   const home = await serverHome()
@@ -196,7 +210,7 @@ test.concurrent('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves
 
   expect(exitCode).toBe(0)
   expect(serverLog(home)).toEqual(['session none'])
-}, 60000)
+})
 
 const foldersServer = '#!/bin/sh\necho "data $CMOD_DATA" >> "$HOME/server-log"\necho "cache $CMOD_CACHE" >> "$HOME/server-log"\necho "unix:$HOME/$$.sock"\n'
 
@@ -208,7 +222,7 @@ test.concurrent("the copy runs with CMOD_DATA and CMOD_CACHE, the mod's data fol
 
   expect(exitCode).toBe(0)
   expect(serverLog(home)).toEqual([`data ${home}/.local/share/cmod/data/demo`, `cache ${home}/caches/cmod/demo`])
-}, 60000)
+})
 
 test.concurrent("cmod teardown deletes the removed mod's instances folder and keeps another mod's", async () => {
   const home = await temporaryHome()
@@ -219,7 +233,7 @@ test.concurrent("cmod teardown deletes the removed mod's instances folder and ke
   expect(result.exitCode).toBe(0)
   expect(existsSync(instances(home))).toBe(false)
   expect(existsSync(join(home, '.local/share/cmod/instances/notes/fake-server.json'))).toBe(true)
-}, 60000)
+})
 
 test.concurrent("a copy that crashes makes the owner exit with the copy's exit code and pass its standard error through", async () => {
   const home = await serverHome()
@@ -229,7 +243,7 @@ test.concurrent("a copy that crashes makes the owner exit with the copy's exit c
   expect(exitCode).toBe(3)
   expect(stderr).toContain('no port is free')
   expect(existsSync(join(instances(home), 'crash-server.json.lock'))).toBe(false)
-}, 60000)
+})
 
 async function linkedServerHome(): Promise<{ home: string; checkout: string }> {
   const home = await serverHome()
@@ -263,7 +277,7 @@ test.concurrent("a build that changes the held program's file stops the copy and
   expect(JSON.parse(readFileSync(join(instances(home), 'linked-server.json'), 'utf8'))).toMatchObject({ address: `unix:${home}/${copy}-rebuilt.sock`, pid: Number(copy) })
   next.child.kill()
   await next.done
-}, 60000)
+})
 
 test.concurrent("a build that writes the same bytes keeps the held program's copy running", async () => {
   const { home, checkout } = await linkedServerHome()
@@ -278,7 +292,7 @@ test.concurrent("a build that writes the same bytes keeps the held program's cop
   expect(serverLog(home)).toEqual([`start ${copy}`])
   holder.child.kill()
   await holder.done
-}, 60000)
+})
 
 const holderWithoutBuildCheck = `import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 const [file, program] = process.argv.slice(2)
@@ -327,7 +341,7 @@ test.concurrent("a build that changes the held program's file stops the copy of 
   expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
   waiting.child.kill()
   await waiting.done
-}, 60000)
+})
 
 test.concurrent("cmod download of a held program, which an install step runs, stops the copy of a holder with no build check, and the waiting holder starts the downloaded file", async () => {
   const home = await serverHome()
@@ -354,7 +368,7 @@ test.concurrent("cmod download of a held program, which an install step runs, st
   } finally {
     await server.stop(true)
   }
-}, 60000)
+})
 
 const uid = process.getuid?.() ?? 0
 
@@ -379,7 +393,7 @@ async function writeExecutables(home: string, files: Record<string, string>): Pr
 
 async function serviceHome(): Promise<string> {
   const home = await serverHome()
-  await writeExecutables(home, { '.local/share/cmod/programs/cmod': cmodFromSource, '.local/share/cmod/programs/fake-server': fakeServer })
+  await writeExecutables(home, { '.local/share/cmod/programs/cmod': cmodExecutable, '.local/share/cmod/programs/fake-server': fakeServer })
   return home
 }
 
@@ -407,6 +421,16 @@ async function versionedServerHome(install = '#!/bin/sh\n'): Promise<{ home: str
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
   return { home, root, instance: join(home, '.local/share/cmod/instances/demo/fake-server.json') }
 }
+
+test.concurrent('cmod program --service with no cmod serve counts the service as started within a few seconds of its instance file, never at the 15-second deadline', async () => {
+  const home = await serviceHome()
+
+  const { exitCode, stdout } = await cmod(home, 'program', 'demo', '--service', '--', 'fake-server', '--port', '0')
+  const heldAt = Date.now()
+
+  expect([exitCode, stdout]).toEqual([0, 'held\n'])
+  expect(heldAt - statSync(join(home, '.local/share/cmod/instances/demo/fake-server.json')).mtimeMs).toBeLessThan(5000)
+})
 
 test.concurrent("cmod program --service writes a launchd agent on macOS, which sends standard error to the service's log in the cmod store, and a systemd user service on Linux, that runs cmod program with the program's command, home, and a restart on every exit, loads it, and prints held once the service holds the lock", async () => {
   const home = await serviceHome()
@@ -473,20 +497,20 @@ WantedBy=default.target
     expect(serviceCalls(home)).toEqual(['systemctl --user daemon-reload', `systemctl --user enable ${label('demo')}.service`, `systemctl --user restart ${label('demo')}.service`])
   }
   expect(statSync(unitOf(home, 'demo')).mode & 0o777).toBe(0o600)
-}, 60000)
+})
 
 test.concurrent("cmod program --service --process-type Interactive gives the launchd agent that ProcessType, and --provides names each interface in the instance file and in the service's command", async () => {
   const home = await serviceHome()
 
   const { exitCode, stdout } = await cmod(home, 'program', 'demo', '--service', '--process-type', 'Interactive', '--provides', 'demo/Platform', '--', 'fake-server', '--port', '0')
+  expect([exitCode, stdout]).toEqual([0, 'held\n'])
   await until(() => existsSync(join(home, '.local/share/cmod/instances/demo/fake-server.json')))
   const unit = readFileSync(unitOf(home, 'demo'), 'utf8')
 
-  expect([exitCode, stdout]).toEqual([0, 'held\n'])
   expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/instances/demo/fake-server.json'), 'utf8'))).toMatchObject({ provides: ['demo/Platform'] })
   expect(unit).toContain(isMac ? '<string>--provides</string>\n    <string>demo/Platform</string>' : '"--provides" "demo/Platform"')
   expect(unit.includes('<key>ProcessType</key>\n  <string>Interactive</string>')).toBe(isMac)
-}, 60000)
+})
 
 test.concurrent('cmod program refuses a process type launchd has no class for, a process type without --service, and a provided name that is no interface name', async () => {
   const home = await serviceHome()
@@ -510,7 +534,7 @@ test.concurrent("a cmod command the service's program runs finds the Claude Code
   expect(Bun.which('claude', { PATH: pathVariableOf(home) })).toBeNull()
   expect(listings(home)[0]).toBe('0')
   expect(readFileSync(join(home, 'claude-calls'), 'utf8')).toContain('plugin list --json\n')
-}, 60000)
+})
 
 test.concurrent("after Claude Code updates itself and deletes the version the service was written from, the service's cmod commands still find it, and a session on the new version leaves the service as it was", async () => {
   const home = await serviceHome()
@@ -534,7 +558,7 @@ test.concurrent("after Claude Code updates itself and deletes the version the se
   expect(await cmodWith(home, { CLAUDE_CODE_EXECPATH: join(versions, '2.1.319') }, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toBe(unit)
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
-}, 60000)
+})
 
 test.concurrent('cmod program --service whose service holds nothing within 15 seconds removes the service and its record, and fails', async () => {
   const home = await serviceHome()
@@ -548,7 +572,7 @@ test.concurrent('cmod program --service whose service holds nothing within 15 se
   expect(existsSync(join(servicesOf(home, 'demo'), 'fake-server.json'))).toBe(false)
   expect(await isGone(join(home, '.config/systemd/user/default.target.wants', `${label('demo')}.service`))).toBe(true)
   expect(serverIds(home, 'start')).toEqual([])
-}, 60000)
+})
 
 test.concurrent.skipIf(!isMac)("cmod program --service on macOS whose program exits at once fails with an error that names the service's log, and the log, which the removal keeps, holds the program's standard error", async () => {
   const home = await serviceHome()
@@ -561,7 +585,7 @@ test.concurrent.skipIf(!isMac)("cmod program --service on macOS whose program ex
   expect(existsSync(unitOf(home, 'demo'))).toBe(false)
   expect(readdirSync(servicesOf(home, 'demo'))).toEqual(['fake-server.log'])
   expect(new Set(readFileSync(join(servicesOf(home, 'demo'), 'fake-server.log'), 'utf8').trim().split('\n'))).toEqual(new Set(['boom']))
-}, 60000)
+})
 
 test.concurrent("a holder whose service's log grew past 1 MiB keeps only the last whole lines of its last 512 KiB before it starts the program, so a program that fails at every restart never fills the disk", async () => {
   const home = await serverHome()
@@ -575,11 +599,11 @@ test.concurrent("a holder whose service's log grew past 1 MiB keeps only the las
   expect(kept.length).toBeLessThanOrEqual(512 * 1024)
   expect(kept.startsWith(line)).toBe(true)
   expect(kept.endsWith(`${line}last failure\n`)).toBe(true)
-}, 60000)
+})
 
 test.concurrent("cmod program --service waits for the mod's lock before it writes or loads the service, so sessions that start the mod at once never load it beside each other or beside cmod setup", async () => {
   const home = await serviceHome()
-  const holder = Bun.spawn(['sleep', '30'])
+  const holder = spawned(['tail', '-f', '/dev/null'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: '' })
   const started = startCmod(home, 'program', 'demo', '--service', '--', 'fake-server')
   await started.waitForOutput('Waiting for ~/.local/share/cmod/records/demo.json.lock')
@@ -590,7 +614,7 @@ test.concurrent("cmod program --service waits for the mod's lock before it write
   await holder.exited
   expect(await started.done).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   expect(existsSync(unitOf(home, 'demo'))).toBe(true)
-}, 60000)
+})
 
 test.concurrent.skipIf(isMac)('cmod program --service whose systemd user service took the unit and then failed to start disables it, deletes its unit and its record, and fails with the error instead of running the program in the session', async () => {
   const home = await serviceHome()
@@ -604,7 +628,7 @@ test.concurrent.skipIf(isMac)('cmod program --service whose systemd user service
   expect(existsSync(unitOf(home, 'demo'))).toBe(false)
   expect(existsSync(servicesOf(home, 'demo'))).toBe(false)
   expect(serverIds(home, 'start')).toEqual([])
-}, 60000)
+})
 
 test.concurrent('a second cmod program --service of the same mod and program, from a session with another PATH, loads nothing again and runs no second copy', async () => {
   const home = await serviceHome()
@@ -616,7 +640,7 @@ test.concurrent('a second cmod program --service of the same mod and program, fr
   await Bun.sleep(1000)
   expect(serverIds(home, 'start')).toHaveLength(1)
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
-}, 60000)
+})
 
 test.concurrent("cmod program --service gives the service the session's XDG_CONFIG_HOME and HERDR_APP_HOME, so cmod serve finds a Herdr home the person moved, and a second session with the same ones loads nothing again", async () => {
   const home = await serviceHome()
@@ -631,7 +655,7 @@ test.concurrent("cmod program --service gives the service the session's XDG_CONF
   expect([unit.includes(moved.XDG_CONFIG_HOME), unit.includes(moved.HERDR_APP_HOME)]).toEqual([true, true])
   expect([statSync(unitOf(home, 'demo')).ino, statSync(unitOf(home, 'demo')).mtimeMs]).toEqual([written.ino, written.mtimeMs])
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
-}, 60000)
+})
 
 test.concurrent("a service's program runs with the CMOD_DATA and CMOD_CACHE of the session that wrote the service, though the session moved its XDG_CACHE_HOME, and a second session with the same folders loads nothing again", async () => {
   const home = await serviceHome()
@@ -647,17 +671,25 @@ test.concurrent("a service's program runs with the CMOD_DATA and CMOD_CACHE of t
   expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toContain(moved.XDG_CACHE_HOME)
   expect([statSync(unitOf(home, 'demo')).ino, statSync(unitOf(home, 'demo')).mtimeMs]).toEqual([written.ino, written.mtimeMs])
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
-}, 60000)
+})
 
-test.concurrent("a cmod program --service whose environment changed rewrites the service and loads it again once the service manager let the old one go", async () => {
+test.concurrent("a session whose own values differ from the service's, its Claude Code or Herdr home, writes and loads nothing, so cmod serve keeps running", async () => {
   const home = await serviceHome()
-  expect(await cmodWith(home, { DEMO_DEVICE: 'mac-1' }, 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const own = (claude: string, herdr: string) => ({ CLAUDE_CODE_EXECPATH: join(home, claude), HERDR_APP_HOME: join(home, herdr), DEMO_DEVICE: 'mac-1' })
+  await writeExecutables(home, { 'claude-a': claudeAnswering(cmodPluginListed), 'claude-b': claudeAnswering(cmodPluginListed) })
+  expect(await cmodWith(home, own('claude-a', 'herdr-a'), 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const unit = readFileSync(unitOf(home, 'demo'), 'utf8')
+  const written = statSync(unitOf(home, 'demo'))
   const loaded = serviceCalls(home).length
 
-  const changed = await cmodWith(home, { DEMO_DEVICE: 'mac-2' }, 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')
+  expect(await cmodWith(home, own('claude-b', 'herdr-b'), 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
 
-  expect(changed).toMatchObject({ exitCode: 0, stdout: 'held\n', stderr: '' })
-  expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toContain('mac-2')
+  expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toBe(unit)
+  expect([statSync(unitOf(home, 'demo')).ino, statSync(unitOf(home, 'demo')).mtimeMs]).toEqual([written.ino, written.mtimeMs])
+  expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user start ${label('demo')}.service`])
+})
+
+function expectReloaded(home: string, loaded: number): void {
   const calls = serviceCalls(home).slice(loaded)
   if (isMac) {
     expect(calls.slice(0, 2)).toEqual([`launchctl print gui/${uid}/${label('demo')}`, `launchctl bootout gui/${uid}/${label('demo')}`])
@@ -666,7 +698,31 @@ test.concurrent("a cmod program --service whose environment changed rewrites the
   } else {
     expect(calls).toEqual(['systemctl --user daemon-reload', `systemctl --user enable ${label('demo')}.service`, `systemctl --user restart ${label('demo')}.service`])
   }
-}, 60000)
+}
+
+test.concurrent("a cmod program --service whose command changed rewrites the service and loads it again once the service manager let the old one go", async () => {
+  const home = await serviceHome()
+  expect(await cmod(home, 'program', 'demo', '--service', '--', 'fake-server', '--port', '1')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const loaded = serviceCalls(home).length
+
+  const changed = await cmod(home, 'program', 'demo', '--service', '--', 'fake-server', '--port', '2')
+
+  expect(changed).toMatchObject({ exitCode: 0, stdout: 'held\n', stderr: '' })
+  expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toContain(isMac ? '<string>2</string>' : '"2"')
+  expectReloaded(home, loaded)
+})
+
+test.concurrent("a mod whose declared environment value changed rewrites the service and loads it again once the service manager let the old one go", async () => {
+  const home = await serviceHome()
+  expect(await cmodWith(home, { DEMO_DEVICE: 'mac-1' }, 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const loaded = serviceCalls(home).length
+
+  const changed = await cmodWith(home, { DEMO_DEVICE: 'mac-2' }, 'program', 'demo', '--service', '--env', 'DEMO_DEVICE', '--', 'fake-server')
+
+  expect(changed).toMatchObject({ exitCode: 0, stdout: 'held\n', stderr: '' })
+  expect(readFileSync(unitOf(home, 'demo'), 'utf8')).toContain('mac-2')
+  expectReloaded(home, loaded)
+})
 
 test.concurrent("cmod setup of a new version of a mod calls no service manager, and the service's holder restarts the copy once on the new program", async () => {
   const { home, root, instance } = await versionedServerHome()
@@ -683,7 +739,7 @@ test.concurrent("cmod setup of a new version of a mod calls no service manager, 
   expect(serverLog(home)).toEqual([`start ${old}`, `stop ${old}`, `start ${next}`])
   expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${next}-0.2.0.sock`, pid: Number(next) })
   expect(serviceCalls(home).slice(loaded)).toEqual([])
-}, 60000)
+})
 
 test.concurrent('cmod setup of a new version stops the copy of the old version that a holder with no build check runs, and the waiting holder starts the new version', async () => {
   const { home, root, instance } = await versionedServerHome()
@@ -701,7 +757,7 @@ test.concurrent('cmod setup of a new version stops the copy of the old version t
   expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
   waiting.child.kill()
   await waiting.done
-}, 60000)
+})
 
 test.concurrent("a new version whose install step fails links the old program back and stops the new version's copy, so the service runs the old program again", async () => {
   const failsOnceTheNewCopyRuns = `#!/bin/sh
@@ -720,12 +776,12 @@ exit 1
   const [first, failed, restored] = serverIds(home, 'start')
   expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${failed}`, `stop ${failed}`, `start ${restored}`])
   expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${restored}.sock`, pid: Number(restored) })
-}, 60000)
+})
 
 test.concurrent("a build of a linked checkout that changes a service's program restarts the service on the new build", async () => {
   const { home, checkout } = await linkedServerHome()
   const instance = join(instances(home), 'linked-server.json')
-  await writeExecutables(home, { '.local/share/cmod/programs/cmod': cmodFromSource })
+  await writeExecutables(home, { '.local/share/cmod/programs/cmod': cmodExecutable })
   expect(await cmod(home, 'program', 'demo', '--service', '--', 'linked-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   await until(() => serverIds(home, 'start').length === 1)
   const [old] = serverIds(home, 'start')
@@ -738,7 +794,7 @@ test.concurrent("a build of a linked checkout that changes a service's program r
 
   expect(serverLog(home)).toEqual([`start ${old}`, `stop ${old}`, `start ${next}`])
   expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${next}-rebuilt.sock`, pid: Number(next) })
-}, 60000)
+})
 
 test.concurrent('cmod remove stops the service of the mod and deletes its unit and its record', async () => {
   const home = await serviceHome()
@@ -760,7 +816,7 @@ test.concurrent('cmod remove stops the service of the mod and deletes its unit a
   expect(existsSync(unitOf(home, 'demo'))).toBe(false)
   expect(existsSync(servicesOf(home, 'demo'))).toBe(false)
   await until(() => serverIds(home, 'stop').length === 1)
-}, 60000)
+})
 
 test.concurrent("cmod program --remove-service, which the first session of a mod's version without the program runs after cmod setup, stops the service and deletes its unit and its record", async () => {
   const home = await serviceHome()
@@ -784,7 +840,7 @@ test.concurrent("cmod program --remove-service, which the first session of a mod
   expect(existsSync(unitOf(home, 'demo'))).toBe(false)
   expect(existsSync(servicesOf(home, 'demo'))).toBe(false)
   await until(() => serverIds(home, 'stop').length === 1)
-}, 60000)
+})
 
 test.concurrent('cmod program --remove-service of a program with no service changes nothing and exits 0, so a second session that removes it too fails nothing, and the other services of the mod stay', async () => {
   const home = await serviceHome()
@@ -795,7 +851,7 @@ test.concurrent('cmod program --remove-service of a program with no service chan
 
   expect(serviceCalls(home)).toEqual([])
   expect(readdirSync(servicesOf(home, 'demo'))).toEqual(['other-server.json'])
-}, 60000)
+})
 
 test.concurrent('a mod whose new version still declares the program keeps its service loaded across cmod setup and the next session start', async () => {
   const home = await serviceHome()
@@ -813,7 +869,7 @@ test.concurrent('a mod whose new version still declares the program keeps its se
   expect(existsSync(unitOf(home, 'demo'))).toBe(true)
   expect(readdirSync(servicesOf(home, 'demo')).sort()).toEqual(isMac ? ['fake-server.json', 'fake-server.log'] : ['fake-server.json'])
   expect(serverIds(home, 'stop')).toEqual([])
-}, 60000)
+})
 
 test.concurrent('cmod list shows the programs a mod runs as a service of this computer', async () => {
   const home = await serviceHome()
@@ -827,7 +883,7 @@ test.concurrent('cmod list shows the programs a mod runs as a service of this co
 
   expect(listed.stdout).toMatch(/\ndemo@market +0\.1\.0 +ready, runs fake-server as a service of this computer\n/)
   expect((JSON.parse(json.stdout) as { name: string }[]).find(({ name }) => name === 'demo@market')).toMatchObject({ services: ['fake-server'] })
-}, 60000)
+})
 
 test.concurrent('cmod program --service where the service manager refuses runs the copy itself, as --no-wait does, and leaves no unit or record', async () => {
   const home = await serviceHome()
@@ -843,4 +899,4 @@ test.concurrent('cmod program --service where the service manager refuses runs t
   expect(existsSync(servicesOf(home, 'demo'))).toBe(false)
   first.child.kill()
   expect((await first.done).stderr).toContain('Domain does not support specified action')
-}, 60000)
+})

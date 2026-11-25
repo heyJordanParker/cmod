@@ -1,11 +1,13 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, readdir, readFile, readlink, rm, stat, symlink } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { readRecord } from '@cmodjs/core/src/records.js'
 import { readText } from '../src/files.js'
-import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, createMod, environment, createProgramMod, deleteTemporaryHomes, fourStepInstall, hashOf, helloBuild, isGone, platform, release, serveRelease, sha256Sums, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { cmodBinary } from './cmod-binary.js'
+import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, createMod, environment, createProgramMod, deleteTemporaryHomes, fourStepInstall, hashOf, helloBuild, isGone, platform, release, serveRelease, sha256Sums, spawned, spawningTestLimitMs, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const coreLifecycle = join(import.meta.dir, '..', '..', 'core', 'src', 'runtime', 'lifecycle.ts')
@@ -301,7 +303,7 @@ test('the record names the session and the process that asked for the setup', as
   const home = await temporaryHome()
   const root = await createMod(home)
 
-  const setup = Bun.spawn([process.execPath, join(import.meta.dir, '..', 'src', 'main.ts'), 'setup', root, '--events'], { cwd: home, env: { ...environment(home), CLAUDE_CODE_SESSION_ID: 'a1b2c3d4' }, stdout: 'ignore', stderr: 'ignore' })
+  const setup = spawned([cmodBinary, 'setup', root, '--events'], { cwd: home, env: { ...environment(home), CLAUDE_CODE_SESSION_ID: 'a1b2c3d4' }, stdout: 'ignore', stderr: 'ignore' })
 
   expect(await setup.exited).toBe(0)
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.installedBy).toEqual({ session: 'a1b2c3d4', pid: process.pid })
@@ -381,7 +383,7 @@ test('setup downloads the named program for this platform, checks it against SHA
   expect(await readlink(entry)).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/hello-mod.json'), 'utf8'))).toMatchObject({ program: 'hello', uninstall: null })
   expect(existsSync(join(home, '.local/share/cmod/uninstall/hello-mod'))).toBe(false)
-  expect(await new Response(Bun.spawn([entry], { stdout: 'pipe' }).stdout).text()).toBe('hello 0.2.0\n')
+  expect(await new Response(spawned([entry], { stdout: 'pipe' }).stdout).text()).toBe('hello 0.2.0\n')
 })
 
 test('a download whose SHA-256 differs from SHA256SUMS fails and installs nothing', async () => {
@@ -623,7 +625,7 @@ test('setup installs a program whose name PATH finds elsewhere, links it into th
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain("log A terminal runs ~/bin/hello, which PATH finds before ~/.local/bin. Claude Code runs cmod's hello.\n")
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
-  expect(await new Response(Bun.spawn([join(home, '.local/share/cmod/programs/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello 0.2.0\n')
+  expect(await new Response(spawned([join(home, '.local/share/cmod/programs/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello 0.2.0\n')
 })
 
 test('setup refuses a mod whose package.json "os" leaves out this system, before any script runs', async () => {
@@ -684,7 +686,7 @@ test('setup links a program version already in the store, such as one the cmod b
   const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('progress 2 3 Linking hello\nprogress 3 3 hello 0.2.0 is installed\nprogress 4 5 Adding the alias\nprogress 5 5 Finishing\ndone hello-mod 0.2.0\n')
-  expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('placed by the bootstrap\n')
+  expect(await new Response(spawned([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('placed by the bootstrap\n')
 })
 
 test('a linked mod whose version moved past its last release builds its program from the checkout instead of downloading it', async () => {
@@ -713,7 +715,7 @@ test('a linked mod whose version moved past its last release builds its program 
     ].join('\n'),
   )
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.3.0/hello.linked'))
-  expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
+  expect(await new Response(spawned([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
 })
 
 test('a program rebuilt after the install step ran makes setup run the install step again with it', async () => {

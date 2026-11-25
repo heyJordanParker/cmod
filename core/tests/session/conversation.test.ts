@@ -121,6 +121,7 @@ test('each origin names its sender', () => {
   expect(senderOf(typed('keep going', { kind: 'auto-continuation' }))).toEqual([{ type: Engine }])
 })
 
+
 test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md an InstructionFile, and a system line a Notice', () => {
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Start'))

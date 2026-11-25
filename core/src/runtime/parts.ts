@@ -3,10 +3,11 @@ import type { Surface } from '../mod.js'
 import { isObject } from '../records.js'
 import type { TurnData } from '../session/conversation.js'
 import { Dashboard, TurnEnd, type Area } from '../ui/areas.js'
-import { elementData, elementOf, Text, type Handler } from '../ui/elements.js'
+import { Box, elementData, elementOf, Text, type Handler } from '../ui/elements.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
+import { insideData, refusal } from './drawing-rules.js'
 import { styleInterface, uiParts, type Implementation } from './interfaces.js'
 import type { Router } from './router.js'
 import { partMethods, stalePress, type DrawnPart, type PageDeclaration, type PartPress, type PartRequest, type PartsUpdate, type ShownParts, type ViewDeclaration, type WidgetDeclaration } from './ui.js'
@@ -14,33 +15,65 @@ import { areaComponents, widgetsOf, type Widgets } from './widgets.js'
 
 export type DrawnParts = {
   fill(mod: string, cached: string, input: Readonly<Record<string, unknown>>, name: string): Promise<void> | undefined
-  element(mod: string, cached: string, keyPrefix: string, name: string, reportId: string): RenderElement | undefined
+  element(mod: string, cached: string, keyPrefix: string, name: string, reportId: string): RenderElement | null | undefined
   failure(mod: string, cached: string): string | undefined
-  forget(mod: string): void
+  forget(mod: string, ids?: readonly string[]): void
 }
 
-type Drawn = { readonly data: DrawnPart | null; readonly failure?: string; readonly generation: number }
+type Drawn = { readonly data: DrawnPart | null; readonly failure?: string; readonly isRefused: boolean; readonly generation: number }
+
+function partOf(input: Readonly<Record<string, unknown>>): string | undefined {
+  const id = input['widget'] ?? input['page']
+  return typeof id === 'string' ? id : undefined
+}
+
+const layoutInputs = new Set(['columns', 'isFocused', 'surface'])
+
+function shownAs(mod: string, input: Readonly<Record<string, unknown>>): string {
+  const part = Object.entries(input)
+    .filter(([key]) => !layoutInputs.has(key))
+    .map(([key, value]) => [key, key === 'turn' && isObject(value) && isObject(value['prompt']) ? value['prompt']['id'] : value])
+  return `${mod}\u0000${JSON.stringify(part)}`
+}
 
 const keptDrawings = 200
+
+function remember<Value>(kept: Map<string, Value>, key: string, value: Value): void {
+  kept.delete(key)
+  kept.set(key, value)
+  const [oldest] = kept.keys()
+  if (kept.size > keptDrawings && oldest !== undefined) kept.delete(oldest)
+}
 
 export function drawnParts({ claude, report, press }: { readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly press: (mod: string, press: PartPress) => void }): DrawnParts {
   const drawn = new Map<string, Drawn>()
   const drawing = new Map<string, Promise<void>>()
+  const shownBy = new Map<string, string>()
+  const lastGood = new Map<string, DrawnPart>()
   const generations = new Map<string, number>()
+  let forgotten = 0
   const keyOf = (mod: string, cached: string) => `${mod}\u0000${cached}`
-  const generationOf = (mod: string) => generations.get(mod) ?? 0
+  const generationOf = (mod: string, part: string | undefined) => Math.max(generations.get(mod) ?? 0, part === undefined ? 0 : (generations.get(keyOf(mod, part)) ?? 0))
+  const toldRefusals = new Set<string>()
 
   return {
     fill(mod, cached, input, name) {
       const key = keyOf(mod, cached)
-      const generation = generationOf(mod)
+      const part = partOf(input)
+      const shown = shownAs(mod, input)
+      remember(shownBy, key, shown)
+      const generation = generationOf(mod, part)
       if (drawn.get(key)?.generation === generation) return undefined
       const keep = (data: DrawnPart | null, failure?: string) => {
-        drawn.delete(key)
-        drawn.set(key, { data, ...(failure === undefined ? {} : { failure }), generation })
-        const [oldest] = drawn.keys()
-        if (drawn.size > keptDrawings && oldest !== undefined) drawn.delete(oldest)
-        if (generationOf(mod) !== generation) claude.ui.invalidate('ui.render')
+        const rule = data === null ? undefined : refusal(data.tree, insideData)
+        const told = `${mod}\u0000${part ?? ''}\u0000${rule}`
+        if (rule !== undefined && !toldRefusals.has(told)) {
+          toldRefusals.add(told)
+          report(`refused:${mod}/${part ?? 'markdown'}`, `${name} drew what Claude Code refuses`, new Error(rule))
+        }
+        remember(drawn, key, { data, ...(failure === undefined ? {} : { failure }), isRefused: rule !== undefined, generation })
+        if (data !== null && rule === undefined) remember(lastGood, shown, data)
+        if (generationOf(mod, part) !== generation) claude.ui.invalidate('ui.render')
       }
       const pending =
         drawing.get(key) ??
@@ -61,11 +94,12 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
     element(mod, cached, keyPrefix, name, reportId) {
       const key = keyOf(mod, cached)
       const entry = drawn.get(key)
-      if (entry === undefined) return undefined
-      drawn.delete(key)
-      drawn.set(key, entry)
-      const { data } = entry
-      if (data === null || data.tree === null) return undefined
+      const shown = shownBy.get(key) ?? ''
+      if (entry !== undefined) remember(drawn, key, entry)
+      const data = entry !== undefined && entry.data !== null && !entry.isRefused ? entry.data : lastGood.get(shown)
+      if (data === undefined) return undefined
+      remember(lastGood, shown, data)
+      if (data.tree === null) return null
       try {
         return elementOf(data.tree, keyPrefix, (handler, args) => press(mod, { draw: data.draw, handler, args })) as RenderElement
       } catch (error) {
@@ -76,8 +110,9 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
     failure(mod, cached) {
       return drawn.get(keyOf(mod, cached))?.failure
     },
-    forget(mod) {
-      generations.set(mod, generationOf(mod) + 1)
+    forget(mod, ids) {
+      forgotten += 1
+      for (const key of ids?.map((id) => keyOf(mod, id)) ?? [mod]) generations.set(key, forgotten)
     },
   }
 }
@@ -286,13 +321,14 @@ export function serveParts({
     return true
   }
 
-  const update = (mod: string, { parts: listing, redraw, requests, isAsked, isStart }: PartsUpdate) => {
+  const update = (mod: string, { parts: listing, redraw, changed, requests, isAsked, isStart }: PartsUpdate) => {
     if (isStart === true) started(mod)
     if (listing !== undefined) declare(mod, listing)
     if (listing !== undefined) provide(mod, providedBy(listing))
-    const isRedrawn = redraw === true || requests?.some((request) => 'open' in request) === true
-    if (listing !== undefined || isRedrawn) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(isRedrawn ? { redraw: true } : {}) })
-    if (redraw === true) for (const id of idsOf(mod)) tellUi('Redraw', { mod, id })
+    const isWhole = redraw === true && changed === undefined
+    const redrawn = [...new Set([...(changed ?? []), ...(requests ?? []).flatMap((request) => ('open' in request ? [request.open] : []))])]
+    if (listing !== undefined || isWhole || redrawn.length > 0) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(isWhole ? { redraw: true } : {}), ...(redrawn.length === 0 ? {} : { changed: redrawn }) })
+    for (const id of isWhole ? idsOf(mod) : (changed ?? [])) tellUi('Redraw', { mod, id })
     if (requests === undefined || requests.length === 0) return false
     tellRequested(mod, requests, isAsked === true)
     if (isAsked !== true) return (void run(mod, requests), false)
@@ -319,25 +355,17 @@ export function serveParts({
     return pending
   }
 
-  const lastDrawn = new Map<string, { readonly params: string; readonly cached: string }>()
-
   const plain = <Data,>(data: Data): Data => JSON.parse(JSON.stringify(data)) as Data
 
   const nameOf = (mod: string, id: string) => `The ${id} ${declared.get(mod)?.pages.some((each) => each.id === id) === true ? 'page' : 'view'} of ${mod}`
 
   const element = (mod: string, id: string, params: unknown, columns: number, isFocused: boolean, surface: Surface) => {
     if (!declared.has(mod)) void ask(mod)
-    const given = JSON.stringify(params ?? null)
-    const cached = `${id}\u0000${given}\u0000${columns}\u0000${isFocused}\u0000${surface}`
+    const cached = `${id}\u0000${JSON.stringify(params ?? null)}\u0000${columns}\u0000${isFocused}\u0000${surface}`
     const name = nameOf(mod, id)
-    const keyPrefix = `${mod}/${id}:`
     void parts.fill(mod, cached, { page: id, params: plain(params ?? null), columns, isFocused, surface }, name)?.then(() => claude.ui.invalidate('ui.render'))
     const failure = parts.failure(mod, cached)
-    const drawnAt = (key: string) => parts.element(mod, key, keyPrefix, name, `page:${mod}/${id}`)
-    const last = lastDrawn.get(keyPrefix)
-    const drawn = drawnAt(cached)
-    if (drawn !== undefined) lastDrawn.set(keyPrefix, { params: given, cached })
-    return drawn ?? (last?.params === given ? drawnAt(last.cached) : undefined) ?? (failure === undefined ? undefined : Text({ color: 'error', children: `${name} could not draw: ${failure}` }))
+    return parts.element(mod, cached, `${mod}/${id}:`, name, `page:${mod}/${id}`) ?? (failure === undefined ? undefined : Text({ color: 'error', children: `${name} could not draw: ${failure}` }))
   }
 
   const pressable = new Map<number, UiHandler>()
@@ -400,7 +428,7 @@ export function serveParts({
       const failure = parts.failure(part.mod, cached)
       if (failure !== undefined) throw new Error(`${name} could not draw: ${failure}`)
       const drawn = parts.element(part.mod, cached, keyPrefix, name, `ui:${part.mod}/${part.id}`)
-      return drawn === undefined ? null : numbered(part, component, drawn)
+      return drawn === undefined ? null : numbered(part, component, drawn ?? Box({}))
     },
     async press(_session: string, handler: number, { surface, key, value, kind, link }: UiPress) {
       const known = pressable.get(handler)

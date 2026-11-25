@@ -1,22 +1,22 @@
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { cp, readFile } from 'node:fs/promises'
+import { cp, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { oldestCmodVersion } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { listFiles } from '../src/files.js'
-import { capture } from '../src/process.js'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmodBinary } from './cmod-binary.js'
+import { captured, cmod, deleteTemporaryHomes, spawned, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
-setDefaultTimeout(15_000)
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const made = newMod()
 
 beforeAll(async () => {
   await made
-}, 120_000)
+})
 
 async function newMod(): Promise<{ result: { exitCode: number; stdout: string; stderr: string }; root: string }> {
   const home = await temporaryHome()
@@ -26,7 +26,9 @@ async function newMod(): Promise<{ result: { exitCode: number; stdout: string; s
 async function copyOfNewMod(): Promise<string> {
   const { root } = await made
   const copy = join(await temporaryHome(), 'my-mod')
-  await cp(root, copy, { recursive: true, verbatimSymlinks: true })
+  const packages = join(root, 'node_modules')
+  await cp(root, copy, { recursive: true, verbatimSymlinks: true, filter: (source) => source !== packages })
+  await symlink(packages, join(copy, 'node_modules'))
   return copy
 }
 
@@ -98,7 +100,7 @@ test('cmod new writes mod.tsx, state.ts, a view, a widget, a hotkey, and a compo
 test('a new mod runs its tests before Claude Code has loaded it', async () => {
   const { root } = await made
 
-  const tests = Bun.spawn([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const tests = spawned([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
 
   expect(existsSync(join(root, '.claude-plugin/types'))).toBe(false)
@@ -109,7 +111,7 @@ test('a new mod runs its tests before Claude Code has loaded it', async () => {
 test('a new mod runs its tests through bun run test', async () => {
   const { root } = await made
 
-  const tests = Bun.spawn([process.execPath, 'run', 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const tests = spawned([process.execPath, 'run', 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
 
   expect(output).toContain(' 3 pass\n 0 fail\n')
@@ -162,9 +164,8 @@ test("a new mod's tests use Bun and node: modules, and its src cannot", async ()
 
 test('cmod new with CMOD_CORE set names its value when the install fails', async () => {
   const home = await temporaryHome()
-  const main = join(import.meta.dir, '..', 'src', 'main.ts')
-  const tarball = join(home, 'cmodjs-core-0.1.1.tgz')
-  const created = Bun.spawn([process.execPath, main, 'new', 'my-mod'], {
+    const tarball = join(home, 'cmodjs-core-0.1.1.tgz')
+  const created = spawned([cmodBinary, 'new', 'my-mod'], {
     cwd: home,
     env: { ...process.env, HOME: home, CMOD_CORE: `file:${tarball}` },
     stdout: 'pipe',
@@ -183,7 +184,7 @@ test("a new mod's widget test fails when the widget's render throws", async () =
   const widget = join(root, 'src/widgets/prompts.tsx')
   await Bun.write(widget, (await readFile(widget, 'utf8')).replace('render: (mod) =>', "render: (mod) => mod.state.session.prompts > 0 ? (() => { throw new Error('the widget broke') })() :"))
 
-  const tests = Bun.spawn([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const tests = spawned([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
 
   expect(output).toContain('(fail) the prompt count shows below the prompt')
@@ -206,7 +207,7 @@ test("the README's 30-second mod is the template", async () => {
 
 test('new --project writes the plugin into .claude/skills/<name>/ of the repository in the current folder', async () => {
   const home = await temporaryHome()
-  await Bun.spawn(['git', 'init', '-q', home]).exited
+  await spawned(['git', 'init', '-q', home]).exited
 
   const result = await cmod(home, 'new', '--project', 'rules')
 
@@ -238,7 +239,7 @@ async function typeCheck(root: string): Promise<{ output: string; exitCode: numb
   let output = ''
   let exitCode = 0
   for (const config of ['tsconfig.json', 'tests/tsconfig.json']) {
-    const result = await capture([process.execPath, join(import.meta.dir, '..', 'node_modules', '.bin', 'tsc'), '-p', config, '--noEmit'], { cwd: root })
+    const result = await captured([process.execPath, join(import.meta.dir, '..', 'node_modules', '.bin', 'tsc'), '-p', config, '--noEmit'], { cwd: root })
     output += result.stdout
     exitCode = Math.max(exitCode, result.exitCode)
   }

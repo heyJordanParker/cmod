@@ -1,11 +1,12 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
-import { cmod, deleteTemporaryHomes, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const source = join(import.meta.dir, '..', '..', 'herdr', 'cmod')
@@ -38,7 +39,7 @@ test.concurrent("cmod serve places the Herdr mod in Herdr's home, asking Herdr f
   expect(JSON.parse(modJson)).toEqual({ place: 'none', overlay: { kind: 'window', key: 'cmod', width: 360, height: 600, props: { show: 'views' } } })
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/herdr.json'), 'utf8'))).toEqual({ [folder]: { 'main.js': hashOf(main), 'panel.js': hashOf(panel), 'mod.json': hashOf(modJson) } })
   expect([kept.ino, kept.mtimeMs, again.includes('Herdr')]).toEqual([placed.ino, placed.mtimeMs, false])
-}, 30_000)
+})
 
 test.concurrent('cmod serve places nothing when Herdr has no home on the computer', async () => {
   const home = await temporaryHome()
@@ -46,7 +47,7 @@ test.concurrent('cmod serve places nothing when Herdr has no home on the compute
   await serveOnce(home)
 
   expect([existsSync(join(home, '.config', 'herdr-app')), existsSync(join(home, '.local/share/cmod/herdr.json'))]).toEqual([false, false])
-}, 30_000)
+})
 
 test.concurrent("cmod serve leaves a person's own mods/cmod folder in Herdr's home, and says so", async () => {
   const home = await temporaryHome()
@@ -57,7 +58,7 @@ test.concurrent("cmod serve leaves a person's own mods/cmod folder in Herdr's ho
   expect(await readFile(join(home, '.config/herdr-app/mods/cmod/main.js'), 'utf8')).toBe('export default class Mine {}\n')
   expect(existsSync(join(home, '.config/herdr-app/mods/cmod/mod.json'))).toBe(false)
   expect(said).toContain(`cmod serve: placed no Herdr mod: ${join(home, '.config/herdr-app/mods/cmod/main.js')} is not the cmod Herdr mod cmod placed, so cmod leaves it and places no Herdr mod.`)
-}, 30_000)
+})
 
 test.concurrent('cmod teardown cmod deletes the Herdr mod cmod serve placed, with the files Herdr and the mod wrote beside it', async () => {
   const home = await temporaryHome()
@@ -70,7 +71,7 @@ test.concurrent('cmod teardown cmod deletes the Herdr mod cmod serve placed, wit
   expect(tornDown.exitCode).toBe(0)
   expect([existsSync(join(home, '.config/herdr-app/mods/cmod')), existsSync(join(home, '.config/herdr-app'))]).toEqual([false, true])
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/herdr.json'), 'utf8'))).toEqual({})
-}, 30_000)
+})
 
 class Element {
   readonly nodes: unknown[] = []
@@ -697,7 +698,7 @@ test("cmod's Herdr mod opens a page a mod opened as a Herdr tab, closes that tab
   await herdr.settled()
 
   expect(herdr.commands).toEqual([
-    ['tab.new', { name: 'Log', mod: 'cmod', props: { show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' } }],
+    ['tab.new', { name: 'Log', mod: 'cmod', props: { show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' }, focus: false }],
     ['tab.close', { id: 'tab-1' }],
   ])
   expect(tabsOf(herdr).map(([tab, isSelected]) => [tab, isSelected])).toEqual([
@@ -705,6 +706,47 @@ test("cmod's Herdr mod opens a page a mod opened as a Herdr tab, closes that tab
     ['cmod-tab-demo/runs', true],
   ])
   expect(calledWith(herdr, 'cmod/UI.draw').at(-1)).toEqual(['worker', { mod: 'demo', id: 'runs' }, { columns: 40, surface: 'herdr' }])
+})
+
+test("an Open of a page nobody asked for opens its Herdr tab without focus and never selects it once open, while an Open the person asked for and a press on the page's link select it", async () => {
+  const herdr = await herdrWith({}, named)
+  const page = { session: 'worker', mod: 'demo', id: 'log' }
+
+  herdr.tell('Open', page)
+  await herdr.settled()
+  herdr.render()
+  herdr.tell('Open', page)
+  await herdr.settled()
+  const unasked = [...herdr.commands]
+  herdr.tell('Open', { ...page, isAsked: true })
+  await herdr.settled()
+  clicked(herdr.render(), (each) => each.kind === 'Button' && each.calls['role']?.[0] === 'link', herdr.cx)
+
+  expect(unasked).toEqual([['tab.new', { name: 'Log', mod: 'cmod', props: { show: 'page', ...page, title: 'Log' }, focus: false }]])
+  expect(herdr.commands.slice(unasked.length)).toEqual([
+    ['tab.select', { id: 'tab-1' }],
+    ['tab.select', { id: 'tab-1' }],
+  ])
+})
+
+test("a page tab of cmod's Herdr mod whose session was not held shows the refusal, and drops the bar and the error once the session's cmod plugin holds it again, with no press on Try again", async () => {
+  const refusal = 'Session worker runs here, but no cmod plugin of 7.0.0 or later in it reaches cmod serve, so its views show only in Claude Code. Run /reload-plugins in it to show them here.'
+  let isHeld = false
+  const herdr = await herdrWith({ show: 'page', session: 'worker', mod: 'demo', id: 'log', title: 'Log' }, (method, params) => {
+    if (!isHeld) throw new Error(refusal)
+    return named(method, params)
+  })
+  const alerts = (root: Element) => found(root, (each) => each.calls['role']?.[0] === 'alert').map((each) => each.nodes)
+  const refused = alerts(herdr.render())
+
+  isHeld = true
+  herdr.timers[0]?.[1](herdr.cx)
+  await herdr.settled()
+  const back = herdr.render()
+
+  expect(refused).toEqual([[refusal], [refusal]])
+  expect(alerts(back)).toEqual([])
+  expect(found(back, (each) => each.nodes.includes('worker/demo/log'))).toHaveLength(1)
 })
 
 const clientOf = (herdr: Herdr) => (calledWith(herdr, 'cmod/UI.show')[0] as readonly unknown[])[1] as string
@@ -886,4 +928,33 @@ test("a dropped connection to cmod serve never shows as the view's error: the vi
   expect(found(dropped, (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
   expect(alerts(back)).toEqual([])
   expect(found(back, (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
+})
+
+const drawingStatus = (root: Element) => found(root, (each) => each.calls['role']?.[0] === 'status').map((each) => each.calls['accessibility_label']?.[0])
+
+test("a view cmod's Herdr mod has no drawing for yet shows its title and Drawing…, never an empty box", async () => {
+  const herdr = await herdrWith({}, (method, params) => (method === 'cmod/UI.draw' ? unanswered : named(method, params)))
+
+  expect(drawingStatus(herdr.render())).toEqual(['Dashboard: Drawing…'])
+})
+
+test("a view whose cmod/UI draw answers null, as a mod still installing does, shows Drawing… in cmod's Herdr mod and draws at its next Redraw", async () => {
+  let isInstalling = true
+  const herdr = await herdrWith({}, (method, params) => (isInstalling && method === 'cmod/UI.draw' ? null : named(method, params)))
+  const installing = herdr.render()
+
+  isInstalling = false
+  herdr.tell('Redraw', { session: 'worker', mod: 'cmod', id: 'dashboard' })
+  await herdr.settled()
+  const installed = herdr.render()
+
+  expect(drawingStatus(installing)).toEqual(['Dashboard: Drawing…'])
+  expect(drawingStatus(installed)).toEqual([])
+  expect(found(installed, (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
+})
+
+test("a widget that draws nothing takes no room in a widgets block of cmod's Herdr mod, because cmod/UI draw answers null for it as for a mod still installing", async () => {
+  const herdr = await herdrWith({ show: 'widgets', area: 'belowPrompt' }, listing(() => null, { widgets: [{ mod: 'demo', id: 'branch', areas: ['belowPrompt'] }] }))
+
+  expect(drawingStatus(herdr.render())).toEqual([])
 })

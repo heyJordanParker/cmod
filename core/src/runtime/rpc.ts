@@ -1,4 +1,8 @@
+import { beforeDeadline, callDeadline } from './deadline.js'
+
 export type RpcId = number | string
+
+export type RpcClock = { after(ms: number, run: () => void): { cancel(): void } }
 
 export type RpcErrorData = { readonly code: number; readonly message: string; readonly data?: unknown }
 
@@ -14,6 +18,7 @@ export const rpcCodes = {
   internal: -32603,
   closed: -32099,
   notHeld: -32098,
+  notProvided: -32097,
   cancelled: -32800,
 } as const
 
@@ -184,12 +189,13 @@ export const rpcPath = '/rpc'
 export type RpcConnection = Peer & { readonly id: string }
 
 type Held = {
+  readonly peer: Peer
   readonly connection: RpcConnection
   readonly outbox: RpcMessage[]
   poll: ((messages: RpcMessage[]) => void) | undefined
   chars: number | undefined
   seenAt: number
-  unpolled?: unknown
+  isUnpolled: boolean
 }
 
 export type RpcHttpRequest = { readonly method: string; readonly path: string; readonly signal: AbortSignal; json(): Promise<unknown> }
@@ -208,25 +214,26 @@ const timers = globalThis as unknown as { setTimeout(run: () => void, ms: number
 export function rpcRoutes({
   handle,
   onClose,
+  onUnpolled,
   now,
   pollMs = 8000,
   liveMs = 30_000,
 }: {
   readonly handle: (connection: RpcConnection) => RpcHandler
   readonly onClose?: (connection: RpcConnection) => void
+  readonly onUnpolled?: (connection: RpcConnection) => void
   readonly now: () => number
   readonly pollMs?: number
   readonly liveMs?: number
 }): RpcRoutes {
   const held = new Map<string, Held>()
 
-  const drop = (id: string, reason: string) => {
+  const drop = (id: string, reason: Error) => {
     const each = held.get(id)
     if (each === undefined) return
     held.delete(id)
-    timers.clearTimeout(each.unpolled)
     each.poll?.([])
-    each.connection.close(new Error(reason))
+    each.peer.close(reason)
     onClose?.(each.connection)
   }
 
@@ -239,7 +246,8 @@ export function rpcRoutes({
         if (entry === undefined) return
         outbox.push(message)
         if (entry.poll === undefined) {
-          entry.unpolled ??= timers.setTimeout(() => drop(id, `no poll for ${pollMs / 1000} s while a message waited`), pollMs)
+          if (!entry.isUnpolled) onUnpolled?.(entry.connection)
+          entry.isUnpolled = true
           return
         }
         const poll = entry.poll
@@ -248,15 +256,15 @@ export function rpcRoutes({
       },
       handle: (method, params, signal) => handler(method, params, signal),
     })
-    const connection: RpcConnection = Object.assign(peer, { id })
+    const connection: RpcConnection = { ...peer, id, close: (reason) => drop(id, reason) }
     const handler = handle(connection)
-    entry = { connection, outbox, poll: undefined, chars: undefined, seenAt: now() }
+    entry = { peer, connection, outbox, poll: undefined, chars: undefined, seenAt: now(), isUnpolled: false }
     held.set(id, entry)
     return entry
   }
 
   const sweep = () => {
-    for (const [id, each] of held) if (each.poll === undefined && now() - each.seenAt > liveMs) drop(id, `no poll for ${liveMs / 1000} s`)
+    for (const [id, each] of held) if (each.poll === undefined && now() - each.seenAt > liveMs) drop(id, new Error(`no poll for ${liveMs / 1000} s`))
   }
 
   const known = (id: string) => {
@@ -269,8 +277,7 @@ export function rpcRoutes({
   const poll = (each: Held, signal: AbortSignal, chars: number | undefined) =>
     new Promise<RpcMessage[]>((resolve) => {
       each.poll?.([])
-      timers.clearTimeout(each.unpolled)
-      each.unpolled = undefined
+      each.isUnpolled = false
       each.chars = chars
       if (each.outbox.length > 0) return resolve(takenWithin(each.outbox, chars))
       const timer = timers.setTimeout(() => answer([]), pollMs)
@@ -286,7 +293,7 @@ export function rpcRoutes({
         each.poll = undefined
         timers.clearTimeout(timer)
         resolve([])
-        drop(each.connection.id, 'the client left its poll')
+        drop(each.connection.id, new Error('the client left its poll'))
       })
     })
 
@@ -299,7 +306,7 @@ export function rpcRoutes({
       if (url.pathname === `${rpcPath}/connect` && request.method === 'POST') return { status: 200, json: { connection: open().connection.id } }
       if (id === undefined) return { status: 404, json: { error: `cmod has no ${request.method} ${url.pathname}.` } }
       if (request.method === 'DELETE') {
-        drop(id, 'the client closed it')
+        drop(id, new Error('the client closed it'))
         return { status: 204 }
       }
       const each = known(id)
@@ -339,7 +346,7 @@ export function rpcRoutes({
     channel,
     connections: () => [...[...held.values()].map((each) => each.connection), ...channels.values()],
     close() {
-      for (const id of held.keys()) drop(id, 'the server stopped')
+      for (const id of held.keys()) drop(id, new Error('the server stopped'))
       for (const each of channels.values()) each.close(new Error('the server stopped'))
     },
   }
@@ -382,7 +389,7 @@ export function connectRpc({
   handle,
   onConnect,
   onError,
-  wait,
+  clock,
   retryMs = 2000,
   keepsConnecting = false,
 }: {
@@ -390,7 +397,7 @@ export function connectRpc({
   readonly handle: RpcHandler
   readonly onConnect?: (client: RpcClient) => unknown
   readonly onError?: (error: unknown) => void
-  readonly wait: (ms: number) => Promise<void>
+  readonly clock: RpcClock
   readonly retryMs?: number
   readonly keepsConnecting?: boolean
 }): RpcClient {
@@ -452,12 +459,17 @@ export function connectRpc({
   }
 
   let hasConnected = false
+  let isRetrying = false
+  const waiting = new Set<{ resolve(link: Link): void; reject(error: Error): void }>()
 
   const reconnect = () => {
-    if (isClosed || !(keepsConnecting || hasConnected)) return
-    void wait(retryMs).then(async () => {
-      await Promise.allSettled([connecting])
-      if (!isClosed && current === undefined) void connection().catch(() => undefined)
+    if (isClosed || isRetrying || !(keepsConnecting || hasConnected)) return
+    isRetrying = true
+    clock.after(retryMs, () => {
+      isRetrying = false
+      void Promise.allSettled([connecting]).then(() => {
+        if (!isClosed && current === undefined) void connection().catch(() => undefined)
+      })
     })
   }
 
@@ -485,6 +497,7 @@ export function connectRpc({
       hasConnected = true
       void pollLoop(link)
       void (async () => onConnect?.(client))().catch((error: unknown) => onError?.(error))
+      for (const each of waiting) each.resolve(link)
       return current
     } catch (error) {
       onError?.(error)
@@ -501,12 +514,40 @@ export function connectRpc({
     return connecting
   }
 
+  const nextLink = (method: string, signal: AbortSignal | undefined): Promise<Link> => {
+    if (current !== undefined) return Promise.resolve(current)
+    if (isClosed || !(keepsConnecting || hasConnected)) return connection()
+    if (!isRetrying) void connection().catch(() => undefined)
+    return beforeDeadline(
+      clock,
+      callDeadline,
+      method,
+      (passed) =>
+        new Promise<Link>((resolve, reject) => {
+          const settled = () => {
+            waiting.delete(waiter)
+            signal?.removeEventListener('abort', stop)
+            passed.removeEventListener('abort', stop)
+          }
+          const waiter = {
+            resolve: (link: Link) => (settled(), resolve(link)),
+            reject: (error: Error) => (settled(), reject(error)),
+          }
+          const stop = () => waiter.reject(passed.aborted ? (passed.reason as Error) : new RpcError(rpcCodes.cancelled, `${method} was cancelled.`))
+          if (signal?.aborted === true) return stop()
+          signal?.addEventListener('abort', stop, { once: true })
+          passed.addEventListener('abort', stop, { once: true })
+          waiting.add(waiter)
+        }),
+    )
+  }
+
   const client: RpcClient = {
     get isConnected() {
       return current !== undefined
     },
     async request<Result>(method: string, params?: unknown, signal?: AbortSignal): Promise<Result> {
-      const link = await connection()
+      const link = await nextLink(method, signal)
       const answer = link.peer.request<Result>(method, params, signal)
       const sent = link.lastAsked
       try {
@@ -523,6 +564,7 @@ export function connectRpc({
     },
     async close() {
       isClosed = true
+      for (const each of waiting) each.reject(closedError(new Error('the client closed it')))
       const was = current
       current = undefined
       if (was === undefined) return

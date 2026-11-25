@@ -7,6 +7,7 @@ import { processEvents } from '../src/session/session.js'
 import { Message } from '../src/session/context/turn/message/message.js'
 import { ToolCall } from '../src/session/context/turn/message/tool-call.js'
 import { conversationMethods } from '../src/runtime/sessions.js'
+import type { Hotkeys } from '../src/hotkeys.js'
 import { bundleOptions, hotkeyCommand, readSteps } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
@@ -79,6 +80,7 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
       set: async (key: string, value: unknown) => store.set(key, value),
     },
     env: { get: async (name: string) => env[name] },
+    config: { list: async () => [] },
     session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app', model: async () => 'test-model', usage: async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [] }), info: async () => ({ transcriptPath: '/home/test/.claude/projects/-work-app/session-1.jsonl' }) },
     clock: { now: async () => 0, every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
   } as unknown as EngineInterface
@@ -120,18 +122,38 @@ const files = {
   }),
 }
 
-test("only the cmod plugin registers command.describe, so Claude Code never sends a mod's worker each command it lists, hotkeys or not", () => {
+test('a mod with hotkeys registers command.describe for its own hotkey commands by name, and a mod without hotkeys registers none', () => {
   const withHotkeys = fakeOn()
-  const cmod = fakeOn()
+  const bare = fakeOn()
 
-  registerMod(withHotkeys.on, defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
-  registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+  registerMod(withHotkeys.on, defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' }, peek: { title: 'Peek' } }, setup: () => undefined }), {})
+  registerMod(bare.on, defineMod({ name: 'bare', setup: () => undefined }), {})
 
-  expect(withHotkeys.registrations.map((registration) => registration.pattern)).not.toContain('command.describe')
-  expect(cmod.registrations.map((registration) => registration.pattern)).toContain('command.describe')
+  expect(withHotkeys.registrations.filter((registration) => registration.pattern === 'command.describe').map((registration) => registration.matcher)).toEqual([{ command: ['demo--cycle', 'demo--peek'] }])
+  expect(bare.registrations.map((registration) => registration.pattern)).not.toContain('command.describe')
 })
 
-test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code events once each and no permission check, and the cmod plugin 49', () => {
+test("a mod's command.describe hook hides its hotkey command before the mod has started", async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  registerMod(fake.on, defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
+
+  const described = await fake.dispatch('command.describe', $, { command: 'demo--cycle', description: 'Switch mode', isHidden: false, immediate: true, provider: { plugin: 'demo@market', tier: 'user' } }, { description: 'Switch mode', isHidden: false })
+
+  expect(described).toEqual({ description: 'Switch mode', isHidden: true })
+})
+
+test("a mod's command.describe hook that throws still answers its hotkey command hidden, so the typeahead never lists it", async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  registerMod(fake.on, defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
+
+  const described = await fake.fail('command.describe', $, { command: 'demo--cycle', description: 'Switch mode', isHidden: false, immediate: true, provider: { plugin: 'demo@market', tier: 'user' } }, { description: 'Switch mode', isHidden: false }, { kind: 'throw', message: 'the hook read past its input', budget: 1000 })
+
+  expect(described).toEqual({ description: 'Switch mode', isHidden: true })
+})
+
+test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code events once each and no permission check, and the cmod plugin 48', () => {
   const bare = fakeOn()
   const cmod = fakeOn()
 
@@ -183,11 +205,11 @@ test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code
     'ui.render',
   ]
   expect(bare.registrations.map((registration) => registration.pattern)).toEqual(everyMod)
-  expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'command.describe', 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start', 'turn.complete'])
-  expect([bare.registrations.length, cmod.registrations.length]).toEqual([42, 49])
+  expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start', 'turn.complete'])
+  expect([bare.registrations.length, cmod.registrations.length]).toEqual([42, 48])
 })
 
-test("the cmod plugin's ui.render matches only the components it draws, so its redraws never reach the transcript, and a mod's matches every component", () => {
+test("the cmod plugin's ui.render matches only the components it draws, so its redraws never reach the transcript, and a mod's matches only the components core draws for a mod", () => {
   const mod = fakeOn()
   const cmod = fakeOn()
 
@@ -195,12 +217,19 @@ test("the cmod plugin's ui.render matches only the components it draws, so its r
   registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   const drawing = (registrations: readonly Registration[]) => registrations.find((registration) => registration.pattern === 'ui.render')
-  expect(drawing(mod.registrations)?.hasMatcher).toBe(false)
+  expect(drawing(mod.registrations)?.matcher).toEqual({ component: ['AbovePrompt', 'Pane', 'UserMessage', 'AssistantMessage', 'ToolUse', 'ToolResult', 'InfoNotice', 'ToolGroup', 'ToolProgress', 'CommandOutput', 'AskUserQuestion', 'Spinner', 'TurnDuration'] })
   expect(drawing(cmod.registrations)?.matcher).toEqual({ component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] })
 })
 
+test("a redraw of the prompt hint, the session mode, or the status line reaches only the cmod plugin's worker, and a toast's band every mod's", () => {
+  const chain = registeredChain(['cmod', 'other', 'third'])
+  const render = (component: string) => hearersOf(chain, 'ui.render', { surface: 'terminal', component, requestId: 'r1', props: {} })
+
+  expect([render('PromptHint'), render('SessionMode'), render('StatusLine'), render('AbovePrompt'), render('ToolUse')]).toEqual([['cmod'], ['cmod'], [], ['cmod', 'other', 'third'], ['other', 'third']])
+})
+
 const isMatched = (matcher: unknown, value: unknown): boolean => {
-  if (matcher instanceof RegExp) return matcher.test(String(value))
+  if (matcher instanceof RegExp) return true
   if (Array.isArray(matcher)) return matcher.some((each) => isMatched(each, value))
   if (typeof matcher !== 'object' || matcher === null) return matcher === value
   return typeof value === 'object' && value !== null && Object.entries(matcher).every(([key, wanted]) => isMatched(wanted, (value as Record<string, unknown>)[key]))
@@ -209,23 +238,28 @@ const isMatched = (matcher: unknown, value: unknown): boolean => {
 const hearersOf = (chain: Readonly<Record<string, ReturnType<typeof fakeOn>>>, event: string, e: unknown) =>
   Object.keys(chain).filter((name) => chain[name]?.registrations.some((registration) => registration.pattern === event && (!registration.hasMatcher || isMatched(registration.matcher, e))))
 
-const registeredChain = (names: readonly string[]) =>
+const registeredChain = (names: readonly string[], hotkeys: Readonly<Record<string, Hotkeys>> = {}) =>
   Object.fromEntries(
     names.map((name) => {
       const plugin = fakeOn()
       const register = name === 'cmod' ? registerCmodPlugin : registerMod
-      register(plugin.on, defineMod({ name, setup: () => undefined }), {})
+      const declared = hotkeys[name]
+      register(plugin.on, defineMod({ name, ...(declared === undefined ? {} : { hotkeys: declared }), setup: () => undefined }), {})
       return [name, plugin]
     }),
   )
 
-test("a command.describe pass reaches the cmod plugin's worker only for hotkey commands, because Claude Code 2.1.310 hops only when a hook's matcher selects the command", () => {
-  const chain = registeredChain(['cmod', 'other'])
+test("a command.describe pass reaches a worker only for that mod's own hotkey commands, because Claude Code 2.1.332 compares a string matcher before the hop and passes every RegExp", () => {
+  const chain = registeredChain(['cmod', 'other', 'demo'], { cmod: { sidebar: { title: 'Sidebar' }, settings: { title: 'Settings' } }, demo: { cycle: { title: 'Switch mode' } } })
   const listed = [...Array.from({ length: 188 }, (_, index) => `skill-${index}`), hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('demo', 'cycle')]
 
-  const hops = listed.filter((command) => hearersOf(chain, 'command.describe', { command, description: '', isHidden: false, immediate: true, provider: { plugin: 'cmod', tier: 'user' } }).length > 0)
+  const hops = listed.map((command) => [command, hearersOf(chain, 'command.describe', { command, description: '', isHidden: false, immediate: true, provider: { plugin: 'cmod', tier: 'user' } })] as const).filter(([, hearers]) => hearers.length > 0)
 
-  expect(hops).toEqual([hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('demo', 'cycle')])
+  expect(hops).toEqual([
+    [hotkeyCommand('cmod', 'sidebar'), ['cmod']],
+    [hotkeyCommand('cmod', 'settings'), ['cmod']],
+    [hotkeyCommand('demo', 'cycle'), ['demo']],
+  ])
 })
 
 test('a cmod.call runs the hook of the mod it names only, never every mod in the chain', () => {
@@ -416,16 +450,22 @@ test("a store write that meets another Claude Code's lock on the store is tried 
   const { $ } = engine(files)
   const set = $.store.set.bind($.store)
   let refusals = 2
+  let written: () => void = () => undefined
+  const isWritten = new Promise<void>((resolve) => (written = resolve))
   Object.assign($.store, {
     set: async (key: string, value: unknown) => {
-      if (refusals === 0) return set(key, value)
-      refusals -= 1
-      throw new Error('demo@inline: $.store.set failed: Lock file is already being held')
+      if (refusals > 0) {
+        refusals -= 1
+        throw new Error('demo@inline: $.store.set failed: Lock file is already being held')
+      }
+      await set(key, value)
+      written()
     },
   })
   registerMod(fake.on, demo, {})
 
   await fake.dispatch('session.start', $, {}, {})
+  await isWritten
 
   expect([refusals, await $.store.get('cmod:announced')]).toEqual([0, { version: '1.0.0' }])
 })
@@ -716,9 +756,9 @@ test("registerMod names each event as a string literal, which Claude Code's hook
 
 declare const process: { readonly platform: string; readonly arch: string }
 
-async function readDeviceOn(computer: { readonly run: (argv: readonly string[]) => { readonly exitCode: number; readonly stdout: string }; readonly read?: (path: string) => string }): Promise<readonly Device[]> {
+async function readDeviceOn(computer: { readonly run: (argv: readonly string[]) => { readonly exitCode: number; readonly stdout: string }; readonly read?: (path: string) => string; readonly stored?: Readonly<Record<string, string>> }): Promise<readonly Device[]> {
   const fake = fakeOn()
-  const { $, shown } = engine(files)
+  const { $, shown } = engine({ ...files, ...computer.stored })
   Object.assign($.ui, { log: (text: string) => void shown.logs.push(text) })
   Object.assign($, { process: { run: async (argv: readonly string[]) => ({ stderr: '', ...computer.run(argv) }) } })
   const read = $.fs.read
@@ -764,6 +804,26 @@ test("a device id is the computer's machine id hashed for cmod the way systemd's
 
   expect((await readDeviceOn(linux))[0]).toEqual({ id: 'dc896649b2c644849a1caf192c072c77', name: 'host', os: 'linux', arch: 'arm64' })
   expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Mac-mini', os: 'darwin', arch: 'x64' })
+})
+
+test("a mod reads its device from device.json in the cmod store, which cmod serve writes, and runs no process while the file holds a device", async () => {
+  const ran: string[] = []
+  const stored: Device = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Mac-mini', os: 'darwin', arch: 'arm64' }
+  const computer = (device: string) => ({
+    run: (argv: readonly string[]) => {
+      ran.push(argv[0] ?? '')
+      return { exitCode: 0, stdout: 'Linux host aarch64\n' }
+    },
+    read: () => 'b08dfa6083e7567a1921a715000001fb\n',
+    stored: { '/home/test/.local/share/cmod/device.json': device },
+  })
+
+  const [fromFile] = await readDeviceOn(computer(JSON.stringify(stored)))
+  const ranForFile = [...ran]
+  const [fromBrokenFile] = await readDeviceOn(computer('{ "id": 7'))
+
+  expect([fromFile, ranForFile]).toEqual([stored, []])
+  expect([fromBrokenFile, ran]).toEqual([{ id: 'dc896649b2c644849a1caf192c072c77', name: 'host', os: 'linux', arch: 'arm64' }, ['uname']])
 })
 
 test("a Linux computer whose /etc/machine-id is missing or empty reads D-Bus's /var/lib/dbus/machine-id as systemd does, and one with neither names both files", async () => {

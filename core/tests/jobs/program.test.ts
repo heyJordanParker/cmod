@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, providers } from '../../src/mod.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { providerHoldMs } from '../../src/runtime/interfaces.js'
 import { testMod } from '../../src/testing.js'
@@ -369,6 +369,23 @@ test("a following session's ready() reads the instance file again, so it never a
   expect(before).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
   expect(after).toEqual({ url: 'http://localhost', socketPath: '/tmp/next.sock' })
   expect(starts).toBe(2)
+})
+
+test("a following session waits for a holder that has not written its instance file yet, and reads the file once cmod/Programs tells that the holder wrote it", async () => {
+  const lock = { [`${instanceFile}.lock/4242`]: 'Mon Nov  2 09:00:00 2026' }
+  const { tested, ready } = preview(() => written([{ stream: 'stdout', text: 'held\n' }], true), true, lock)
+  tested.fakes.clock.now = async () => 14_999
+  tested.fakes.clock.every = () => ({ cancel: () => undefined })
+  const started = await ready()
+  const address = started.ready()
+  await tested.settle()
+  expect(started.state).toBe('starting')
+
+  await tested.fakes.fs.write?.(instanceFile, heldCopy[instanceFile])
+  const [programs] = await providers('cmod/Programs')
+  await programs?.changed('demo', 'preview-server')
+
+  expect(await address).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
 })
 
 test('an isService program asks cmod program --service for the computer-wide copy, and ready() resolves the address the service wrote to the instance file', async () => {

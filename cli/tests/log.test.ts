@@ -1,6 +1,7 @@
-import { afterAll, expect, test } from 'bun:test'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const versions = { mod: '1.2.0', core: '5.4.2', cmod: '5.4.2', program: '5.4.2', claudeCode: '2.1.317' }

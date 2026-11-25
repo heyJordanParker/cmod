@@ -267,7 +267,7 @@ export function testMod<State extends object, Declared extends Options = Options
   let provides: readonly string[] = []
   const ownMarkdown = new Map<string, DrawnPart | null>()
   const missedMarkdown = new Map<string, { readonly markdown: string } & StyledAt>()
-  const updated = async ({ parts, redraw, requests }: PartsUpdate) => {
+  const updated = async ({ parts, redraw, changed, requests }: PartsUpdate) => {
     if (parts !== undefined) {
       declaredViews = viewsOf(parts)
       declaredPages = pagesOf(parts)
@@ -276,7 +276,7 @@ export function testMod<State extends object, Declared extends Options = Options
       for (const named of new Set([...before, ...provides])) if (before.includes(named) !== provides.includes(named)) await served.providersChanged(named)
       ownMarkdown.clear()
     }
-    if (parts !== undefined || redraw !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }) })
+    if (parts !== undefined || redraw !== undefined || changed !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }), ...(changed === undefined ? {} : { changed }) })
     if (requests !== undefined && requests.length > 0) await applyRequests(requests)
   }
   const pressPart = (input: PartPress) => callMod(partMethods.press, input).then((update) => updated((update ?? {}) as PartsUpdate))
@@ -300,7 +300,11 @@ export function testMod<State extends object, Declared extends Options = Options
     missedMarkdown.clear()
     return draw()
   }
-  const reportPart = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
+  const refusals: string[] = []
+  const reportPart = (id: string, message: string, error: unknown) => {
+    if (id.startsWith('refused:')) refusals.push(messageOf(error))
+    fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
+  }
   const openFromCmod = (href: string, press: UiPressArgument) => void openLink(fake.claude, href, press.surface).catch((error: unknown) => reportPart('open-link', 'Could not open the link', error))
   const cmodClaude: Claude = {
     ...fake.claude,
@@ -696,6 +700,8 @@ export function testMod<State extends object, Declared extends Options = Options
     const drawn = await withOwnMarkdown(() => served.draw(area, elements, { surface: 'terminal', columns }, turn))
     await fake.settle()
     const drawing = elements.Box({ flexDirection: 'column', children: [...drawn] })
+    const [refused] = refusals.splice(0)
+    if (refused !== undefined) throw new Error(`${cmodPluginName}: returned a tree ${areaComponents[area]} refuses: ${refused}`)
     checkKeys(drawing, cmodPluginName, areaComponents[area])
     return { drawing, columns }
   }

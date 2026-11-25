@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
-import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, environment, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, environment, spawned, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const claudeCodeLine = 'Plugin is already installed (scope: user) — marked as manually installed — it loads in place from the cache'
@@ -242,7 +243,7 @@ test("cmod install of a mod from a folder declares the folder's marketplace in i
 
 test("cmod install and cmod remove of a mod from a git checkout leave git status clean, because the folder's .claude/settings.local.json is excluded from git", async () => {
   const { home, market } = await folderMarketHome()
-  const git = (...args: string[]) => Bun.spawn(['git', '-C', market, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { env: environment(home), stdout: 'pipe', stderr: 'ignore' })
+  const git = (...args: string[]) => spawned(['git', '-C', market, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { env: environment(home), stdout: 'pipe', stderr: 'ignore' })
   await git('init', '-q').exited
   await git('add', '.').exited
   await git('commit', '-q', '-m', 'mod').exited

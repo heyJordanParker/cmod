@@ -176,6 +176,28 @@ test('a lost connection keeps the drawing with a problem, tries again later each
   expect(run.calls('$/listen').map((effect) => (effect.params as { readonly event: string }).event)).toEqual(['Change', 'Redraw', 'Open', 'Close', 'Change', 'Redraw', 'Open', 'Close'])
 })
 
+test('a draw on its way when the connection drops ends with the connection, and the part draws once the panel reconnects, so a view that never drew never stays blank', () => {
+  const run = driven()
+  run.send({ type: 'connected' })
+  run.send({ type: 'focused', session: 'valid', now: 0 })
+  run.answer(run.pending('cmod/UI.views', 'valid').at(-1) as Effect, views)
+  run.answer(run.pending('cmod/UI.pages', 'valid').at(-1) as Effect, [])
+  const lost = run.calls('cmod/UI.draw').length
+
+  run.send({ type: 'disconnected', error: 'cmod serve stopped' })
+  run.send({ type: 'connected' })
+  run.answer(run.pending('cmod/UI.views', 'valid').at(-1) as Effect, views)
+  run.answer(run.pending('cmod/UI.pages', 'valid').at(-1) as Effect, [])
+  const asked = run.calls('cmod/UI.draw').slice(lost)
+  for (const effect of asked) run.answer(effect, tree(`valid ${((effect.params as readonly unknown[])[1] as { readonly id: string }).id}`))
+
+  expect(asked.map((effect) => (effect.params as readonly unknown[])[1])).toEqual([
+    { mod: 'cmod', id: 'dashboard' },
+    { mod: 'cmod', id: 'settings' },
+  ])
+  expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ key: 'cmod/dashboard', drawn: { tree: tree('valid dashboard'), error: null } }] })
+})
+
 test('a panel that never reached cmod serve says so in place of a loading state', () => {
   const run = driven()
   run.send({ type: 'focused', session: 'valid', now: 0 })
@@ -201,4 +223,39 @@ test('a page tab draws its one page for the session it was opened for, with no l
   expect(run.calls('cmod/UI.views')).toEqual([])
   expect(run.screen()).toMatchObject({ kind: 'ready', parts: [{ key: 'demo/log', drawn: { tree: tree('the log') } }] })
   expect(run.calls('cmod/UI.show').map((effect) => effect.params)).toEqual([['worker', 'herdr-test', [{ mod: 'demo', id: 'log' }]]])
+})
+
+const refused = 'Session worker runs here, but no cmod plugin of 7.0.0 or later in it reaches cmod serve.'
+
+function refusedPage() {
+  const run = driven({ show: 'page', session: 'worker', page: { mod: 'demo', id: 'log', title: 'Log' } })
+  run.send({ type: 'connected' })
+  run.refuse(run.pending('cmod/UI.draw', 'worker').at(-1) as Effect, refused)
+  run.refuse(run.pending('cmod/UI.show', 'worker').at(-1) as Effect, refused)
+  return run
+}
+
+test("a page tab whose show was refused clears the bar and the page's error at its next successful show, and draws the page again with no press on Try again", () => {
+  const run = refusedPage()
+  const before = run.screen()
+  const draws = run.calls('cmod/UI.draw').length
+
+  run.send({ type: 'renew' })
+  run.answer(run.pending('cmod/UI.show', 'worker').at(-1) as Effect, null)
+  const shownAgain = run.screen()
+  run.answer(run.pending('cmod/UI.draw', 'worker').at(-1) as Effect, tree('the log'))
+
+  expect(before).toMatchObject({ kind: 'ready', problem: refused, parts: [{ key: 'demo/log', drawn: { tree: null, error: refused } }] })
+  expect(shownAgain).toMatchObject({ kind: 'ready', problem: null, parts: [{ key: 'demo/log', drawn: { error: null } }] })
+  expect(run.calls('cmod/UI.draw')).toHaveLength(draws + 1)
+  expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ key: 'demo/log', drawn: { tree: tree('the log'), error: null } }] })
+})
+
+test('a page tab whose show was refused clears the bar at its next successful draw', () => {
+  const run = refusedPage()
+
+  run.send({ type: 'heard', event: 'Redraw', payload: { session: 'worker', mod: 'demo', id: 'log' } })
+  run.answer(run.pending('cmod/UI.draw', 'worker').at(-1) as Effect, tree('the log'))
+
+  expect(run.screen()).toMatchObject({ kind: 'ready', problem: null, parts: [{ key: 'demo/log', drawn: { tree: tree('the log'), error: null } }] })
 })

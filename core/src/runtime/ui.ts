@@ -79,7 +79,7 @@ export type PartRequest =
 
 export type SettingsTab = 'changelog' | 'permissions'
 
-export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PartRequest[]; readonly isAsked?: true; readonly isStart?: true }
+export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly changed?: readonly string[]; readonly requests?: readonly PartRequest[]; readonly isAsked?: true; readonly isStart?: true }
 
 export type ShownParts = { readonly open: readonly { readonly id: string; readonly params: unknown }[]; readonly shown: string | null; readonly isFocused: boolean; readonly inApps?: readonly string[] }
 
@@ -183,8 +183,9 @@ export function merged(updates: readonly PartsUpdate[]): PartsUpdate {
   const parts = updates.findLast((update) => update.parts !== undefined)?.parts
   const requests = updates.flatMap((update) => update.requests ?? [])
   const isRedrawn = updates.some((update) => update.redraw === true)
+  const changed = [...new Set(updates.flatMap((update) => update.changed ?? []))]
   const isStart = updates.some((update) => update.isStart === true)
-  return { ...(parts === undefined ? {} : { parts }), ...(isRedrawn ? { redraw: true } : {}), ...(requests.length === 0 ? {} : { requests }), ...(isStart ? { isStart } : {}) }
+  return { ...(parts === undefined ? {} : { parts }), ...(isRedrawn ? { redraw: true } : {}), ...(changed.length === 0 ? {} : { changed }), ...(requests.length === 0 ? {} : { requests }), ...(isStart ? { isStart } : {}) }
 }
 
 type MarkdownRender = {
@@ -228,6 +229,8 @@ export type UiArea<State extends object> = {
 
 export const keptDrawInputs = 200
 
+const tellGapMs = 100
+
 export function createUi<State extends object>({ name, claude, router, report, announce, mod, borrowed, nextDraw, provided }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, AddedPane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
@@ -266,6 +269,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
   let collected: PartsUpdate[] | undefined
   let collecting = 0
   let queued: PartsUpdate[] | undefined
+  let isCooling = false
 
   const partList = (): PartList => {
     const provides = [...provided(), ...(markdownRenders.size > 0 ? [styleInterface] : [])]
@@ -290,50 +294,69 @@ export function createUi<State extends object>({ name, claude, router, report, a
     return drawn === undefined ? null : elementData(drawn, (run) => handlers.push(run) - 1)
   }
 
-  const isAnyDrawingChanged = () => {
-    for (const [key, inputs] of latestDraws) {
-      if (key === 'markdown') continue
-      for (const sent of inputs.values()) {
-        const handlers: Handler[] = []
-        try {
-          if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree) return true
-        } catch (error) {
-          claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`)
-          return true
-        }
-        const latest = sent.draws.at(-1)
-        if (latest !== undefined && draws.has(latest)) draws.set(latest, { id: key, handlers })
+  const isDrawingChanged = (key: string, inputs: ReadonlyMap<string, SentDrawing>) => {
+    const unchanged: (readonly [SentDrawing, Handler[]])[] = []
+    for (const sent of inputs.values()) {
+      const handlers: Handler[] = []
+      try {
+        if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree) return true
+      } catch (error) {
+        claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`)
+        return true
       }
+      unchanged.push([sent, handlers])
+    }
+    for (const [sent, handlers] of unchanged) {
+      const latest = sent.draws.at(-1)
+      if (latest !== undefined && draws.has(latest)) draws.set(latest, { id: key, handlers })
     }
     return false
   }
 
-  const withNeededRedraw = ({ redraw, ...update }: PartsUpdate): PartsUpdate => (redraw === true && isAnyDrawingChanged() ? { ...update, redraw } : update)
+  const changedParts = () => [...latestDraws].filter(([key, inputs]) => key !== 'markdown' && isDrawingChanged(key, inputs)).map(([key]) => key.slice(key.indexOf(':') + 1))
+
+  const withChangedParts = ({ redraw, ...update }: PartsUpdate): PartsUpdate => {
+    if (redraw !== true) return update
+    const changed = changedParts()
+    return changed.length === 0 ? update : { ...update, redraw, changed }
+  }
+
+  const tell = async (needed: PartsUpdate, isAsked: boolean) => {
+    if (Object.keys(needed).length === 0) return
+    const input = { ...needed, ...(isAsked ? { isAsked: true as const } : {}) }
+    return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then(
+      (answer) => {
+        if (isAsked && input.requests !== undefined && !(isObject(answer) && answer['isHeld'] === true)) unheldRequests += 1
+        if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
+      },
+      (error: unknown) => {
+        claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its widgets, views, and pages: ${messageOf(error)}`)
+      },
+    )
+  }
+
+  const tellQueued = async () => {
+    const needed = withChangedParts(merged(queued ?? []))
+    queued = undefined
+    if (needed.changed !== undefined) {
+      isCooling = true
+      claude.clock.after(tellGapMs, () => {
+        isCooling = false
+        if (queued !== undefined) void tellQueued()
+      })
+    }
+    await tell(needed, false)
+  }
 
   const send = (update: PartsUpdate) => {
     if (collected !== undefined) return void collected.push(update)
     if (beforeStart !== undefined) return void beforeStart.push(update)
-    const isAsked = askedDepth > 0
-    if (queued !== undefined && !isAsked) return void queued.push(update)
-    const batch: PartsUpdate[] = [update]
-    if (!isAsked) queued = batch
-    const tell = async () => {
-      if (queued === batch) queued = undefined
-      const needed = withNeededRedraw(merged(batch))
-      if (Object.keys(needed).length === 0) return
-      const input = { ...needed, ...(isAsked ? { isAsked: true as const } : {}) }
-      return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then(
-        (answer) => {
-          if (isAsked && input.requests !== undefined && !(isObject(answer) && answer['isHeld'] === true)) unheldRequests += 1
-          if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
-        },
-        (error: unknown) => {
-          claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its widgets, views, and pages: ${messageOf(error)}`)
-        },
-      )
+    if (askedDepth === 0) {
+      if (queued !== undefined) return void queued.push(update)
+      queued = [update]
+      return isCooling ? undefined : Promise.resolve().then(tellQueued)
     }
-    if (!isAsked) return Promise.resolve().then(tell)
-    const told = tell().finally(() => askedCalls.delete(told))
+    const told = tell(withChangedParts(update), true).finally(() => askedCalls.delete(told))
     askedCalls.add(told)
     return told
   }
@@ -359,7 +382,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     }
     const mine = collected
     collected = collecting === 0 ? undefined : []
-    return withNeededRedraw(merged(mine))
+    return withChangedParts(merged(mine))
   }
 
   const logOnce = (what: string) => {
@@ -800,7 +823,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     },
     changed() {
       if (widgets.size > 0 || parts.size > 0) void send({ redraw: true })
-      if (panes.size === 0 && styles.size === 0) return
+      if (openPanes.size === 0 && styles.size === 0) return
       claude.ui.invalidate('ui.render')
       if (isResizeQueued) return
       isResizeQueued = true

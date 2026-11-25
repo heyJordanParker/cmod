@@ -1,11 +1,12 @@
+import { Database } from 'bun:sqlite'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, watch } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
-import { dataFolder, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
-import { bunFetch } from '@cmodjs/core/src/runtime/bun.js'
-import { MissingMachineId, readDevice } from '@cmodjs/core/src/runtime/device.js'
-import { routeSessions, type HoldingOf, type SessionContext, type SessionRouting, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
+import { dirname, join } from 'node:path'
+import { dataFolder, devicePath, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
+import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
+import { measureDevice, MissingMachineId } from '@cmodjs/core/src/runtime/device.js'
+import { routeSessions, sessionsInterface, storeInterface, type HoldingOf, type Listening, type Mail, type SessionComputer, type SessionContext, type SessionRouting, type StoreChange, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
 import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
@@ -13,7 +14,10 @@ import { activeSessions, startBackground, startTask, withBackgroundStatus } from
 import { ifMissing, readJson, writeAtomically } from './files.js'
 import { herdrTerminals } from './herdr.js'
 import { capture } from './process.js'
-import { backgroundTasks, foldersIn, hasTranscript, readUsage, runningEntries, runningFolder, type HistoryIndex, type RunningEntry } from './history.js'
+import { hasExited } from './program.js'
+import { backgroundTasks, foldersIn, hasTranscript, readUsage, runningEntries, runningFolder, transcriptPaths, type HistoryIndex, type RunningEntry } from './history.js'
+import { observe } from './observer.js'
+import { configRoot } from './settings.js'
 
 export type SessionServer = SessionRouting & { visits(): Promise<VisitedAt> }
 
@@ -23,14 +27,15 @@ const olderPluginPath = /^\/api\/sessions\/[\w-]{1,128}(\/events)?$/
 
 const olderPluginPollMs = 8000
 
-const registryQuietMs = 300
-
 export function serveSessions({ index, report }: { readonly index: HistoryIndex; readonly report: (doing: string, error: unknown) => void }): SessionServer {
   const visitsPath = join(storeFolder(process.env), 'visited.json')
   let visited: Promise<VisitedAt> | undefined
   let writes = Promise.resolve()
-  const device = readDevice({ process: { run: (command) => capture([...command]) }, fs: { read: (path) => readFile(path, 'utf8') } }).then(
-    ({ id, name }): Pick<SessionData, 'device'> => ({ device: { id, name } }),
+  const device = measureDevice({ process: { run: (command) => capture([...command]) }, fs: { read: (path) => readFile(path, 'utf8') } }).then(
+    async (read): Promise<Pick<SessionData, 'device'>> => {
+      await writeAtomically(devicePath(storeFolder(process.env)), `${JSON.stringify(read)}\n`).catch((error: unknown) => report('reads this computer again in each session, because it did not write device.json', error))
+      return { device: { id: read.id, name: read.name } }
+    },
     (error: unknown): Pick<SessionData, 'device'> => {
       if (!(error instanceof MissingMachineId)) report('names its sessions and providers with no device', error)
       return {}
@@ -60,19 +65,14 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
 
   const projectOf = (session: string, context: SessionContext, holding: HoldingOf) => holding(session)?.project ?? (typeof context['project'] === 'string' ? context['project'] : '')
 
-  const resuming = new Map<string, Promise<unknown>>()
+  const mail = openMail(join(storeFolder(process.env), 'mail.sqlite'))
 
-  const resume = (session: string, project: string, input: unknown) => {
-    const resumed = Promise.allSettled([resuming.get(session)]).then(async () => {
-      const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
-      if (text.trim() === '') throw new Error('send needs text.')
-      if ((await activeSessions()).has(session)) throw runsUnreached(session, 'send')
-      const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
-      return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
-    })
-    resuming.set(session, resumed)
-    void resumed.finally(() => resuming.get(session) === resumed && resuming.delete(session)).catch(() => undefined)
-    return resumed
+  const resume = async (session: string, project: string, input: unknown) => {
+    const { text } = isObject(input) && typeof input['text'] === 'string' ? (input as { readonly text: string }) : { text: '' }
+    if (text.trim() === '') throw new Error('send needs text.')
+    if ((await activeSessions()).has(session)) throw runsUnreached(session, 'send')
+    const cwd = (await index.getSession({ session, project, held: [] }))?.cwd ?? project
+    return { session: await startBackground(['--resume', session, '--', text], cwd || process.cwd()) }
   }
 
   const statusOf = (entry: RunningEntry | undefined, told: ToldAt, session: string) => {
@@ -104,7 +104,9 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
     return startTask(session, { title: task.title, prompt: task.prompt, cwd, ...(task.agentType === undefined ? {} : { agentType: task.agentType }), ...(task.model === undefined ? {} : { model: task.model }) })
   }
 
+  let lookAtTranscripts = () => undefined as void
   const routing = routeSessions({
+    onListen: (listening) => (listening.interface === sessionsInterface && wantsMessages(listening) ? lookAtTranscripts() : undefined),
     device: async () => (await device).device ?? { id: '', name: '' },
     now: () => Date.now(),
     after: (ms, run) => setTimeout(run, ms).unref(),
@@ -118,7 +120,8 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         read: (path) => readFile(path, 'utf8').catch(ifMissing(undefined)),
       },
       fetch: bunFetch,
-      wait: (ms) => Bun.sleep(ms),
+      clock: bunClock(true),
+      hasExited,
     },
     computer: {
       async sessions(scope, _holding, told) {
@@ -130,7 +133,8 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       },
       async session(session, holding, told) {
         const [visits, here] = await Promise.all([readVisits(), device])
-        const found = await index.getSession({ session, project: holding(session)?.project ?? '', held: [...told.keys()] })
+        const held = holding(session)
+        const found = (await index.getSession({ session, project: held?.project ?? '', held: [...told.keys()] })) ?? (held === undefined ? undefined : { id: session, title: '', project: held.project, cwd: held.cwd, model: '', startedAt: '', lastAt: '', isRunning: true })
         if (found === undefined) return undefined
         return sessionData(found, here, visits, new Map(runningEntries().map((entry) => [entry.session, entry])), told)
       },
@@ -160,7 +164,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
         if (part === 'goal') return index.readGoal({ session, project, ...task })
         if (part === 'usage') return readUsage({ session, project, ...task })
         if (part === 'state') return index.readState({ session, project })
-        throw new RpcError(rpcCodes.invalidParams, `A session has no part ${part}. Read messages, turns, contexts, tasks, goal, usage, or state.`)
+        throw new RpcError(rpcCodes.invalidParams, `A session has no part ${part}. Read messages, turns, contexts, tasks, goal, usage, state, or mail.`)
       },
       async unheld(session, action, input, context, holding) {
         const named = action === 'startTask' ? await deviceNamedBy(input) : undefined
@@ -195,42 +199,128 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
           delete visits[session]
         })
       },
+      ...mail.computer,
     },
   })
 
-  const following = new AbortController()
   const statuses = () => new Map(runningEntries().map((entry) => [entry.session, JSON.stringify(recordedStatus(entry))]))
   let told = statuses()
-  let timer: ReturnType<typeof setTimeout> | undefined
   const tellStatuses = () => {
-    timer = undefined
-    try {
-      const read = statuses()
-      for (const session of new Set([...told.keys(), ...read.keys()])) {
-        if (told.has(session) !== read.has(session)) routing.changed({ session, part: 'running' })
-        else if (told.get(session) !== read.get(session)) routing.changed({ session, part: 'status' })
-      }
-      told = read
-    } catch (error) {
-      report('kept the statuses of the sessions it read last', error)
+    const read = statuses()
+    for (const session of new Set([...told.keys(), ...read.keys()])) {
+      if (told.has(session) !== read.has(session)) {
+        routing.changed({ session, part: 'running' })
+        lookAtTranscripts()
+      } else if (told.get(session) !== read.get(session)) routing.changed({ session, part: 'status' })
     }
+    told = read
   }
+  const transcripts = new Map<string, string>()
+  const listenedTranscripts = () => {
+    const listened = routing.interfaces.listeners(sessionsInterface, 'Change').filter(wantsMessages)
+    transcripts.clear()
+    if (listened.length === 0) return []
+    const running = new Map([...runningEntries().map((entry) => [entry.session, entry.cwd] as const), ...routing.heldSessions().map((held) => [held.session, held.project] as const)])
+    const named = listened.flatMap(({ args }) => (typeof args?.[0] === 'string' && args[0] !== '*' ? [args[0]] : []))
+    const isEvery = named.length < listened.length
+    for (const session of new Set([...named, ...(isEvery ? running.keys() : [])])) for (const path of transcriptPaths(session, running.get(session) ?? '')) transcripts.set(path, session)
+    return [...transcripts.keys()]
+  }
+  const pluginsFile = join(configRoot(), 'plugins', 'installed_plugins.json')
   mkdirSync(runningFolder(), { recursive: true })
-  watch(runningFolder(), { signal: following.signal })
-    .on('change', () => void (timer ??= setTimeout(tellStatuses, registryQuietMs)))
-    .on('error', (error) => {
-      if (!following.signal.aborted) report('stopped following the session records', error)
-    })
+  const messages = observe({
+    folders: () => [...new Set([...transcripts.keys()].map(dirname))],
+    isRecursive: false,
+    list: async () => listenedTranscripts(),
+    onChange: (changed) => {
+      for (const session of new Set([...changed.keys()].flatMap((path) => transcripts.get(path) ?? []))) routing.changed({ session, part: 'messages' })
+    },
+    report: (error) => report("missed a change of a session's messages", error),
+  })
+  lookAtTranscripts = () => void messages.look()
+  const observers = [
+    messages,
+    observe({
+      folders: () => [runningFolder()],
+      isRecursive: false,
+      list: async () => (await readdir(runningFolder()).catch(ifMissing([]))).filter((name) => name.endsWith('.json')).map((name) => join(runningFolder(), name)),
+      onChange: tellStatuses,
+      report: (error) => report('kept the statuses of the sessions it read last', error),
+    }),
+    observe({
+      folders: () => [dirname(pluginsFile)],
+      isRecursive: false,
+      list: async () => [pluginsFile],
+      onChange: () => routing.interfaces.emit(storeInterface, 'Change', { part: 'plugins' } satisfies StoreChange),
+      report: (error) => report("missed a change of Claude Code's installed plugins", error),
+    }),
+  ]
 
   return {
     ...routing,
     visits: readVisits,
     close: () => {
-      following.abort()
-      clearTimeout(timer)
+      for (const observer of observers) observer.close()
       routing.close()
+      mail.close()
     },
   }
+}
+
+type MailRow = { id: number; session: string; from: string | null; fromTitle: string | null; caller: string | null; type: Mail['type']; text: string; replyTo: number | null; asUser: number; sentAt: string; deliveredAt: string | null }
+
+const mailSchema = `create table mail (
+  id integer primary key autoincrement,
+  session text not null,
+  "from" text,
+  fromTitle text,
+  caller text,
+  type text not null,
+  text text not null,
+  replyTo integer,
+  asUser integer not null,
+  sentAt text not null,
+  deliveredAt text
+);
+create index mail_by_session on mail (session, deliveredAt, id);
+pragma user_version = 1;`
+
+function openMail(path: string): { readonly computer: Pick<SessionComputer, 'queue' | 'queued' | 'delivered' | 'mail'>; close(): void } {
+  mkdirSync(dirname(path), { recursive: true })
+  const db = new Database(path, { create: true })
+  if (db.query<{ user_version: number }, []>('pragma user_version').get()?.user_version === 0) db.transaction(() => db.exec(mailSchema))()
+  const mailOf = (row: MailRow): Mail => ({
+    id: row.id,
+    session: row.session,
+    ...(row.from === null ? {} : { from: row.from }),
+    ...(row.fromTitle === null ? {} : { fromTitle: row.fromTitle }),
+    ...(row.caller === null ? {} : { caller: row.caller }),
+    type: row.type,
+    text: row.text,
+    ...(row.replyTo === null ? {} : { replyTo: row.replyTo }),
+    asUser: row.asUser === 1,
+    sentAt: row.sentAt,
+    ...(row.deliveredAt === null ? {} : { deliveredAt: row.deliveredAt }),
+  })
+  return {
+    computer: {
+      queue: async (sent) =>
+        Number(
+          db
+            .query('insert into mail (session, "from", fromTitle, caller, type, text, replyTo, asUser, sentAt) values (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(sent.session, sent.from ?? null, sent.fromTitle ?? null, sent.caller ?? null, sent.type, sent.text, sent.replyTo ?? null, sent.asUser ? 1 : 0, sent.sentAt).lastInsertRowid,
+        ),
+      queued: async (session) => db.query<MailRow, [string]>('select * from mail where session = ? and deliveredAt is null order by id').all(session).map(mailOf),
+      delivered: async (id, at) => void db.query('update mail set deliveredAt = ? where id = ?').run(at, id),
+      mail: async (session, { last }) => db.query<MailRow, [string, string, number]>('select * from (select * from mail where session = ? or "from" = ? order by id desc limit ?) order by id').all(session, session, last ?? -1).map(mailOf),
+    },
+    close: () => db.close(),
+  }
+}
+
+function wantsMessages({ matcher }: Pick<Listening, 'matcher'>): boolean {
+  const part = isObject(matcher) ? (matcher as Readonly<Record<string, unknown>>)['part'] : undefined
+  return part === 'messages' || (Array.isArray(part) && part.includes('messages'))
 }
 
 function runsUnreached(session: string, action: string): Error {

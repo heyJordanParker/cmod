@@ -1,8 +1,9 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cmod, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, servedChanges, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const webServer = `#!/bin/sh
@@ -28,14 +29,6 @@ const tailnetRecord = (home: string) => JSON.parse(readFileSync(join(store(home)
 
 const instance = (home: string) => JSON.parse(readFileSync(join(store(home), 'instances/demo/web-server.json'), 'utf8')) as unknown
 
-async function until(isDone: () => boolean): Promise<void> {
-  const deadline = Date.now() + 20000
-  while (!isDone()) {
-    if (Date.now() > deadline) throw new Error('waited 20 seconds')
-    await Bun.sleep(100)
-  }
-}
-
 test.concurrent('a web app runs with your tailnet name and login, is on your tailnet before its address is written, and comes off it when it stops', async () => {
   const home = await webHome()
   const holder = startCmod(home, 'program', 'demo', '--web-app', '--no-wait', '--', 'web-server', '62021')
@@ -51,7 +44,7 @@ test.concurrent('a web app runs with your tailnet name and login, is on your tai
   expect((await holder.done).exitCode).toBe(0)
   expect(serveCalls(home)).toEqual(['tailscale serve --bg --https=62021 http://127.0.0.1:62021', 'tailscale serve --https=62021 off'])
   expect(tailnetRecord(home)).toEqual({ port: 62021, url: null, reason: null })
-}, 60000)
+})
 
 test.concurrent('a web app keeps its tailnet port when it listens on another local port, so its address on your other devices stays the same', async () => {
   const home = await webHome()
@@ -67,7 +60,7 @@ test.concurrent('a web app keeps its tailnet port when it listens on another loc
   expect(instance(home)).toMatchObject({ address: '127.0.0.1:63000', tailnetUrl: 'https://computer.example.ts.net:62021/' })
   next.child.kill('SIGTERM')
   await next.done
-}, 60000)
+})
 
 test.concurrent('a web app whose port already serves something else on your tailnet stays local, and Settings reads why', async () => {
   const home = await webHome({ 'tailscale-serve.json': '{"TCP":{"62021":{"HTTPS":true}}}' })
@@ -80,7 +73,7 @@ test.concurrent('a web app whose port already serves something else on your tail
   expect(tailnetRecord(home)).toEqual({ port: null, url: null, reason: 'Port 62021 of computer.example.ts.net already serves something else on your tailnet.' })
   holder.child.kill('SIGTERM')
   await holder.done
-}, 60000)
+})
 
 test.concurrent('a web app runs on 127.0.0.1 alone while Tailscale is signed out, with the reason and its fix for Settings', async () => {
   const home = await webHome({ 'tailscale-signed-out': '' })
@@ -93,10 +86,11 @@ test.concurrent('a web app runs on 127.0.0.1 alone while Tailscale is signed out
   expect(tailnetRecord(home)).toEqual({ port: null, url: null, reason: 'Tailscale is not signed in on this computer. Sign in, and cmod puts the web app on your tailnet within a minute.' })
   holder.child.kill('SIGTERM')
   await holder.done
-}, 60000)
+})
 
-test.concurrent('turning servesTailnet off asks Tailscale nothing, and turning it on stops the copy so it starts again on your tailnet', async () => {
+test.concurrent('turning servesTailnet off asks Tailscale nothing, and turning it on stops the copy once cmod/Store tells that the preferences changed, so it starts again on your tailnet', async () => {
   const home = await webHome({ '.local/share/cmod/preferences.json': '{ "servesTailnet": false }\n' })
+  const serve = await servedChanges(home)
   const holder = startCmod(home, 'program', 'demo', '--web-app', '--no-wait', '--', 'web-server', '62021')
   await holder.waitForOutput('127.0.0.1:62021')
 
@@ -104,15 +98,16 @@ test.concurrent('turning servesTailnet off asks Tailscale nothing, and turning i
   expect(tailnetRecord(home)).toEqual({ port: null, url: null, reason: 'Off in Settings, under cmod, Preferences.' })
 
   await writeFiles(home, { '.local/share/cmod/preferences.json': '{ "servesTailnet": true }\n' })
-  await until(() => lines(home, 'server-log').some((line) => line.startsWith('stop ')))
+  await serve.tell('cmod/Store', 'changed', ['preferences'])
   expect((await holder.done).exitCode).toBe(0)
+  expect(lines(home, 'server-log').some((line) => line.startsWith('stop '))).toBe(true)
 
   const next = startCmod(home, 'program', 'demo', '--web-app', '--no-wait', '--', 'web-server', '62021')
   await next.waitForOutput('127.0.0.1:62021')
   expect(serveCalls(home)).toEqual(['tailscale serve --bg --https=62021 http://127.0.0.1:62021'])
   next.child.kill('SIGTERM')
   await next.done
-}, 60000)
+})
 
 test.concurrent('cmod teardown takes every web app of the mod off your tailnet and deletes their tailnet addresses', async () => {
   const home = await webHome({ '.local/share/cmod/tailnet/demo/web-server.json': `${JSON.stringify({ port: 62021, url: 'https://computer.example.ts.net:62021/', reason: null })}\n` })
@@ -121,4 +116,4 @@ test.concurrent('cmod teardown takes every web app of the mod off your tailnet a
 
   expect(serveCalls(home)).toEqual(['tailscale serve --https=62021 off'])
   expect(existsSync(join(store(home), 'tailnet/demo'))).toBe(false)
-}, 60000)
+})

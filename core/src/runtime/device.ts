@@ -1,3 +1,4 @@
+import { devicePath, isObject } from '../records.js'
 import type { Device } from '../session/context/turn/device.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit } from '../utils/text.js'
@@ -23,7 +24,26 @@ export type DeviceSources = {
   readonly fs: { read(path: string): Promise<string> }
 }
 
-export async function readDevice(claude: DeviceSources): Promise<Device> {
+export async function readDevice(claude: DeviceSources, store: string): Promise<Device> {
+  const text = await claude.fs.read(devicePath(store)).catch(ifMissing(undefined))
+  return (text === undefined ? undefined : storedDevice(text)) ?? measureDevice(claude)
+}
+
+function storedDevice(text: string): Device | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined
+    throw error
+  }
+  if (!isObject(value)) return undefined
+  const { id, name, os, arch } = value
+  const isDevice = typeof id === 'string' && machineId.test(id) && typeof name === 'string' && Object.values(systems).includes(os as Device['os']) && Object.values(machines).includes(arch as Device['arch'])
+  return isDevice ? { id, name, os: os as Device['os'], arch: arch as Device['arch'] } : undefined
+}
+
+export async function measureDevice(claude: DeviceSources): Promise<Device> {
   const output = async (argv: readonly string[]) => {
     const { exitCode, stdout, stderr } = await claude.process.run(argv)
     if (exitCode !== 0) throw new Error(`cmod could not read this computer: ${argv.join(' ')} ${formatExit(exitCode, stderr)}`)

@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readText } from '../src/files.js'
-import { claudeAnswering, cmod, cmodInTerminal, cmodOfStep, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodInTerminal, cmodOfStep, cmodPluginListed, cmodWith, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 async function waitForTeardown(home: string): Promise<void> {
@@ -177,7 +178,7 @@ test('cmod try runs several mods in a new home that it deletes after the session
   expect(await readFile(join(home, 'session-path'), 'utf8')).toBe(`${await sessionHome()}/.local/bin\n`)
   expect(existsSync(store)).toBe(false)
   expect(existsSync(join(home, '.claude/keybindings.json'))).toBe(false)
-}, 15_000)
+})
 
 test('cmod try links the macOS keychain into the new home, so Claude Code finds the login, and keeps the keychain when it deletes the home', async () => {
   const home = await temporaryHome()
@@ -192,7 +193,7 @@ test('cmod try links the macOS keychain into the new home, so Claude Code finds 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'session-keychain'), 'utf8')).toBe('keychain\n')
   expect(await readFile(join(home, 'Library/Keychains/login.keychain-db'), 'utf8')).toBe('keychain\n')
-}, 15_000)
+})
 
 test('cmod try keeps how Claude Code reaches the model and who you are, and leaves your hooks, mods, allow rules, and preferences behind', async () => {
   const home = await temporaryHome()
@@ -228,7 +229,7 @@ echo "$ANTHROPIC_CONFIG_DIR $CLAUDE_SECURESTORAGE_CONFIG_DIR" > "${home}/session
   })
   expect(JSON.parse(await readFile(join(home, 'session-state'), 'utf8'))).toEqual({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: 'me@example.com' } })
   expect(await readFile(join(home, 'session-pointers'), 'utf8')).toBe(`${home}/.config/anthropic ${config}\n`)
-}, 15_000)
+})
 
 test('cmod try --home keeps the folder, with the cmod plugin and no mod left set up', async () => {
   const home = await temporaryHome()
@@ -244,7 +245,7 @@ test('cmod try --home keeps the folder, with the cmod plugin and no mod left set
   expect(await readFile(join(kept, 'claude-calls'), 'utf8')).toContain('plugin install cmod@cmod --json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(existsSync(join(kept, '.local/share/cmod/records/demo.json'))).toBe(false)
-}, 15_000)
+})
 
 test('cmod try loads a fresh cmod new mod in a home without the cmod plugin', async () => {
   const home = await temporaryHome()
@@ -424,7 +425,7 @@ test('a closed terminal while the cmod try session runs leaves no record or clai
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})
-}, 15_000)
+})
 
 test("a closed terminal during cmod try's teardown leaves no record or claim", async () => {
   const home = await temporaryHome()
@@ -439,7 +440,7 @@ test("a closed terminal during cmod try's teardown leaves no record or claim", a
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})
-}, 15_000)
+})
 
 test('a failed install in cmod try starts no session, and leaves no approval or data', async () => {
   const home = await temporaryHome()

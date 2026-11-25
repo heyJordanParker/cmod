@@ -18,7 +18,7 @@ import { calledAnswer, fakeAgent, fakeClaude, testDevice, type FakeClaude } from
 import { BelowPrompt, Dashboard, TurnEnd, Working } from '../../src/ui/areas.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
-import { fakeServe, type FakeServe } from '../../src/testing/fake-serve.js'
+import { fakeServe, memoryMail, retriesAtOnce, type FakeServe } from '../../src/testing/fake-serve.js'
 import { ifMissing } from '../../src/utils/paths.js'
 import { messageOf } from '../../src/utils/text.js'
 
@@ -168,14 +168,22 @@ test('a compaction asked for during a turn the person stops with Esc waits for t
   expect(compacted()).toEqual([{ command: 'compact' }])
 })
 
-test('a session asked to send to another session sends it as itself, through Claude Code message between sessions, so the other session knows who to answer', async () => {
+test("a mod's as: Session send to another session goes through cmod serve, which stores it with the cmod plugin's own session and title as its sender and the mod as its caller, and never through Claude Code's message between sessions", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  const mailbox = memoryMail()
+  const running = (id: string, title: string) => ({ id, title, project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '', lastAt: '', isRunning: true })
+  Object.assign(tested.fakes.serve, mailbox, { session: (id: string) => (id === 'deployer' ? running(id, 'Deploy') : id === 'test-session' ? running(id, 'Release') : undefined) })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  const send = (to: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'sendTo', input: { to, type: 'prompt', text: 'Rerun the deploy' } }, caller: 'cmod' } as never)
+  const send = (to: string, input: object) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: to, action: 'send', input }, caller: 'demo' } as never)
 
-  expect(await send('deployer')).toEqual({ value: null })
-  expect(await send('test-session')).toEqual({ deny: 'session test-session cannot send as itself to itself.' })
-  expect(tested.calls.filter((call) => call.call === 'session.send' || call.call === 'prompt.submit').map((call) => [call.call, call.args[0]])).toEqual([['session.send', { to: { sessionId: 'deployer' }, text: 'Rerun the deploy' }]])
+  expect(await send('deployer', { type: 'prompt', text: 'Rerun the deploy', as: 'session' })).toEqual({ value: { id: 1, state: 'queued' } })
+  expect(await send('deployer', { type: 'prompt', text: 'Tag it', from: { session: 'cli-session', title: 'From the CLI' } })).toEqual({ value: { id: 2, state: 'queued' } })
+  expect(await send('test-session', { type: 'prompt', text: 'Rerun the deploy', as: 'session' })).toEqual({ deny: 'session test-session cannot send as itself to itself.' })
+  expect((await mailbox.mail('deployer', {})).map(({ from, fromTitle, caller }) => ({ from, fromTitle, caller }))).toEqual([
+    { from: 'test-session', fromTitle: 'Release', caller: 'demo' },
+    { from: 'cli-session', fromTitle: 'From the CLI', caller: 'demo' },
+  ])
+  expect(tested.calls.filter((call) => call.call === 'session.send' || call.call === 'prompt.submit')).toEqual([])
 })
 
 test('a row the test appends with no stored row given is kept as it arrived, as Claude Code keeps it', async () => {
@@ -494,6 +502,21 @@ test('a cmod plugin started into a running session, as /reload-plugins starts it
   await fake.settle()
 
   expect(fake.serve.routing.heldSessions().map(({ session }) => session)).toEqual(['test-session'])
+})
+
+test("the cmod plugin reads the cmod store again when its connection to cmod serve opens and on each cmod/Store Change another writer tells", async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  const served = serveConversations({ claude: fake.claude, router: createRouter(), store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  const heard: unknown[] = []
+  served.onStoreChange((part) => void heard.push(part ?? 'connected'))
+  await fake.settle()
+
+  fake.serve.routing.interfaces.emit('cmod/Store', 'Change', { part: 'buildFailures' })
+  await fake.settle()
+
+  expect(heard).toEqual(['connected', 'buildFailures'])
 })
 
 test('a cmod plugin started with a new session, which has no transcript yet, waits for its SessionStart to hold it', async () => {
@@ -1138,6 +1161,66 @@ const settled = async (...plugins: readonly { readonly fake: FakeClaude }[]) => 
 
 const typedPrompt = (text: string) => ({ uuid: `prompt:${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } })
 
+async function servedThroughRestarts() {
+  let serve: FakeServe | undefined = fakeServe(() => ({}), { device: async () => testDevice })
+  const retries: (() => void)[] = []
+  const plugin = await connected(serve, 'here', {
+    configure: (fake) => {
+      fake.fakes.http.fetch = (url, init) => (serve === undefined ? Promise.reject(new Error('connect ECONNREFUSED serve.sock')) : serve.fetch(url, init))
+      fake.fakes.clock.after = (ms, run) => {
+        let isCancelled = false
+        if (ms === 2000) retries.push(run)
+        else if (ms < 2000) void Promise.resolve().then(() => isCancelled || run())
+        return { cancel: () => void (isCancelled = true) }
+      }
+    },
+  })
+  return {
+    plugin,
+    async stop() {
+      serve?.close()
+      serve = undefined
+      await settled(plugin)
+    },
+    start(next: FakeServe) {
+      serve = next
+    },
+    async retry() {
+      for (const run of retries.splice(0)) run()
+      await settled(plugin)
+    },
+  }
+}
+
+const waitWarnings = (plugin: { readonly fake: FakeClaude }) => plugin.fake.shown.debug.filter((line) => line.startsWith('cmod: this session waits for cmod serve'))
+
+test('a session resumed while cmod serve starts again reads its earlier turns from the cmod serve that comes back, and reports nothing', async () => {
+  const served = await servedThroughRestarts()
+  const read: string[] = []
+  await served.stop()
+
+  await served.plugin.router.dispatch('classic.SessionStart', { session_id: 'resumed', source: 'resume' } as never, async () => ({}))
+  await served.retry()
+  served.start(fakeServe(() => ({ read: async (session, part) => (read.push(`${session} ${part}`), part === 'goal' ? { text: '' } : part === 'state' ? null : []) }), { device: async () => testDevice }))
+  await served.retry()
+
+  expect(read).toContain('resumed state')
+  expect(served.plugin.reported).toEqual([])
+})
+
+test('a session warns once that it waits for cmod serve however many connects fail while cmod serve is down, and once more for its next outage', async () => {
+  const served = await servedThroughRestarts()
+
+  await served.stop()
+  for (let round = 0; round < 3; round += 1) await served.retry()
+  served.start(fakeServe(() => ({}), { device: async () => testDevice }))
+  await served.retry()
+  await served.stop()
+  for (let round = 0; round < 2; round += 1) await served.retry()
+
+  expect(waitWarnings(served.plugin)).toHaveLength(2)
+})
+
 test("the cmod plugin tells a mod's cmod/Providers listener of its own session when a session-code provider there comes or goes, and no listener whose matcher names another interface", async () => {
   const serve = fakeServe(() => ({}), { device: async () => testDevice })
   const heard: unknown[] = []
@@ -1206,7 +1289,7 @@ function devboxProvider() {
       isRunning = false
       server.emit(sessionsInterface, 'Change', { session: 'bg-devbox', part: 'running' }, ['bg-devbox'])
     },
-    serve: () => fakeServe(() => ({}), { device: async () => testDevice, programs: { store: '/store', files: { list: (path) => files.list(path).catch(ifMissing([])), read: (path) => files.read(path).catch(ifMissing(undefined)) }, fetch, wait: async () => undefined } }),
+    serve: () => fakeServe(() => ({}), { device: async () => testDevice, programs: { store: '/store', files: { list: (path) => files.list(path).catch(ifMissing([])), read: (path) => files.read(path).catch(ifMissing(undefined)) }, fetch, clock: retriesAtOnce } }),
     close: () => routes.close(),
   }
 }
@@ -1299,7 +1382,7 @@ async function uiOnServe<State extends object>(definition: ModDefinition<State>)
     call: addressCall((url, init) => cmod.serve.fetch(url, init), 'unix:/test/home/.local/share/cmod/serve.sock'),
     handle: async (method, params, signal) => (await listeners.handler(method, params, signal))?.result ?? null,
     onConnect: (connected) => listeners.replay(connected),
-    wait: async () => undefined,
+    clock: retriesAtOnce,
   })
   const call =
     (method: string) =>

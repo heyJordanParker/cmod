@@ -8,6 +8,7 @@ import { surfaces, type Surface } from '@cmodjs/core/src/session/session.js'
 import { areas, type Area } from '@cmodjs/core/src/ui/areas.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing } from '../files.js'
+import { reachServe, serveUnreached } from '../script.js'
 
 export const summary = "Reach each session's widgets, views, and pages, as an app that draws them does."
 
@@ -92,12 +93,12 @@ function calledOnServe(method: string, args: readonly unknown[]): Promise<unknow
 }
 
 async function withServe<Answer>(ask: (client: RpcClient) => Promise<Answer>, handle: RpcHandler): Promise<Answer> {
-  const socket = serveSocketPath(storeFolder(process.env))
+  await reachServe('ui')
   const client = connectServe({ handle })
   try {
     return await ask(client)
   } catch (error) {
-    if (error instanceof RpcUnreached) throw new Error(`cmod ui reaches no cmod serve at ${socket}: ${messageOf(error)}. A Claude Code session with the cmod plugin starts it.`)
+    if (error instanceof RpcUnreached) throw serveUnreached('ui', messageOf(error))
     throw error
   } finally {
     await client.close()

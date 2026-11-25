@@ -1,4 +1,4 @@
-import { existsSync, readlinkSync, realpathSync } from 'node:fs'
+import { existsSync, readlinkSync } from 'node:fs'
 import { mkdtemp, readdir, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -33,10 +33,9 @@ const claudeCode = (): string => (startedBy ??= present(process.env['CLAUDE_CODE
 const present = (path: string | undefined) => (path !== undefined && path !== '' && existsSync(path) ? path : undefined)
 
 export function claudeCodeLauncher(): string | undefined {
-  const running = claudeCode() === 'claude' ? (Bun.which('claude') ?? undefined) : claudeCode()
   const launcher = join(home(), '.local', 'bin', 'claude')
-  if (!existsSync(launcher)) return running
-  return running === undefined || dirname(realpathSync(launcher)) === dirname(realpathSync(running)) ? launcher : running
+  if (existsSync(launcher)) return launcher
+  return claudeCode() === 'claude' ? (Bun.which('claude') ?? undefined) : claudeCode()
 }
 
 function parentClaudeCode(): string | undefined {

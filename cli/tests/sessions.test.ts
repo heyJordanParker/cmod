@@ -1,8 +1,12 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { chmod, mkdir } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { connectRpc, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
-import { cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { stoppedClock } from '@cmodjs/core/src/testing/fake-serve.js'
+import { cmodWith, deleteTemporaryHomes, spawningTestLimitMs, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 const clients: RpcClient[] = []
 
 afterAll(async () => {
@@ -34,7 +38,7 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
         acted.push([session, action, input])
         return answers[action]?.(input) ?? null
       },
-      wait: () => new Promise<void>(() => undefined),
+      clock: stoppedClock,
     })
     clients.push(plugin)
     await plugin.request('$/hold', { session, project: home, cwd: home })
@@ -42,13 +46,23 @@ async function servedSessions(held: Readonly<Record<string, Answers>>) {
   return { home, acted, stop: () => serving.child.kill() }
 }
 
-test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, and a send from inside Claude Code goes from that session, or straight to the session when that cmod plugin is older', async () => {
-  const { home, acted, stop } = await servedSessions({ worker: {}, planner: {}, elder: { sendTo: () => { throw new Error('Session elder runs cmod 8.8.4, which has no "sendTo" action.') } } })
+test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cmod plugin that holds the session, a send from inside Claude Code names that session as its sender, and read mail lists each mail with its state', async () => {
+  const { home, acted, stop } = await servedSessions({
+    worker: {},
+    planner: {},
+    stalled: {
+      send: () => {
+        throw new Error('Claude Code dropped the prompt: the session is closing')
+      },
+    },
+  })
   await writeFiles(home, { [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/old.jsonl`]: `${JSON.stringify({ type: 'user', uuid: 'u1', sessionId: 'old', timestamp: '2026-11-20T10:00:00.000Z', cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } })}\n` })
 
   const fromOutside = await cmodWith(home, outside, 'sessions', 'send', 'worker', 'Rerun the deploy')
   const fromPlanner = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'planner' }, 'sessions', 'send', 'worker', 'Tests pass.', '--note')
-  const fromElder = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'elder' }, 'sessions', 'send', 'worker', 'Merged.')
+  const answered = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'planner' }, 'sessions', 'send', 'worker', 'Merged.', '--reply-to', '1')
+  const queued = await cmodWith(home, outside, 'sessions', 'send', 'stalled', 'Go on')
+  const mail = await cmodWith(home, outside, 'sessions', 'read', 'mail', 'worker')
   const stopped = await cmodWith(home, outside, 'sessions', 'stop', 'worker')
   const ended = await cmodWith(home, outside, 'sessions', 'end', 'worker')
   const compacted = await cmodWith(home, outside, 'sessions', 'compact', 'worker', '--keep', 'the parser plan')
@@ -57,10 +71,11 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
   const deleted = await cmodWith(home, outside, 'sessions', 'delete', 'old')
   stop()
 
-  expect([fromOutside, fromPlanner, fromElder, stopped, ended, compacted, compactedHere, running, deleted]).toEqual([
-    { exitCode: 0, stdout: 'Sent session worker the prompt.\n', stderr: '' },
-    { exitCode: 0, stdout: 'Sent session worker the note.\n', stderr: '' },
-    { exitCode: 0, stdout: 'Sent session worker the prompt.\n', stderr: '' },
+  expect([fromOutside, fromPlanner, answered, queued, stopped, ended, compacted, compactedHere, running, deleted]).toEqual([
+    { exitCode: 0, stdout: 'Delivered message 1 to session worker.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Delivered message 2 to session worker.\n', stderr: '' },
+    { exitCode: 0, stdout: 'Delivered message 3 to session worker.\n', stderr: '' },
+    { exitCode: 0, stdout: "Queued message 4 for session stalled. Its cmod plugin has not reached cmod serve, which happens when Claude Code turns a session's mods off after its hooks worker crashes. It gets the message once the session is resumed.\n", stderr: '' },
     { exitCode: 0, stdout: 'Stopped the turn of session worker.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker ends once its turn ends.\n', stderr: '' },
     { exitCode: 0, stdout: 'Session worker compacts once its turn ends, and then carries on.\n', stderr: '' },
@@ -68,17 +83,22 @@ test.concurrent('cmod sessions send, stop, end, compact, and delete reach the cm
     { exitCode: 1, stdout: '', stderr: 'cmod sessions: session worker runs, so it stays. End it first.\n' },
     { exitCode: 0, stdout: 'Deleted session old.\n', stderr: '' },
   ])
+  expect([mail.exitCode, mail.stderr, mail.stdout.trimEnd().split('\n').map((line) => line.slice('2026-11-25 10:00  '.length))]).toEqual([
+    0,
+    '',
+    ['1  delivered  from outside a session to worker  prompt  Rerun the deploy', '2  delivered  from planner to worker  note  Tests pass.', '3  delivered  from planner to worker  prompt  Merged.'],
+  ])
   expect(acted).toEqual([
     ['worker', 'send', { type: 'prompt', text: 'Rerun the deploy' }],
-    ['planner', 'sendTo', { type: 'note', text: 'Tests pass.', to: 'worker' }],
-    ['elder', 'sendTo', { type: 'prompt', text: 'Merged.', to: 'worker' }],
-    ['worker', 'send', { type: 'prompt', text: 'Merged.' }],
+    ['worker', 'send', { type: 'note', text: '<cmod-message from="planner" title="" reply="cmod sessions send planner --reply-to 2">\nTests pass.\n</cmod-message>' }],
+    ['worker', 'send', { type: 'prompt', text: '<cmod-message from="planner" title="" reply="cmod sessions send planner --reply-to 3" reply-to="1">\nMerged.\n</cmod-message>' }],
+    ['stalled', 'send', { type: 'prompt', text: 'Go on' }],
     ['worker', 'abort', {}],
     ['worker', 'end', null],
     ['worker', 'compact', { keep: 'the parser plan' }],
     ['planner', 'compact', {}],
   ])
-}, 60_000)
+})
 
 test.concurrent('cmod sessions start starts a background task of this session, and fork one on a copy of the session it names, through the plugin that holds it', async () => {
   const task = (id: string) => (input: unknown) => ({ id, title: (input as { readonly title: string }).title, owner: 'planner', openedBy: 'planner', openedAt: '2026-11-25T10:00:00.000Z', isBackground: true })
@@ -100,18 +120,20 @@ test.concurrent('cmod sessions start starts a background task of this session, a
     ['planner', 'startBackgroundTask', { prompt: 'Upgrade every dependency.', title: 'Upgrade', isBackground: true, model: 'sonnet', device: 'devbox' }],
     ['worker', 'fork', { prompt: 'Try the other parser.', title: 'Other parser', isBackground: true, at: 'm3' }],
   ])
-}, 60_000)
+})
 
 test.concurrent('cmod sessions list names the device each session runs on and whether it runs, and read messages starts each line with the message id', async () => {
   const { home, stop } = await servedSessions({ worker: {} })
   const project = join(home, 'work/app')
-  await writeFiles(home, {
-    [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/worker.jsonl`]: [
-      { type: 'user', uuid: 'u1', sessionId: 'worker', timestamp: '2026-11-25T10:00:00.000Z', cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } },
-      { type: 'custom-title', customTitle: 'Tree pane rename', sessionId: 'worker' },
+  const transcript = (session: string, title: string, at: string) =>
+    [
+      { type: 'user', uuid: `${session}-u1`, sessionId: session, timestamp: at, cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } },
+      { type: 'custom-title', customTitle: title, sessionId: session },
     ]
       .map((row) => `${JSON.stringify(row)}\n`)
-      .join(''),
+      .join('')
+  await writeFiles(home, {
+    [`.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}/worker.jsonl`]: transcript('worker', 'Tree pane rename', '2026-11-25T10:00:00.000Z').replace('worker-u1', 'u1'),
   })
   const device = JSON.parse((await cmodWith(home, outside, 'device', '--json')).stdout) as { readonly name: string }
 
@@ -122,7 +144,33 @@ test.concurrent('cmod sessions list names the device each session runs on and wh
   expect(project).toStartWith(home)
   expect(listed).toEqual({ exitCode: 0, stdout: `2026-11-25 10:00  worker  Tree pane rename  running  on ${device.name}\n`, stderr: '' })
   expect(read).toEqual({ exitCode: 0, stdout: '10:00  u1  person   Rename the tree pane\n', stderr: '' })
-}, 60_000)
+})
+
+test.concurrent('cmod sessions takes any unique start of a session id, refuses an ambiguous one by naming each match, and a send names the session it reached', async () => {
+  const maintainer = '345d8519-d589-441b-947d-8f4fe33a0768'
+  const fork = '345dfd97-1c2b-4d3e-8f40-516273849a0b'
+  const { home, acted, stop } = await servedSessions({ [maintainer]: {}, [fork]: {} })
+  const transcript = (session: string, title: string, at: string) =>
+    [
+      { type: 'user', uuid: `${session}-u1`, sessionId: session, timestamp: at, cwd: home, origin: { kind: 'human' }, message: { role: 'user', content: 'Port the parser' } },
+      { type: 'custom-title', customTitle: title, sessionId: session },
+    ]
+      .map((row) => `${JSON.stringify(row)}\n`)
+      .join('')
+  const folder = `.claude/projects/${home.replace(/[^A-Za-z0-9]/g, '-')}`
+  await writeFiles(home, { [`${folder}/${maintainer}.jsonl`]: transcript(maintainer, 'php#', '2026-11-25T10:00:00.000Z'), [`${folder}/${fork}.jsonl`]: transcript(fork, 'php# fork', '2026-11-25T11:00:00.000Z') })
+  const device = JSON.parse((await cmodWith(home, outside, 'device', '--json')).stdout) as { readonly name: string }
+
+  const sent = await cmodWith(home, outside, 'sessions', 'send', '345d85', 'Rerun the deploy')
+  const ambiguous = await cmodWith(home, { ...outside, TZ: 'UTC' }, 'sessions', 'send', '345d', 'Rerun the deploy')
+  const missing = await cmodWith(home, outside, 'sessions', 'send', 'abcdef12', 'Rerun the deploy')
+  stop()
+
+  expect(sent).toEqual({ exitCode: 0, stdout: 'Delivered message 1 to session 345d8519 (php#).\n', stderr: '' })
+  expect(ambiguous).toEqual({ exitCode: 1, stdout: '', stderr: `cmod sessions: 2 sessions start with 345d. Give more of the id:\n2026-11-25 11:00  ${fork}  php# fork  running  on ${device.name}\n2026-11-25 10:00  ${maintainer}  php#  running  on ${device.name}\n` })
+  expect(missing).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod sessions: no session id starts with abcdef12. cmod sessions list --every-project lists the sessions.\n' })
+  expect(acted).toEqual([[maintainer, 'send', { type: 'prompt', text: 'Rerun the deploy' }]])
+})
 
 test.concurrent("cmod terminal reads, types into, and shows a session's terminal through the program that provides cmod/Terminal", async () => {
   const { home, stop } = await servedSessions({})
@@ -151,7 +199,7 @@ test.concurrent("cmod terminal reads, types into, and shows a session's terminal
     { exitCode: 0, stdout: 'Showed the terminal of session worker (peek).\n', stderr: '' },
   ])
   expect([misplaced.exitCode, misplaced.stderr]).toEqual([1, 'cmod terminal: cmod terminal show takes focus, peek, tab, right, down, hide, not sideways.\n'])
-}, 60_000)
+})
 
 test.concurrent('cmod sessions names the fix when no cmod serve answers', async () => {
   const home = await temporaryHome()
@@ -161,4 +209,19 @@ test.concurrent('cmod sessions names the fix when no cmod serve answers', async 
   expect(sent.exitCode).toBe(1)
   expect(sent.stderr).toStartWith(`cmod sessions: cmod sessions reaches no cmod serve at ${join(home, '.local/share/cmod/serve.sock')}: `)
   expect(sent.stderr).toEndWith('. A Claude Code session with the cmod plugin starts it.\n')
-}, 60_000)
+})
+
+test.concurrent("cmod sessions names Claude Code's sandbox settings when the process may not open cmod serve's socket", async () => {
+  const home = await temporaryHome()
+  const socket = join(home, '.local/share/cmod/serve.sock')
+  await mkdir(join(home, '.local/share/cmod'), { recursive: true })
+  const server = createServer()
+  await new Promise<void>((resolve) => server.listen(socket, resolve))
+  await chmod(socket, 0o000)
+
+  const listed = await cmodWith(home, outside, 'sessions', 'list')
+  server.close()
+
+  expect(listed.exitCode).toBe(1)
+  expect(listed.stderr).toMatch(new RegExp(`^cmod sessions: cmod sessions may not open cmod serve's socket ${socket} \\((EACCES|EPERM)\\)\\. In Claude Code's sandbox, list the socket in sandbox\\.network\\.allowUnixSockets on macOS, turn on sandbox\\.network\\.allowAllUnixSockets on Linux, or list cmod in sandbox\\.excludedCommands\\.\n$`))
+})

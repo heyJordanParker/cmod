@@ -8,6 +8,7 @@ import { Prompt } from '../session/context/turn/message/prompt.js'
 import { Reply } from '../session/context/turn/message/reply.js'
 import { Mod, Person, Schedule, type Sender } from '../session/context/turn/message/sender.js'
 import { GoalChange } from '../session/goal/goal.js'
+import { Session } from '../session/session.js'
 import { Task, TaskStart } from '../session/goal/task.js'
 import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
@@ -64,7 +65,7 @@ export type FakeSessions = {
   color(): SessionColor
   recolor(color: string | undefined): SessionColor
   lastTurn(): TurnData | undefined
-  readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string }[]
+  readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string; readonly from?: string }[]
 }
 
 export function fakeSessions({ project, cwd, given, push, callTool, listAgents, decide }: { readonly project: () => string; readonly cwd: () => string; readonly given: readonly FakeSession[]; readonly push: (mod: string, session: string, change: SessionChange) => void; readonly callTool: Claude['tool']['call']; readonly listAgents: Claude['agent']['list']; readonly decide: Decide }): FakeSessions {
@@ -248,8 +249,9 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
         return null
       }
       if (action === 'send') {
-        sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(typeof input['as'] === 'string' ? { as: input['as'] } : {}) })
-        return null
+        const from = isObject(input['from']) ? String(input['from']['session']) : input['as'] === Session ? current : undefined
+        sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(input['as'] === Person ? { as: Person } : {}), ...(from === undefined ? {} : { from }) })
+        return task === undefined ? { id: sent.length, state: 'delivered' } : null
       }
       const text = (key: string) => (typeof input[key] === 'string' ? input[key] : undefined)
       const title = text('title') ?? ''

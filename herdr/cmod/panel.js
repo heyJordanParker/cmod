@@ -32,6 +32,8 @@ const wantedLists = (model) => (model.show === "views" ? ["views", "pages"] : mo
 
 const emptyEntry = (now) => ({ lists: null, pending: {}, refusal: null, parts: {}, since: now });
 
+const staleEntry = (entry) => ({ ...entry, pending: {}, parts: Object.fromEntries(Object.entries(entry.parts).map(([key, drawn]) => [key, { ...drawn, request: null, isStale: true }])) });
+
 export const entryOf = (model, session) => (session === null ? undefined : model.sessions[session]);
 
 export function shownView(model, entry = entryOf(model, model.target)) {
@@ -126,7 +128,8 @@ function telling(model, isRenewal = false) {
   if (isSame && !(isRenewal && session !== null)) return [model, []];
   const effects = [];
   if (before.session !== null && before.session !== session) effects.push(call(`${UI}.show`, [before.session, model.client, []], null, null));
-  if (session !== null) effects.push(call(`${UI}.show`, [session, model.client, parts.map((key) => ({ mod: key.slice(0, key.indexOf("/")), id: key.slice(key.indexOf("/") + 1) })), ...host], null, { type: "showFailed", session }));
+  const shown = model.show === "page" ? { type: "shown", session } : null;
+  if (session !== null) effects.push(call(`${UI}.show`, [session, model.client, parts.map((key) => ({ mod: key.slice(0, key.indexOf("/")), id: key.slice(key.indexOf("/") + 1) })), ...host], shown, { type: "showFailed", session }));
   return [{ ...model, told: { session, parts } }, effects];
 }
 
@@ -172,7 +175,8 @@ export function update(model, message) {
     }
     case "disconnected": {
       const attempt = at.connection.attempt + 1;
-      return [{ ...at, connection: { status: "closed", attempt, error: message.error } }, [{ type: "connectAfter", ms: RETRY_MS[Math.min(attempt - 1, RETRY_MS.length - 1)] }]];
+      const sessions = Object.fromEntries(Object.entries(at.sessions).map(([session, entry]) => [session, staleEntry(entry)]));
+      return [{ ...at, sessions, connection: { status: "closed", attempt, error: message.error } }, [{ type: "connectAfter", ms: RETRY_MS[Math.min(attempt - 1, RETRY_MS.length - 1)] }]];
     }
     case "focused": {
       const session = message.session;
@@ -202,11 +206,19 @@ export function update(model, message) {
       const drawn = entryOf(at, message.session)?.parts[message.key];
       if (drawn?.request !== message.request) return [at, []];
       const settled = message.type === "drew" ? { ...drawn, tree: message.result, error: null, request: null } : { ...drawn, error: message.error, request: null };
-      const landed = withEntry(at, message.session, (entry) => ({ ...entry, parts: { ...entry.parts, [message.key]: settled } }));
+      const landed = withEntry(at, message.session, (entry) => ({ ...entry, refusal: message.type === "drew" ? null : entry.refusal, parts: { ...entry.parts, [message.key]: settled } }));
       return drawn.isStale && drawn.part !== undefined ? drawing(landed, message.session, [drawn.part]) : [landed, []];
     }
     case "pressFailed":
       return [withEntry(at, message.session, (entry) => ({ ...entry, parts: { ...entry.parts, [message.key]: { tree: null, request: null, ...entry.parts[message.key], error: message.error } } })), []];
+    case "shown": {
+      const key = keyOf(at.page);
+      const entry = entryOf(at, message.session);
+      const drawn = entry?.parts[key];
+      if (entry === undefined || (entry.refusal === null && (drawn?.error ?? null) === null)) return [at, []];
+      const cleared = withEntry(at, message.session, (each) => ({ ...each, refusal: null, parts: drawn === undefined ? each.parts : { ...each.parts, [key]: { ...drawn, error: null } } }));
+      return (drawn?.error ?? null) === null ? [cleared, []] : drawing(cleared, message.session, [at.page]);
+    }
     case "showFailed":
       return message.session === at.target ? [withEntry(at, message.session, (entry) => ({ ...entry, refusal: entry.lists === null ? message.error : entry.refusal })), []] : [at, []];
     case "heard":
@@ -258,7 +270,7 @@ function heard(model, event, payload) {
     if (shownView(model, entry) !== undefined && keyOf(shownView(model, entry)) === key) return then({ ...model, tab: null }, drawLive(session), telling);
     return [model, [{ type: "closePage", key }]];
   }
-  if (page !== undefined) return [model, [{ type: "openPage", session, page }]];
+  if (page !== undefined) return [model, [{ type: "openPage", session, page, isAsked: payload.isAsked === true }]];
   if (!(entry.lists?.views ?? []).some((view) => keyOf(view) === key)) return [model, []];
   const reveal = payload.isAsked === true && model.isHost && !model.isWindow ? [{ type: "reveal" }] : [];
   const [next, effects] = then({ ...model, tab: key }, drawLive(session), telling);

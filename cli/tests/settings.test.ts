@@ -1,9 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 async function setUpDemo(home: string): Promise<{ project: string }> {

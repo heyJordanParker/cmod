@@ -4,6 +4,7 @@ import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.j
 import { calledAnswer } from '../node_modules/@cmodjs/core/testing/fake-claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { cmodBinary } from '../cli/tests/cmod-binary.js'
 import { cmodPlugin } from '../src/mod.js'
 
 const allHotkeys = Object.keys(cmodPlugin.hotkeys ?? {})
@@ -25,8 +26,6 @@ declare const Bun: {
 declare const process: { readonly pid: number }
 
 declare const fetch: (url: string, init?: { readonly method?: string; readonly headers?: Record<string, string>; readonly body?: string; readonly signal?: AbortSignal; readonly unix?: string }) => Promise<Fetched>
-
-const clone = (import.meta as unknown as { readonly dir: string }).dir.replace(/\/tests$/, '')
 
 const store = '/test/home/.local/share/cmod'
 
@@ -147,7 +146,7 @@ async function browsed() {
   const transcript = `${home}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}/test-session.jsonl`
   const firstPrompt = promptRow(cwd, 'u1', 'Count the presses', '2026-11-20T10:00:00.000Z')
   await Bun.write(transcript, firstPrompt)
-  const server = Bun.spawn(['bun', `${clone}/cli/src/main.ts`, 'serve'], { env: { HOME: home, PATH: Bun.env['PATH'] ?? '' }, stdout: 'pipe', stderr: 'inherit' })
+  const server = Bun.spawn([cmodBinary, 'serve'], { env: { HOME: home, PATH: Bun.env['PATH'] ?? '' }, stdout: 'pipe', stderr: 'inherit' })
   servers.push(server)
   const socket = (await firstLine(server.stdout)).replace(/^unix:/, '')
   let opened = ''

@@ -1,7 +1,8 @@
 import type { HttpInit, HttpResponse } from 'claude-code'
 import type { Claude } from '../runtime/claude.js'
-import { devicesInterface, interfaceListeners, providerActs, routeSessions, serveProviders, type Implementation, type ProgramReach, type Provided, type ProvidedHeard, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionRouting } from '../runtime/interfaces.js'
-import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from '../runtime/rpc.js'
+import { callDeadline } from '../runtime/deadline.js'
+import { devicesInterface, interfaceListeners, providerActs, routeSessions, serveProviders, type Implementation, type Mail, type ProgramReach, type Provided, type ProvidedHeard, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionRouting } from '../runtime/interfaces.js'
+import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient, type RpcClock } from '../runtime/rpc.js'
 import type { Device } from '../session/context/turn/device.js'
 
 type Here = Pick<Device, 'id' | 'name'>
@@ -32,11 +33,46 @@ declare function setTimeout(run: () => void, ms: number): unknown
 
 const realClock: ServeClock = { now: () => Date.now(), after: (ms, run) => setTimeout(run, ms) }
 
-const wait = (ms: number) => new Promise<void>((resolve) => void setTimeout(resolve, ms))
+declare function clearTimeout(timer: unknown): void
+
+const timers: RpcClock = {
+  after: (ms, run) => {
+    const timer = setTimeout(run, ms)
+    return { cancel: () => clearTimeout(timer) }
+  },
+}
+
+export const retriesAtOnce: RpcClock = {
+  after: (ms, run) => {
+    let isCancelled = false
+    if (ms < callDeadline.ms) void Promise.resolve().then(() => isCancelled || run())
+    return { cancel: () => void (isCancelled = true) }
+  },
+}
+
+export const stoppedClock: RpcClock = { after: () => ({ cancel: () => undefined }) }
 
 const notHere = (session: string) => new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
 
-const unfaked: SessionComputer = {
+export type Mailbox = Pick<SessionComputer, 'queue' | 'queued' | 'delivered' | 'mail'>
+
+export function memoryMail(): Mailbox {
+  const kept: Mail[] = []
+  return {
+    queue: async (mail) => kept.push({ ...mail, id: kept.length + 1 }),
+    queued: async (session) => kept.filter((mail) => mail.session === session && mail.deliveredAt === undefined),
+    delivered: async (id, at) => {
+      const mail = kept[id - 1]
+      if (mail !== undefined) kept[id - 1] = { ...mail, deliveredAt: at }
+    },
+    mail: async (session, { last }) => {
+      const rows = kept.filter((mail) => mail.session === session || mail.from === session)
+      return last === undefined ? rows : rows.slice(-last)
+    },
+  }
+}
+
+const unfaked: Omit<SessionComputer, keyof Mailbox> = {
   sessions: () => [],
   session: () => undefined,
   search: () => [],
@@ -52,9 +88,10 @@ const socketOf = (device: string) => `/test/devices/${device}/serve.sock`
 
 export function fakeServe(
   fakes: () => Partial<SessionComputer>,
-  { device, programs, clock = realClock }: { readonly device: () => Promise<Here>; readonly programs?: ProgramReach; readonly clock?: ServeClock },
+  { device, programs, clock = realClock }: { readonly device: () => Promise<Here>; readonly programs?: Partial<ProgramReach>; readonly clock?: ServeClock },
 ): FakeServe {
-  const answer = <Key extends keyof SessionComputer>(key: Key): SessionComputer[Key] => (fakes()[key] ?? unfaked[key])
+  const kept: SessionComputer = { ...unfaked, ...memoryMail() }
+  const answer = <Key extends keyof SessionComputer>(key: Key): SessionComputer[Key] => fakes()[key] ?? kept[key]
   const linked = new Map<string, FakeServe>()
   const reached = new Map<string, Here>()
   let devices: Provided | undefined
@@ -64,8 +101,9 @@ export function fakeServe(
     programs: {
       store: programs?.store ?? '/test/store',
       files: programs?.files ?? { list: async () => [], read: async () => undefined },
-      fetch: (url, init) => linked.get(init.socketPath ?? '')?.fetch(url, init) ?? programs?.fetch(url, init) ?? Promise.resolve({ status: 404, text: '' }),
-      wait: programs?.wait ?? wait,
+      fetch: (url, init) => linked.get(init.socketPath ?? '')?.fetch(url, init) ?? programs?.fetch?.(url, init) ?? Promise.resolve({ status: 404, text: '' }),
+      clock: programs?.clock ?? timers,
+      hasExited: programs?.hasExited ?? (async () => false),
     },
     now: () => clock.now(),
     after: (ms, run) => clock.after(ms, run),
@@ -84,6 +122,10 @@ export function fakeServe(
       unheld: (...args) => answer('unheld')(...args),
       visit: (...args) => answer('visit')(...args),
       remove: (...args) => answer('remove')(...args),
+      queue: (...args) => answer('queue')(...args),
+      queued: (...args) => answer('queued')(...args),
+      delivered: (...args) => answer('delivered')(...args),
+      mail: (...args) => answer('mail')(...args),
     },
   })
   const serve: FakeServe = {
@@ -152,7 +194,7 @@ function connectTo(serve: Pick<FakeServe, 'fetch'>, { provider, tell = async () 
       await served.replay()
       await listeners.replay(connected)
     },
-    wait,
+    clock: timers,
   })
   const served = serveProviders({ serve: client, listeners, ...(provider === undefined ? {} : { provider }), tell, sessionCode, ...(device === undefined ? {} : { device }), after, report })
   return { client, served }

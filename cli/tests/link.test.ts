@@ -1,9 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, fourStepInstall, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, fourStepInstall, spawned, spawningTestLimitMs, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const settings = `{
@@ -39,7 +40,7 @@ const linkedMarketplace = (home: string) => join(home, 'Developer', '.claude-plu
 test("link lists the checkout in a marketplace in its parent folder beside the cmod plugin, excludes that file from the parent's git, installs it from there, and turns the published copy off, and unlink undoes each", async () => {
   const { home, checkout, target, link } = await linkedHome(settings)
   await writeFiles(home, { 'bin/claude': claudeWithPublished(join(home, 'cache/demo/0.1.0')), 'cache/demo/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
-  expect(await Bun.spawn(['git', 'init', '--quiet', join(home, 'Developer')]).exited).toBe(0)
+  expect(await spawned(['git', 'init', '--quiet', join(home, 'Developer')]).exited).toBe(0)
   const excludes = join(home, 'Developer', '.git', 'info', 'exclude')
   const excludedBefore = await readFile(excludes, 'utf8')
 
@@ -123,7 +124,7 @@ test("link keeps the installed copy's program beside the checkout's build, and u
   const programs = join(home, '.local/share/cmod/programs/hello')
   const released = join(home, '.local/share/cmod/bin/hello/0.2.0/hello')
   const built = `${released}.linked`
-  const outputOf = async () => new Response(Bun.spawn([programs], { stdout: 'pipe' }).stdout).text()
+  const outputOf = async () => new Response(spawned([programs], { stdout: 'pipe' }).stdout).text()
   expect((await cmod(home, 'setup', copy)).exitCode).toBe(0)
 
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
@@ -297,7 +298,7 @@ test('link builds the program cli/ declares into the store and points ~/.local/b
 
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
   expect(await readlink(entry)).toBe(target)
-  expect(await new Response(Bun.spawn([entry], { stdout: 'pipe' }).stdout).text()).toBe('hello from the build\n')
+  expect(await new Response(spawned([entry], { stdout: 'pipe' }).stdout).text()).toBe('hello from the build\n')
 
   expect((await cmod(home, 'unlink', checkout)).exitCode).toBe(0)
   expect(existsSync(entry)).toBe(false)
@@ -343,7 +344,7 @@ test('link names a Rust program by its one [[bin]], not by its package', async (
   })
 
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
-  expect(await new Response(Bun.spawn([join(home, '.local/bin/demo-binary')], { stdout: 'pipe' }).stdout).text()).toBe('greeted by cargo\n')
+  expect(await new Response(spawned([join(home, '.local/bin/demo-binary')], { stdout: 'pipe' }).stdout).text()).toBe('greeted by cargo\n')
   expect(existsSync(join(home, '.local/bin/demo-crate'))).toBe(false)
 })
 
@@ -477,7 +478,7 @@ test('link installs a repacked file: tarball dependency, not the copy already in
   const tarball = join(home, 'tiny', 'tiny-1.0.0.tgz')
   const pack = async (text: string) => {
     await writeFiles(home, { 'tiny/package.json': JSON.stringify({ name: 'tiny', version: '1.0.0' }), 'tiny/index.js': text })
-    expect(await Bun.spawn([process.execPath, 'pm', 'pack', '--quiet'], { cwd: join(home, 'tiny'), stdout: 'ignore' }).exited).toBe(0)
+    expect(await spawned([process.execPath, 'pm', 'pack', '--quiet'], { cwd: join(home, 'tiny'), stdout: 'ignore' }).exited).toBe(0)
   }
   await writeFiles(checkout, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),

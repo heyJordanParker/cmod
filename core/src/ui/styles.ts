@@ -48,6 +48,8 @@ export type Style = {
   remove(): void
 }
 
+export const modComponents: readonly RenderComponent[] = ['AbovePrompt', 'Pane', ...new Set(Object.values(components))]
+
 export function componentOf(kind: Kind): Exclude<RenderComponent, 'Pane'> | undefined {
   return typeof kind === 'string' && Object.hasOwn(components, kind) ? components[kind] : undefined
 }

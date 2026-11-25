@@ -3,7 +3,8 @@ import { AbovePrompt, BelowPrompt, Dashboard, defineMod, Prompt, TurnEnd, Workin
 import { storeChangedPath, widgetsPath } from '../../src/records.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { keptDrawInputs, partMethods } from '../../src/runtime/ui.js'
-import { drawnParts } from '../../src/runtime/parts.js'
+import { drawnParts, serveParts } from '../../src/runtime/parts.js'
+import { messageOf } from '../../src/utils/text.js'
 import { claudeHint, claudeModes, layoutOf, moved, serveWidgets, toggled, type PlacedWidget, type WidgetLayout } from '../../src/runtime/widgets.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -238,10 +239,11 @@ test('a press runs the button of the drawing the person saw, after the widget dr
 const servedLayout = (layout: string) => {
   const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
   Object.assign(fake.fakes.fs, fakeFiles({ [layoutFile]: layout }))
-  const widgets = serveWidgets({ claude: fake.claude, router: createRouter(), store: '/test/home/.local/share/cmod', report: () => undefined, turnClosedBy: () => undefined, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), markdownIn: () => undefined })
+  const toldStore: string[] = []
+  const widgets = serveWidgets({ claude: fake.claude, router: createRouter(), store: '/test/home/.local/share/cmod', report: () => undefined, turnClosedBy: () => undefined, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), markdownIn: () => undefined, tellStore: (part) => void toldStore.push(part) })
   const tell = (caller: string, listed: unknown) => widgets.update(caller, { parts: { widgets: listed as never, pages: [] } })
   const saved = async () => layoutOf(JSON.parse(await fake.claude.fs.read(layoutFile)))
-  return { fake, widgets, tell, saved }
+  return { fake, widgets, tell, saved, toldStore }
 }
 
 test('a widget draws once for each surface it shows on, and its mod hears which surface each draw is for', async () => {
@@ -258,6 +260,28 @@ test('a widget draws once for each surface it shows on, and its mod hears which 
   await fake.settle()
 
   expect(drawnFor).toEqual(['browser', 'terminal'])
+})
+
+test("a widget keeps its row with its last drawing while its drawing at a new width or after its mod's redraw fills", async () => {
+  const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
+  const answers: ((value: unknown) => void)[] = []
+  fake.fakes.cmod.call = (input) => (input.method === partMethods.draw ? new Promise((resolve) => answers.push(resolve)) : Promise.resolve(null))
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
+  await fake.settle()
+  const shown = (columns: number) => elementData(widgets.rows(BelowPrompt, { columns, surface: 'terminal' }), () => 0)
+  const text = (children: string) => ({ draw: 1, tree: { $cmodElement: 'Text', props: { children } } })
+  shown(80)
+  answers.shift()?.(text('main at 80'))
+  await fake.settle()
+
+  const atNewWidth = JSON.stringify(shown(60))
+  widgets.update('demo', { changed: ['branch'] })
+  const afterRedraw = JSON.stringify(shown(60))
+  answers.splice(0).forEach((answer) => answer(text('main at 60')))
+  await fake.settle()
+
+  expect([atNewWidth, afterRedraw].map((drawn) => drawn.includes('main at 80'))).toEqual([true, true])
+  expect(JSON.stringify(shown(60))).toContain('main at 60')
 })
 
 test('a mod that lists a new widget asks Claude Code for one redraw, not one to place the widget and one to draw it', async () => {
@@ -293,17 +317,19 @@ test('a fit widget keeps its width, a fill widget gives up width, only a side ho
   ])
 })
 
-test('a layout change marks store-changed, which every other session polls, and placing a new widget marks nothing', async () => {
+test('a layout change marks store-changed, which a released cmod plugin polls, and tells cmod/Store that the widgets changed, and placing a new widget marks and tells nothing', async () => {
   const stamp = storeChangedPath('/test/home/.local/share/cmod')
-  const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
+  const { fake, widgets, tell, toldStore } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
   tell('other',[{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   await fake.settle()
   expect(await fake.claude.fs.exists(stamp)).toBe(false)
+  expect(toldStore).toEqual([])
 
   await widgets.change((current) => toggled(current, 'demo/branch'))
 
   expect(await fake.claude.fs.exists(stamp)).toBe(true)
+  expect(toldStore).toEqual(['widgets'])
 })
 
 test('a store change that leaves the widget layout as it was asks Claude Code for no redraw, and one that moves a widget asks for one', async () => {
@@ -442,7 +468,7 @@ test('two presses whose handlers overlap leave the mod telling the cmod plugin a
   await call('bump', null, 'other')
   await tested.settle()
 
-  expect(heard).toContainEqual({ redraw: true })
+  expect(heard).toContainEqual({ redraw: true, changed: ['runs'] })
 })
 
 test('a state change that leaves every drawing the same tells the cmod plugin nothing, and a press on that drawing runs with the newest state', async () => {
@@ -486,7 +512,115 @@ test('a state change that leaves every drawing the same tells the cmod plugin no
 
   expect(afterBump).toEqual([])
   expect(pressed).toEqual([1])
-  expect(heard).toEqual([{ redraw: true }])
+  expect(heard).toEqual([{ redraw: true, changed: ['runs'] }])
+})
+
+test('a state change tells the cmod plugin each part whose drawing changed, and the changes of the next 100 ms reach it as one tell', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      state: { session: { runs: 0, logs: 0 } },
+      setup(mod) {
+        mod.views.add({ id: 'runs', title: 'Runs', render: (current) => Text({ children: `runs ${current.state.session.runs}` }) })
+        mod.views.add({ id: 'logs', title: 'Logs', render: (current) => Text({ children: `logs ${current.state.session.logs}` }) })
+        return { run: () => void (mod.state.session.runs += 1), log: () => void (mod.state.session.logs += 1) }
+      },
+    }),
+  )
+  const heard: unknown[] = []
+  const kit = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (call) => {
+    if (call.to === 'cmod' && call.method === partMethods.changed) heard.push(call.input)
+    return kit?.(call)
+  }
+  const cooling: (() => void)[] = []
+  tested.fakes.clock.after = (ms, run) => {
+    if (ms === 100) cooling.push(run)
+    else void Promise.resolve().then(run)
+    return { cancel: () => undefined }
+  }
+  const cooled = async () => {
+    for (const run of cooling.splice(0)) run()
+    await tested.settle()
+  }
+  await tested.start()
+  await tested.settle()
+  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'demo', method, input, caller } as never)
+  for (const page of ['runs', 'logs']) await call(partMethods.draw, { page, params: null, columns: 40, isFocused: true, surface: 'terminal' })
+  await cooled()
+  heard.length = 0
+
+  await call('run', null, 'other')
+  await tested.settle()
+  const first = [...heard]
+  await call('log', null, 'other')
+  await call('run', null, 'other')
+  await tested.settle()
+  const whileCooling = [...heard]
+  await cooled()
+
+  expect(first).toEqual([{ redraw: true, changed: ['runs'] }])
+  expect(whileCooling).toEqual(first)
+  expect(heard).toEqual([{ redraw: true, changed: ['runs'] }, { redraw: true, changed: ['runs', 'logs'] }])
+})
+
+test('a drawing Claude Code would refuse reaches the Log once per part and rule, and the part keeps its last good drawing', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
+  const good = { $cmodElement: 'Text', props: { children: 'last run passed' } }
+  const twice = { $cmodElement: 'Box', props: { children: [{ $cmodElement: 'Text', props: { children: 'run 8' } }, { $cmodElement: 'Input', props: { key: 'find', label: 'Find' } }, { $cmodElement: 'Input', props: { key: 'find', label: 'Find' } }] } }
+  let tree: unknown = good
+  fake.fakes.cmod.call = async () => ({ draw: 1, tree })
+  const reported: string[] = []
+  const parts = drawnParts({ claude: fake.claude, report: (id, message, error) => void reported.push(`${id} ${message}: ${messageOf(error)}`), press: () => undefined })
+  await parts.fill('demo', 'runs', { page: 'runs' }, 'The runs page')
+
+  tree = twice
+  for (let redraws = 0; redraws < 2; redraws += 1) {
+    parts.forget('demo')
+    await parts.fill('demo', 'runs', { page: 'runs' }, 'The runs page')
+  }
+
+  expect(JSON.stringify(elementData(parts.element('demo', 'runs', 'demo/runs:', 'The runs page', 'page'), () => 0))).toContain('last run passed')
+  expect(reported).toEqual(['refused:demo/runs The runs page drew what Claude Code refuses: Input "find" is drawn twice; each takes its own key'])
+})
+
+test('an app asking for a part hears null only before its first drawing, and an empty element for a part that drew nothing', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
+  let answer: (value: unknown) => void = () => undefined
+  fake.fakes.cmod.call = (input) => (input.method === partMethods.draw ? new Promise((resolve) => (answer = resolve)) : Promise.resolve(null))
+  const served = serveParts({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined, tellUi: () => undefined })
+  served.update('demo', { parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'sidebar' }] } })
+  const draw = served.ui['draw'] as (session: string, part: unknown, at: unknown) => Promise<unknown>
+  const drawn = (columns: number) => draw('test-session', { mod: 'demo', id: 'runs' }, { columns, surface: 'browser' })
+
+  const filling = drawn(80)
+  answer({ draw: 1, tree: null })
+  const empty = await filling
+  const atNewWidth = drawn(60)
+  answer(null)
+
+  expect(empty).toEqual({ $cmodElement: 'Box', props: {} })
+  expect(await atNewWidth).toEqual({ $cmodElement: 'Box', props: {} })
+})
+
+test('the cmod plugin draws again only the parts a mod names as changed, and every part of a mod that names none', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
+  const asked: string[] = []
+  fake.fakes.cmod.call = async (call) => {
+    const { page } = call.input as { readonly page: string }
+    asked.push(page)
+    return { draw: asked.length, tree: null }
+  }
+  const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
+  const fillBoth = () => Promise.all(['runs', 'logs'].map((page) => parts.fill('demo', page, { page }, `The ${page} page`)))
+  await fillBoth()
+
+  parts.forget('demo', ['runs'])
+  await fillBoth()
+  parts.forget('demo')
+  await fillBoth()
+
+  expect(asked).toEqual(['runs', 'logs', 'runs', 'runs', 'logs'])
 })
 
 test("a widget's button keeps working however many other drawings come after it", async () => {

@@ -12,14 +12,14 @@ import { Skill } from '@cmodjs/core/src/session/context/turn/message/skill.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import type { ContextData, SessionChange, SessionData, TaskData, TurnData } from '@cmodjs/core/src/session/conversation.js'
-import type { Usage } from '@cmodjs/core/src/session/session.js'
-import { conversationMethods } from '@cmodjs/core/src/runtime/sessions.js'
+import type { SendReceipt, Usage } from '@cmodjs/core/src/session/session.js'
+import { hearServe } from '@cmodjs/core/src/runtime/bun.js'
+import { listeningOf, sessionsInterface, type Mail, type SessionsChange } from '@cmodjs/core/src/runtime/interfaces.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { followSessions, foldersIn, openHistory, readContexts, readFolders, readGoal, readMessages, readState, readTasks, readTurns, readUsage, type Scope } from '../history.js'
+import { conversationMethods } from '@cmodjs/core/src/runtime/sessions.js'
+import { followSessions, foldersIn, hasTranscript, openHistory, readContexts, readFolders, readGoal, readMessages, readState, readTasks, readTurns, readUsage, type Scope } from '../history.js'
 import { withScript, type Script } from '../script.js'
 import { storePath, takeLock } from '../store.js'
-
-const refusesSendTo = ['has no "sendTo" action.', 'answers no cmod/Sessions.sendTo.', 'takes no action named sendTo.']
 
 export const summary = 'Find, read, and drive Claude Code sessions on every device cmod reaches.'
 
@@ -32,8 +32,9 @@ export const help = `Usage: cmod sessions list [--every-project] [--since 2d] [-
        cmod sessions read goal [<session>] [--task <id>] [--json]
        cmod sessions read usage [<session>] [--task <id>] [--json]
        cmod sessions read state [<session>] [--json]
+       cmod sessions read mail [<session>] [--last <n>] [--json]
        cmod sessions read <part> <session> --transcripts <folder> [--json]
-       cmod sessions send <session> <text> [--note]
+       cmod sessions send <session> <text> [--note] [--reply-to <mail>]
        cmod sessions start <prompt> --title <title> [--agent-type <type>] [--model <model>] [--cwd <folder>] [--device <name>] [--json]
        cmod sessions fork <prompt> --title <title> [--session <id>] [--at <message>] [--json]
        cmod sessions stop <session>
@@ -48,14 +49,17 @@ ${summary}
 list, search, read, and every command that acts on a session go through cmod
 serve, so they reach the sessions of this computer and of each device a sessions
 provider serves, as a mod's sessions import does. A <session> is the id list
-prints. Inside Claude Code, CLAUDE_CODE_SESSION_ID names this session, which a
-command takes when it names none.
+prints, or any start of it that no other session shares, as git takes a commit.
+A start two sessions share fails and lists both. Inside Claude Code,
+CLAUDE_CODE_SESSION_ID names this session, which a command takes when it names
+none.
 
 list lists the conversations of the project, newest first: the current
 folder's, or --project's, and with --every-project every project's. Each line
 names the device the session runs on, and whether it runs or waits on a dialog.
 --since keeps those active in the last 30m, 6h, 2d, or 1w, or since a date such
-as 2026-10-01, and --running keeps those open in Claude Code now.
+as 2026-10-01, and --running keeps those open in Claude Code now, in every
+project unless --project names one.
 
 search prints the newest 50 messages whose text or tool input contains the
 text, at least 3 characters, each with the words around the match. Each tool
@@ -80,7 +84,9 @@ conversation started, with --task the tasks that task started, and with
 for: the goal a mod set, or its first prompt. read usage prints the model and
 the context's tokens as of the last reply. --task reads turns, contexts, goal,
 and usage of the agent a task runs. read state prints what a running
-conversation on this computer resumes from.
+conversation on this computer resumes from. read mail prints the mail sent to
+the session and sent by it, oldest first, each delivered or still queued, and
+--last keeps that many from the end.
 
 read --transcripts reads the conversation from the transcripts in
 <folder>/projects, a Claude Code folder such as one copied from another
@@ -88,8 +94,14 @@ computer, through an index of its own that lives only while the command runs,
 so cmod's own index of this computer's conversations never lists it.
 
 send sends the session a prompt, which it answers as its next turn, or with
---note a note it reads with its next prompt. Inside Claude Code the prompt goes
-from this session, so the session it reaches knows who sent it. A session that
+--note a note it reads with its next prompt, and prints whether it delivered or
+queued the message, with its id, and the start of the id and the title of the
+session it reached. cmod serve stores the message before it delivers it, so a
+session whose cmod plugin does not reach cmod serve, as when Claude Code turns
+its mods off after its hooks worker crashes, gets it once the session is
+resumed, even after a restart. Inside Claude Code the mail
+goes from this session, and arrives labelled with this session's id and title
+and the command that answers it, which --reply-to <mail> sends. A session that
 ended resumes on the prompt.
 
 start starts a background session on a task, and fork starts one on a copy of
@@ -105,13 +117,17 @@ prompts Claude to carry on. delete deletes a session that ended: its
 transcripts, goal, tasks, and index rows.
 
 follow prints each message, turn, context, task, and goal change of this
-computer's sessions named as Claude Code saves them, until stopped. With
---running it follows every running session of the project too, and each one
-that starts later, except the session that runs it.
+computer's sessions named as Claude Code saves them, until stopped. It reads
+a session again each time cmod serve tells that its messages changed, and
+everything again each time it connects to cmod serve. With --running it
+follows every running session of the project too, and each one that starts
+later, except the session that runs it.
 
 index indexes every saved conversation on this computer.`
 
-const parts: readonly string[] = ['messages', 'turns', 'contexts', 'tasks', 'goal', 'usage', 'state']
+const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+const parts: readonly string[] = ['messages', 'turns', 'contexts', 'tasks', 'goal', 'usage', 'state', 'mail']
 
 const searchedChars = { before: 60, after: 140 }
 
@@ -141,6 +157,7 @@ export async function run(argv: string[]): Promise<number> {
       json: { type: 'boolean', default: false },
       transcripts: { type: 'string' },
       note: { type: 'boolean', default: false },
+      'reply-to': { type: 'string' },
       keep: { type: 'string' },
       title: { type: 'string' },
       at: { type: 'string' },
@@ -163,10 +180,18 @@ async function onServe(script: Script, command: string, rest: readonly string[],
   const act = (session: string, action: string, input: unknown, task?: string) => script.answer(conversationMethods.act, { session, action, input, ...(task === undefined ? {} : { task }) })
   const ask = <Value>(method: string, input: object) => script.answer(method, input) as Promise<Value>
   const flags = (keys: readonly string[]): Readonly<Record<string, unknown>> => Object.fromEntries(keys.flatMap((key) => (values[key] === undefined ? [] : [[key, values[key]]])))
-  const named = (verb: string) => {
+  const resolved = async (given: string): Promise<string> => {
+    if (sessionId.test(given) || !/^[0-9a-f-]+$/.test(given)) return given
+    const matches = (await ask<SessionData[]>(conversationMethods.sessions, { everyProject: true })).filter((session) => session.id.startsWith(given))
+    const [only] = matches
+    if (matches.length === 1 && only !== undefined) return only.id
+    if (matches.length === 0) throw new Error(`no session id starts with ${given}. cmod sessions list --every-project lists the sessions.`)
+    throw new Error(`${matches.length} sessions start with ${given}. Give more of the id:\n${matches.map(sessionLine).join('').trimEnd()}`)
+  }
+  const named = async (verb: string) => {
     const session = rest[0] ?? own
     if (rest.length > 1 || session === undefined) throw new Error(`cmod sessions ${verb} takes a session id outside Claude Code. cmod sessions list lists them.`)
-    return session
+    return resolved(session)
   }
   const ownOrRefuse = (verb: string) => {
     if (own === undefined) throw new Error(`cmod sessions ${verb} runs inside Claude Code, which names the session the task belongs to in CLAUDE_CODE_SESSION_ID.`)
@@ -174,7 +199,8 @@ async function onServe(script: Script, command: string, rest: readonly string[],
   }
   const task = typeof values['task'] === 'string' ? { task: values['task'] } : {}
   if (command === 'list' && rest.length === 0) {
-    const sessions = await ask<SessionData[]>(conversationMethods.sessions, { ...sinceOf(values['since']), ...(values['every-project'] === true || values['all'] === true ? { everyProject: true } : {}), ...(values['running'] === true ? { running: true } : {}) })
+    const isEveryProject = values['every-project'] === true || values['all'] === true || (values['running'] === true && values['project'] === undefined)
+    const sessions = await ask<SessionData[]>(conversationMethods.sessions, { ...sinceOf(values['since']), ...(isEveryProject ? { everyProject: true } : {}), ...(values['running'] === true ? { running: true } : {}) })
     print(sessions, () => sessions.map(sessionLine).join(''))
     return 0
   }
@@ -192,10 +218,10 @@ async function onServe(script: Script, command: string, rest: readonly string[],
   }
   if (command === 'read') {
     const [part, ...ids] = rest
-    const session = (() => {
+    const session = await (async () => {
       const id = ids[0] ?? own
       if (ids.length > 1 || id === undefined) throw new Error(`cmod sessions read ${part ?? ''} takes a session id outside Claude Code. cmod sessions list lists them.`)
-      return id
+      return resolved(id)
     })()
     const lasts = values['last'] === undefined ? {} : { last: countOf('--last', String(values['last'])) }
     if (part === 'messages') {
@@ -228,16 +254,24 @@ async function onServe(script: Script, command: string, rest: readonly string[],
       print(usage, () => `${usage.model}  ${usage.contextWindow.tokenCount ?? 0} tokens\n`)
       return 0
     }
+    if (part === 'mail') {
+      const mail = await ask<Mail[]>(conversationMethods.mail, { session, ...lasts })
+      print(mail, () => mail.map(mailLine).join(''))
+      return 0
+    }
   }
   if (command === 'send' && rest.length === 2) {
-    const [session, text] = rest as [string, string]
+    const [given, text] = rest as [string, string]
     if (text.trim() === '') throw new Error('cmod sessions send takes the text to send.')
-    const sent = { type: values['note'] === true ? Note : Prompt, text }
-    await (own === undefined ? act(session, 'send', sent) : act(own, 'sendTo', { ...sent, to: session }).catch((error: unknown) => {
-      if (!refusesSendTo.some((refusal) => messageOf(error).endsWith(refusal))) throw error
-      return act(session, 'send', sent)
-    }))
-    process.stdout.write(`Sent session ${session} the ${values['note'] === true ? 'note' : 'prompt'}.\n`)
+    const replyTo = values['reply-to'] === undefined ? {} : { replyTo: countOf('--reply-to', String(values['reply-to'])) }
+    const session = await resolved(given)
+    const reached = await ask<SessionData | undefined>(conversationMethods.session, { session })
+    const from = own === undefined ? {} : { from: { session: own, title: (await ask<SessionData>(conversationMethods.session, { session: own })).title } }
+    const receipt = ((await act(session, 'send', { type: values['note'] === true ? Note : Prompt, text, ...from, ...replyTo })) ?? { state: 'delivered' }) as SendReceipt
+    const named = `session ${session.slice(0, 8)}${reached === undefined || reached.title === '' ? '' : ` (${reached.title})`}`
+    const message = receipt.id === undefined ? 'the message' : `message ${receipt.id}`
+    const queued = `Queued ${message} for ${named}. Its cmod plugin has not reached cmod serve, which happens when Claude Code turns a session's mods off after its hooks worker crashes. It gets the message once the session is resumed.`
+    process.stdout.write(`${receipt.state === 'delivered' ? `Delivered ${message} to ${named}.` : queued}\n`)
     return 0
   }
   if (command === 'start' && rest.length === 1) {
@@ -246,36 +280,36 @@ async function onServe(script: Script, command: string, rest: readonly string[],
     return 0
   }
   if (command === 'fork' && rest.length === 1) {
-    const source = typeof values['session'] === 'string' ? values['session'] : ownOrRefuse('fork')
+    const source = typeof values['session'] === 'string' ? await resolved(values['session']) : ownOrRefuse('fork')
     const forked = (await act(source, 'fork', { prompt: rest[0], title: titleOf(values, 'fork'), isBackground: true, ...flags(['at']) })) as TaskData
     print(forked, () => `${forked.id}  ${forked.title}\n`)
     return 0
   }
   if (command === 'stop') {
-    const session = named('stop')
+    const session = await named('stop')
     await act(session, 'abort', {})
     process.stdout.write(`Stopped the turn of session ${session}.\n`)
     return 0
   }
   if (command === 'end') {
-    const session = named('end')
+    const session = await named('end')
     await act(session, 'end', null)
     process.stdout.write(`Session ${session} ends once its turn ends.\n`)
     return 0
   }
   if (command === 'compact') {
-    const session = named('compact')
+    const session = await named('compact')
     await act(session, 'compact', values['keep'] === undefined ? {} : { keep: values['keep'] })
     process.stdout.write(`Session ${session} compacts once its turn ends, and then carries on.\n`)
     return 0
   }
   if (command === 'delete') {
-    const session = named('delete')
+    const session = await named('delete')
     await act(session, 'delete', null)
     process.stdout.write(`Deleted session ${session}.\n`)
     return 0
   }
-  throw new Error(`cmod sessions takes list, search <text>, read <messages|turns|contexts|tasks|goal|usage|state> [<session>], send <session> <text>, start <prompt>, fork <prompt>, stop, end, compact, or delete <session>, follow <session>, or index.\n\n${help}`)
+  throw new Error(`cmod sessions takes list, search <text>, read <messages|turns|contexts|tasks|goal|usage|state|mail> [<session>], send <session> <text>, start <prompt>, fork <prompt>, stop, end, compact, or delete <session>, follow <session>, or index.\n\n${help}`)
 }
 
 function readTranscripts(command: string, rest: readonly string[], values: Values, project: string, print: (value: unknown, lines: () => string) => void): number {
@@ -315,22 +349,37 @@ function readTranscripts(command: string, rest: readonly string[], values: Value
   }
 }
 
+function followServe(sessions: readonly (string | undefined)[], parts: readonly SessionsChange['part'][], told: (change: SessionsChange | undefined) => void): ReturnType<typeof hearServe> {
+  return hearServe(
+    sessions.map((session) => listeningOf(sessionsInterface, 'on', 'Change', session === undefined ? [] : [session], { part: parts })),
+    told,
+    (error) => void process.stderr.write(`cmod sessions follow: hears no change from cmod serve: ${messageOf(error)}\n`),
+  )
+}
+
 async function readHere(command: string, rest: readonly string[], values: Values, project: string, print: (value: unknown, lines: () => string) => void): Promise<number> {
   const db = openHistory()
   try {
     if (command === 'read') {
       const session = rest[1] ?? process.env['CLAUDE_CODE_SESSION_ID']
       if (rest.length > 2 || session === undefined || session === '') throw new Error('cmod sessions read state takes a session id outside Claude Code. cmod sessions list lists them.')
+      if (!hasTranscript(session, project)) throw new Error(`cmod sessions read state reads what a conversation on this computer resumes from, and session ${session} has no transcript on this computer. cmod sessions read turns ${session} reads it on any device.`)
       print(readState(db, { session, project }), () => `${JSON.stringify(readState(db, { session, project }))}\n`)
       return 0
     }
     if (command === 'follow' && (rest.length > 0 || values['running'] === true)) {
-      const stop = new AbortController()
-      process.once('SIGINT', () => stop.abort())
-      process.once('SIGTERM', () => stop.abort())
-      const following = followSessions(db, { sessions: rest, isEveryRunning: values['running'] === true }, project, (session, change, isInProject) => process.stdout.write(values['json'] === true ? `${JSON.stringify({ session, isInProject, change })}\n` : changeLine(session, change)), stop.signal)
-      process.stderr.write(`Following ${[...rest, ...(values['running'] === true ? ['every running session of the project'] : [])].join(', ')}. Stop with Ctrl+C.\n`)
-      await following
+      const isEveryRunning = values['running'] === true
+      const follower = followSessions(db, { sessions: rest, isEveryRunning }, project, (session, change, isInProject) => process.stdout.write(values['json'] === true ? `${JSON.stringify({ session, isInProject, change })}\n` : changeLine(session, change)))
+      const serve = followServe(isEveryRunning ? [undefined] : rest, isEveryRunning ? ['messages', 'running'] : ['messages'], (told) => {
+        if (told === undefined || told.part === 'running') follower.look()
+        follower.step(told?.session)
+      })
+      process.stderr.write(`Following ${[...rest, ...(isEveryRunning ? ['every running session of the project'] : [])].join(', ')}. Stop with Ctrl+C.\n`)
+      await new Promise((resolve) => {
+        process.once('SIGINT', resolve)
+        process.once('SIGTERM', resolve)
+      })
+      await serve.close()
       return 0
     }
     if (command === 'index' && rest.length === 0) {
@@ -385,6 +434,10 @@ function localTime(at: string, withDate = false): string {
 function senderWords(from: Sender): string {
   const name = from.name === undefined ? '' : ` ${from.name}`
   return `${from.type}${name}${from.as === Person ? ' as person' : ''}`
+}
+
+function mailLine(mail: Mail): string {
+  return `${localTime(mail.sentAt, true)}  ${mail.id}  ${mail.deliveredAt === undefined ? 'queued' : 'delivered'}  from ${mail.from ?? 'outside a session'} to ${mail.session}  ${mail.type}  ${firstLine(mail.text)}\n`
 }
 
 function messageLine(message: SessionMessage, withSession: boolean): string {

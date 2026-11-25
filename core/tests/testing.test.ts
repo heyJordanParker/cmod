@@ -512,7 +512,7 @@ test('a view that draws one key on two Markdown elements fails as Claude Code 2.
 test('a widget that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses its row', async () => {
   const tested = testMod(ideas)
 
-  await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "demo/next:item-text:0" is drawn twice; each takes its own key')
+  await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "item-text:0" is drawn twice; each takes its own key')
 })
 
 test('a view whose Button hover has no keyed Box around it fails as Claude Code 2.1.318 refuses the Sidebar, and one inside a keyed Box or naming a scope draws', async () => {

@@ -1,7 +1,7 @@
 import { program } from '../node_modules/@cmodjs/core/jobs/program.js'
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
-import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, parseEvent, parseLinks, parsePluginsChanged, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, parseEvent, parseLinks, parsePluginsChanged, pluginsChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { heldInput } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
@@ -85,9 +85,10 @@ type SyncedRules = {
 }
 
 async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
-  const messages = await engineOf(mod).claude.session.messages()
+  const messages = await engineOf(mod).claude.session.messages({ last: newestMessages })
+  if (!Array.isArray(messages)) throw new Error(`Claude Code did not give the newest messages: ${messages.deny}`)
   if (messages.length === 0) return null
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([messages.length, messages.slice(-newestMessages)])))
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(messages)))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
@@ -414,12 +415,15 @@ export const cmodPlugin = defineMod({
     const startWatching = () => void watchIfLinked().catch((error: unknown) => report({ id: 'watch', message: 'Could not read which mods are linked', error }))
     startWatching()
 
-    fs.onChange({ path: [storeChangedPath(store), ...(pluginsFile === undefined ? [] : [pluginsFile])] }, ({ path }) => {
-      startWatching()
-      checkPlugins({ isForced: false })
-      if (path === pluginsFile) return checkChanges()
-      void followBuildFailures()
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod), shown.refreshSettings()])
+    engineOf(mod).onStoreChange((part) => {
+      const isAll = part === undefined
+      if (isAll || part === 'plugins' || part === 'links') {
+        startWatching()
+        checkPlugins({ isForced: false })
+      }
+      if (isAll || part === 'buildFailures') void followBuildFailures()
+      const reads = [isAll || part === 'widgets' ? widgets.reload() : undefined, isAll || part === 'plugins' || part === 'links' ? checkChanges() : undefined, isAll || part === 'preferences' ? refreshPreferences(mod) : undefined, isAll || part === 'preferences' ? shown.refreshSettings() : undefined]
+      void Promise.all(reads).catch((error: unknown) => report({ id: 'store', message: 'Could not read the cmod store again', error }))
     })
     settings.onChange({ source: 'user' }, () => checkChanges())
     sessions.current.onPrompt(() => checkChanges())

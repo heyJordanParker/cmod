@@ -122,8 +122,8 @@ declare module 'claude-code' {
         sessions(scope?: { project?: string; everyProject?: boolean; running?: boolean; since?: string }): { id: string; title: string; color?: string; project: string; cwd: string; model: string; startedAt: string; lastAt: string; forkedFrom?: string; isRunning: boolean; agentType?: string; transcriptPath?: string; visitedAt?: string; device?: { id: string; name: string }; status?: 'busy' | 'shell' | 'idle' | 'waiting'; waitingFor?: { dialog: string; tool?: string; input?: Record<string, unknown>; question?: string }; contextPercent?: number; lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string } }[]
         session(session: string): { id: string; title: string; color?: string; project: string; cwd: string; model: string; startedAt: string; lastAt: string; forkedFrom?: string; isRunning: boolean; agentType?: string; transcriptPath?: string; visitedAt?: string; device?: { id: string; name: string }; status?: 'busy' | 'shell' | 'idle' | 'waiting'; waitingFor?: { dialog: string; tool?: string; input?: Record<string, unknown>; question?: string }; contextPercent?: number; lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string } }
         search(text: string, options?: { project?: string; everyProject?: boolean; running?: boolean; since?: string; limit?: number; before?: { session: string; id: string }; record?: { session?: string; task?: string; turn?: string; context?: number; isAgent?: true } }): unknown[]
-        read(session: string, part: 'messages' | 'turns' | 'contexts' | 'tasks' | 'goal' | 'usage' | 'state', options?: { project?: string; task?: string; turn?: string; context?: number; after?: string; last?: number; all?: true }): unknown
-        send(session: string, message: { type: 'prompt' | 'note'; text: string; as?: 'person' | 'session' }, context?: { project?: string; caller?: string; task?: string }): void
+        read(session: string, part: 'messages' | 'turns' | 'contexts' | 'tasks' | 'goal' | 'usage' | 'state' | 'mail', options?: { project?: string; task?: string; turn?: string; context?: number; after?: string; last?: number; all?: true }): unknown
+        send(session: string, message: { type: 'prompt' | 'note'; text: string; as?: 'person'; from?: { session: string; title: string }; replyTo?: number }, context?: { project?: string; caller?: string; task?: string }): { id?: number; state: 'queued' | 'delivered' }
         abort(session: string, input: { turn?: string } | null, context?: { project?: string; caller?: string; task?: string }): void
         end(session: string, input: null, context?: { project?: string; caller?: string }): void
         fork(session: string, task: { prompt: string; title: string; isBackground?: boolean; at?: string }, context?: { project?: string; caller?: string }): { id: string; title: string; openedBy: string; openedAt: string; forkedFrom?: string; isBackground?: true }
@@ -134,7 +134,15 @@ declare module 'claude-code' {
         visit(session: string, at?: string): void
         delete(session: string, input?: null, context?: { project?: string; caller?: string }): void
       }
-      events: { Change: { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' } }
+      events: { Change: { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' } }
+    }
+    'cmod/Store': {
+      methods: { changed(part: 'plugins' | 'widgets' | 'buildFailures' | 'preferences' | 'links'): void }
+      events: { Change: { readonly part: 'plugins' | 'widgets' | 'buildFailures' | 'preferences' | 'links' } }
+    }
+    'cmod/Programs': {
+      methods: { changed(mod: string, program: string): void }
+      events: { Change: { readonly mod: string; readonly program: string } }
     }
     'cmod/Devices': {
       methods: {
@@ -401,7 +409,7 @@ export { AbovePrompt, BelowPrompt, Dashboard, TurnEnd, Working, type Area, type 
 export type { Step } from './installer.js'
 export type { SlashCommand } from './jobs/slash-command.js'
 export type { Tool } from './jobs/tool.js'
-export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type Sessions, type ForkArgs, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type RateLimit, type CommandRun, type CommandRunAnswer } from './session/session.js'
+export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type SendReceipt, type Sessions, type ForkArgs, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type RateLimit, type CommandRun, type CommandRunAnswer } from './session/session.js'
 export type { Context } from './session/context/context.js'
 export type { Turn } from './session/context/turn/turn.js'
 export type { Device } from './session/context/turn/device.js'

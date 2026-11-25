@@ -1,9 +1,9 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { join } from 'node:path'
 import { readDevice } from '@cmodjs/core/src/runtime/device.js'
-import { capture } from '../src/process.js'
-import { claudeAnswering, cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { captured, claudeAnswering, cmod, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const userConfig = {
@@ -38,7 +38,7 @@ async function demoHome() {
     'repo/src/index.ts': '',
     'loose/.claude/cmods/demo/options.json': JSON.stringify({ depth: 3 }),
   })
-  expect((await capture(['git', 'init', '-q', join(home, 'repo')])).exitCode).toBe(0)
+  expect((await captured(['git', 'init', '-q', join(home, 'repo')])).exitCode).toBe(0)
   return home
 }
 
@@ -122,7 +122,7 @@ test('cmod device prints the device a mod reads with device.read()', async () =>
   const home = await temporaryHome()
 
   const { exitCode, stdout } = await cmod(home, 'device', '--json')
-  const read = await readDevice({ process: { run: (argv) => capture([...argv]) }, fs: { read: (path) => Bun.file(path).text() } })
+  const read = await readDevice({ process: { run: (argv) => captured([...argv]) }, fs: { read: (path) => Bun.file(path).text() } }, join(home, '.local/share/cmod'))
 
   expect(exitCode).toBe(0)
   expect(JSON.parse(stdout)).toEqual(read)

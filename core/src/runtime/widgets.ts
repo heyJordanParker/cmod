@@ -8,6 +8,7 @@ import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
+import type { StorePart } from './interfaces.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
 import { partMethods, styledAt, viewportColumns, type PartsUpdate, type WidgetDeclaration } from './ui.js'
@@ -41,7 +42,7 @@ const widgetSizes = { fit: { flexShrink: 0 }, fill: { flexGrow: 1, flexShrink: 1
 const separator = ''
 
 export type Widgets = {
-  update(mod: string, update: Pick<PartsUpdate, 'parts' | 'redraw'>): void
+  update(mod: string, update: Pick<PartsUpdate, 'parts' | 'redraw' | 'changed'>): void
   widgets(): readonly PlacedWidget[]
   layout(): WidgetLayout
   change(edit: (layout: WidgetLayout) => WidgetLayout): Promise<void>
@@ -118,6 +119,7 @@ export function serveWidgets({
   turnClosedBy,
   parts,
   markdownIn,
+  tellStore = () => undefined,
 }: {
   readonly claude: Claude
   readonly router: Router
@@ -126,6 +128,7 @@ export function serveWidgets({
   readonly turnClosedBy: (rowId: string) => TurnData | undefined
   readonly parts: DrawnParts
   readonly markdownIn: (table: ElementTable, at: StyledAt) => ((props: MarkdownProps) => RenderElement) | undefined
+  readonly tellStore?: (part: StorePart) => void
 }): Widgets {
   const path = widgetsPath(store)
   const declared = new Map<string, readonly WidgetDeclaration[]>()
@@ -158,6 +161,7 @@ export function serveWidgets({
           const kept = isObject(file) ? file : {}
           await claude.fs.write(path, `${JSON.stringify({ ...kept, ...next, areas: { ...(isObject(kept['areas']) ? kept['areas'] : {}), ...next.areas } }, null, 2)}\n`)
           await claude.fs.write(storeChangedPath(store), '')
+          tellStore('widgets')
           stored = next
         }
         place()
@@ -232,7 +236,7 @@ export function serveWidgets({
     const widget = widgetOf(key)
     if (widget === undefined) return undefined
     const element = parts.element(widget.mod, cacheKey(key, area, at, turn), `${key}:`, nameOf(widget), `widget:${key}`)
-    return element === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? 'fit'], children: element })
+    return element === undefined || element === null ? undefined : Box({ ...widgetSizes[widget.place?.size ?? 'fit'], children: element })
   }
 
   const isHidden = (key: string) => layout.hidden.includes(key)
@@ -283,9 +287,9 @@ export function serveWidgets({
   })
 
   return {
-    update(mod, { parts: listing, redraw }) {
-      if (listing === undefined && redraw !== true) return
-      parts.forget(mod)
+    update(mod, { parts: listing, redraw, changed }) {
+      if (listing === undefined && redraw !== true && changed === undefined) return
+      parts.forget(mod, listing === undefined ? changed : undefined)
       if (listing !== undefined) {
         const listed = widgetsOf(listing)
         const isNewList = JSON.stringify(listed) !== JSON.stringify(declared.get(mod) ?? [])

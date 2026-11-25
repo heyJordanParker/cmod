@@ -2,25 +2,22 @@ import { randomBytes } from 'node:crypto'
 import { basename } from 'node:path'
 import type { Server } from 'bun'
 import { isObject } from '@cmodjs/core/src/records.js'
-import { listenMethod, methodName, onMethod, sessionsInterface, uiInterface, type Heard, type Listening, type ProviderIdentity, type StoreChange } from '@cmodjs/core/src/runtime/interfaces.js'
+import { listeningOf, listenMethod, methodName, onMethod, providersInterface, sessionsInterface, showLeaseMs, uiInterface, type Heard, type Listening, type ProviderIdentity, type SessionsChange } from '@cmodjs/core/src/runtime/interfaces.js'
 import type { Peer } from '@cmodjs/core/src/runtime/rpc.js'
 import { htmlOf, type ElementData, type HandlerData } from '@cmodjs/core/src/runtime/web.js'
-import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
+import type { Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
-import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
-import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
-import type { ConversationState, SessionChange, SessionData, TurnData } from '@cmodjs/core/src/session/conversation.js'
+import type { ConversationState, SessionData, TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { hasTranscript, runningEntries, type HistoryIndex, type RunningEntry } from './history.js'
+import type { Subscription } from '@cmodjs/core/src/utils/subscription.js'
+import { hasTranscript, runningEntries, type RunningEntry } from './history.js'
 import type { SessionServer } from './serve.js'
 import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type On, type PressInput, type Screen, type ScreenActions, type UiUnit, type UnitTab } from './web-page.js'
 
 const idleSeconds = 30
-
-const sweepMs = 5000
 
 const summaryQuietMs = 1000
 
@@ -56,8 +53,9 @@ type Agent = {
   readonly openCalls: Map<string, Call>
   messages: SessionMessage[]
   readonly openPages: Set<string>
-  readonly stop: AbortController
   readonly store?: ProviderIdentity
+  feed?: Promise<void> | undefined
+  isFeedDue?: boolean
   readAt?: string
 }
 
@@ -77,7 +75,8 @@ type Stream = {
   notice: string | undefined
   draw: number
   html: string
-  seenAt: number
+  expiry: ReturnType<typeof setTimeout> | undefined
+  renewal: ReturnType<typeof setInterval> | undefined
   timer: ReturnType<typeof setTimeout> | undefined
   controls: ReadonlyMap<number, PressHandler>
   readonly numbers: Map<string, number>
@@ -101,9 +100,11 @@ class Refusal extends Error {
   }
 }
 
+const sessionsChanges = { part: ['status', 'running', 'messages'] }
+
 const unitKey = ({ mod, id }: Pick<UiUnit, 'mod' | 'id'>) => `${mod}/${id}`
 
-export function webApp({ index, sessions }: { readonly index: HistoryIndex; readonly sessions: SessionServer }): WebApp {
+export function webApp({ sessions }: { readonly sessions: SessionServer }): WebApp {
   const agents = new Map<string, Agent>()
   const streams = new Map<string, Stream>()
   const fetched = new Map<string, Fetched>()
@@ -115,6 +116,7 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
   let lastNumber = 0
   const following = new AbortController()
   let isReadingStores = false
+  let isStoresDue = false
 
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod web serve: ${doing}: ${messageOf(error)}\n`)
 
@@ -134,10 +136,10 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
   const serve = sessions.interfaces.handler(app)
   const callOwn = async <Result>(name: string, method: string, args: readonly unknown[]): Promise<Result> => (await serve(methodName(name, method), args, following.signal)) as Result
   const callUi = <Result>(method: string, args: readonly unknown[]) => callOwn<Result>(uiInterface, method, args)
-  const listen = <Payload>(name: string, event: string, heard: (payload: Payload) => void) => {
+  const listen = <Payload>(name: string, event: string, heard: (payload: Payload) => void, matcher?: Listening['matcher']) => {
     const id = `${name} ${event}`
     heardBy.set(id, (payload) => heard(payload as Payload))
-    void Promise.resolve(serve(listenMethod, { id, interface: name, event, kind: 'on' } satisfies Listening, following.signal)).catch((error: unknown) => report(`hears no ${event} of ${name}`, error))
+    void Promise.resolve(serve(listenMethod, { id, interface: name, event, kind: 'on', ...(matcher === undefined ? {} : { matcher }) } satisfies Listening, following.signal)).catch((error: unknown) => report(`hears no ${event} of ${name}`, error))
   }
 
   const fetchedOf = (key: string, read: () => Promise<unknown>): Fetched => {
@@ -178,7 +180,21 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     }
     return fetchedOf(`${session}\nunits`, listed).value as Units | undefined
   }
-  const drawnOf = (session: string, unit: UiUnit, columns: number) => fetchedOf(`${session}\ndraw\n${unitKey(unit)}\n${columns}`, () => callUi('draw', [session, { mod: unit.mod, id: unit.id }, { columns, surface: browserSurface }]))
+  const drawnOf = (session: string, unit: UiUnit, columns: number) => {
+    const key = `${session}\ndraw\n${unitKey(unit)}\n${columns}`
+    if (!fetched.has(key)) {
+      const viewed = viewedDrawings()
+      for (const each of fetched.keys()) if (each.includes('\ndraw\n') && !viewed.has(each)) fetched.delete(each)
+    }
+    return fetchedOf(key, () => callUi('draw', [session, { mod: unit.mod, id: unit.id }, { columns, surface: browserSurface }]))
+  }
+  const viewedDrawings = () =>
+    new Set(
+      [...streams.values()].flatMap((each) => {
+        const [mod = '', id = ''] = each.tab.split('/')
+        return each.cursor === undefined || each.tab === conversationTab ? [] : [`${each.cursor}\ndraw\n${mod}/${id}\n${columnsOf(each)}`]
+      }),
+    )
 
   const statusOf = (agent: Agent) => agent.entry.status ?? agent.summary?.status
   const isWorking = (agent: Agent) => {
@@ -269,8 +285,12 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     const was = stream.shown
     if (shownKey(was) === shownKey(next)) return
     stream.shown = next
+    clearInterval(stream.renewal)
+    stream.renewal = undefined
     if (was !== undefined && was.session !== next?.session) tellShown(stream, was.session, [])
-    if (next !== undefined) tellShown(stream, next.session, [next.unit])
+    if (next === undefined) return
+    tellShown(stream, next.session, [next.unit])
+    stream.renewal = setInterval(() => tellShown(stream, next.session, [next.unit]), showLeaseMs / 2)
   }
 
   const forwarded = (stream: Stream, tree: unknown, session: string, on: On): unknown => {
@@ -474,29 +494,9 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     redrawAll()
   }
 
-  const hear = (agent: Agent, change: SessionChange) => {
-    if (change.type === Message) {
-      const { message } = change
-      if (message.task !== undefined || agent.messages.some((each) => each.id === message.id)) return
-      agent.messages = [...agent.messages, message].slice(-keptMessages)
-      if (message.type === ToolCall) agent.openCalls.set(message.callId, { name: message.name, input: message.input })
-      if (message.type === ToolResult) agent.openCalls.delete(message.callId)
-    } else if ((change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.task === undefined) {
-      agent.isTurnOpen = change.type === TurnStart
-      if (change.type === TurnStart) agent.openCalls.clear()
-      else agent.closedAt = change.turn.closedAt
-      summarizeSoon(summaryQuietMs)
-    } else {
-      return
-    }
-    redrawAll()
-  }
-
   const follow = (entry: RunningEntry): Agent => {
-    const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), stop: new AbortController() }
-    const signal = AbortSignal.any([agent.stop.signal, following.signal])
-    void index.follow([entry.session], entry.cwd, ({ change }) => hear(agent, change), signal).catch((error: unknown) => report(`stopped following ${entry.session}`, error))
-    if (hasTranscript(entry.session, entry.cwd)) void readFeed(agent).catch((error: unknown) => report(`shows no earlier messages of ${entry.session}`, error))
+    const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set() }
+    if (hasTranscript(entry.session, entry.cwd)) readFeedSoon(agent)
     return agent
   }
 
@@ -507,12 +507,30 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
       callOwn<SessionMessage[]>(sessionsInterface, 'read', [session, 'messages', { project, last: feedMessages }]),
       callOwn<TurnData[]>(sessionsInterface, 'read', [session, 'turns', { project, last: 1 }]),
     ])
-    agent.isTurnOpen = state.turn !== undefined && state.turn.closedAt === undefined
+    const isTurnOpen = state.turn !== undefined && state.turn.closedAt === undefined
+    if (isTurnOpen !== agent.isTurnOpen || last?.closedAt !== agent.closedAt) summarizeSoon(summaryQuietMs)
+    agent.isTurnOpen = isTurnOpen
     agent.closedAt = last?.closedAt
+    agent.openCalls.clear()
     for (const [callId, call] of Object.entries(state.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
     const known = new Set(agent.messages.map((message) => message.id))
-    agent.messages = [...messages.filter((message) => !known.has(message.id)), ...agent.messages]
+    agent.messages = [...agent.messages, ...messages.filter((message) => message.task === undefined && !known.has(message.id))].slice(-keptMessages)
     redrawAll()
+  }
+  const readFeedSoon = (agent: Agent) => {
+    if (agent.feed !== undefined) {
+      agent.isFeedDue = true
+      return
+    }
+    agent.feed = readFeed(agent)
+      .catch((error: unknown) => report(`shows no new messages of ${agent.entry.session}`, error))
+      .finally(() => {
+        agent.feed = undefined
+        if (!agent.isFeedDue) return
+        agent.isFeedDue = false
+        readFeedSoon(agent)
+      })
+      .then(() => undefined)
   }
 
   const guarded = (doing: string, run: () => void) => () => {
@@ -542,7 +560,6 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     let isChanged = false
     for (const [id, agent] of agents) {
       if (running.has(id) || agent.store !== undefined) continue
-      agent.stop.abort()
       agents.delete(id)
       forget(id)
       isChanged = true
@@ -565,7 +582,27 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     registryTimer ??= setTimeout(readRegistry, 0)
   }
 
-  const storesOf = () => sessions.providers.list(sessionsInterface)
+  const storeChanges = new Map<string, Promise<Subscription | undefined>>()
+  const storeKey = ({ mod, program, device }: ProviderIdentity) => `${device?.id ?? ''}\n${mod}\n${program ?? ''}`
+  const storesOf = async () => {
+    const stores = await sessions.providers.list(sessionsInterface)
+    const keys = new Set(stores.map(storeKey))
+    for (const [key, heard] of storeChanges) {
+      if (keys.has(key)) continue
+      storeChanges.delete(key)
+      void heard.then((subscription) => subscription?.remove())
+    }
+    for (const store of stores) {
+      if (storeChanges.has(storeKey(store))) continue
+      const heard = sessions.providers.hear(listeningOf(sessionsInterface, 'on', 'Change', [], sessionsChanges), store, readStoresSoon).catch((error: unknown) => {
+        storeChanges.delete(storeKey(store))
+        report(`hears no change of ${store.device?.name ?? store.mod}'s sessions`, error)
+        return undefined
+      })
+      storeChanges.set(storeKey(store), heard)
+    }
+    return stores
+  }
   const callStore = async <Result>(store: ProviderIdentity, method: string, args: readonly unknown[]) => (await sessions.providers.call({ interface: sessionsInterface, method, args, ...store })) as Result
   const readStore = async (store: ProviderIdentity, seen: Set<string>) => {
     const listed = await callStore<SessionData[]>(store, 'sessions', [{ everyProject: true, running: true }])
@@ -573,7 +610,7 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
       const known = agents.get(summary.id)
       if (seen.has(summary.id) || (known !== undefined && known.store === undefined)) continue
       seen.add(summary.id)
-      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionsInterface, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), stop: new AbortController(), store }
+      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionsInterface, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), store }
       agent.summary = summary
       agents.set(summary.id, agent)
       if (agent.readAt === summary.lastAt) continue
@@ -590,8 +627,11 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
       agent.readAt = summary.lastAt
     }
   }
-  const readStores = async () => {
-    if (isReadingStores) return
+  const readStores = async (): Promise<void> => {
+    if (isReadingStores) {
+      isStoresDue = true
+      return
+    }
     isReadingStores = true
     try {
       const seen = new Set<string>()
@@ -601,6 +641,9 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     } finally {
       isReadingStores = false
     }
+    if (!isStoresDue) return
+    isStoresDue = false
+    await readStores()
   }
   const readStoresSoon = () => void readStores().catch((error: unknown) => report('kept the sessions it listed last', error))
 
@@ -609,7 +652,9 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     if (!/^[\w-]{1,64}$/.test(id)) throw new Refusal(400, 'A stream names itself with ?stream=<id>.')
     const columns = Math.max(Math.floor(Number(url.searchParams.get('columns'))) || 0, listColumns + fewestColumns)
     const known = streams.get(id)
-    const opened: Stream = known ?? { id, send: undefined, columns, cursor: undefined, tab: conversationTab, isIdleOpen: false, focus: 'row', sent: 0, notice: undefined, draw: 0, html: '', seenAt: Date.now(), timer: undefined, controls: new Map(), numbers: new Map(), shown: undefined }
+    const opened: Stream = known ?? { id, send: undefined, columns, cursor: undefined, tab: conversationTab, isIdleOpen: false, focus: 'row', sent: 0, notice: undefined, draw: 0, html: '', expiry: undefined, renewal: undefined, timer: undefined, controls: new Map(), numbers: new Map(), shown: undefined }
+    clearTimeout(opened.expiry)
+    opened.expiry = undefined
     opened.columns = columns
     opened.html = ''
     streams.set(id, opened)
@@ -620,8 +665,8 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
       },
       cancel() {
         opened.send = undefined
-        opened.seenAt = Date.now()
         showIn(opened, undefined)
+        opened.expiry = setTimeout(() => streams.delete(id), keptStreamMs).unref()
       },
     })
     server.timeout(request, 0)
@@ -680,36 +725,29 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     },
     (error: unknown) => report('starts with no visits', error),
   )
-  let sweep: ReturnType<typeof setInterval> | undefined
-  const viewedDrawings = () =>
-    new Set(
-      [...streams.values()].flatMap((each) => {
-        const [mod = '', id = ''] = each.tab.split('/')
-        return each.cursor === undefined || each.tab === conversationTab ? [] : [`${each.cursor}\ndraw\n${mod}/${id}\n${columnsOf(each)}`]
-      }),
-    )
+  let isStarted = false
   const start = () => {
-    if (sweep !== undefined) return
-    listen(sessionsInterface, 'Change', ({ part }: StoreChange) => {
-      if (part !== 'status' && part !== 'running') return
-      readRegistrySoon()
-      summarizeSoon(0)
-    })
+    if (isStarted) return
+    isStarted = true
+    listen(
+      sessionsInterface,
+      'Change',
+      ({ session, part }: SessionsChange) => {
+        const agent = agents.get(session)
+        if (part === 'messages') return agent === undefined || agent.store !== undefined ? undefined : readFeedSoon(agent)
+        readRegistrySoon()
+        summarizeSoon(0)
+      },
+      sessionsChanges,
+    )
     listen(uiInterface, 'Change', ({ session }: { readonly session: string }) => refetch(`${session}\nunits`))
     listen(uiInterface, 'Redraw', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => refetch(`${session}\ndraw\n${mod}/${id}\n`))
     listen(uiInterface, 'Open', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, true))
     listen(uiInterface, 'Close', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, false))
+    listen(providersInterface, 'Change', readStoresSoon, { interface: sessionsInterface })
     readRegistry()
     summarizeSoon(0)
     readStoresSoon()
-    sweep = setInterval(() => {
-      readRegistrySoon()
-      readStoresSoon()
-      for (const [id, each] of streams) if (each.send === undefined && Date.now() - each.seenAt > keptStreamMs) streams.delete(id)
-      for (const each of streams.values()) if (each.shown !== undefined) tellShown(each, each.shown.session, [each.shown.unit])
-      const viewed = viewedDrawings()
-      for (const key of fetched.keys()) if (key.includes('\ndraw\n') && !viewed.has(key)) fetched.delete(key)
-    }, sweepMs)
   }
   const close = async () => {
     const was = server
@@ -730,10 +768,14 @@ export function webApp({ index, sessions }: { readonly index: HistoryIndex; read
     },
     close,
     async stop() {
-      clearInterval(sweep)
+      for (const each of streams.values()) {
+        clearInterval(each.renewal)
+        clearTimeout(each.expiry)
+      }
       clearTimeout(summaryTimer)
       clearTimeout(registryTimer)
       following.abort()
+      for (const heard of storeChanges.values()) void heard.then((subscription) => subscription?.remove())
       sessions.interfaces.closed(app)
       await close()
       await visitWrites

@@ -141,6 +141,8 @@ export type SessionSend = {
   readonly as?: typeof Person | typeof Session
 }
 
+export type SendReceipt = { readonly id?: number; readonly state: 'queued' | 'delivered' }
+
 export type TaskStartArgs = {
   readonly prompt: string
   readonly agentType?: string
@@ -182,7 +184,7 @@ export type Session = Pick<RecordPart, 'search'> & {
   turn(): Promise<Turn | undefined>
   turns(options?: { readonly last?: number }): Promise<Turn[]>
   messages(options?: { readonly after?: string; readonly last?: number }): Promise<Message[]>
-  send(message: SessionSend): Promise<void>
+  send(message: SessionSend): Promise<SendReceipt>
   startTask(task: TaskStartArgs): Promise<Task>
   fork(task: ForkArgs): Promise<Task>
   callTool(call: ToolCallArgs): Promise<ToolResult>

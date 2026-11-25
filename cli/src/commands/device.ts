@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
+import { storeFolder } from '@cmodjs/core/src/records.js'
 import { readDevice } from '@cmodjs/core/src/runtime/device.js'
 import { capture } from '../process.js'
 
@@ -18,7 +19,7 @@ and renames, and differs from the machine id it is made from.`
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean', default: false } } })
   if (positionals.length > 0) throw new Error(`cmod device takes no names.\n\n${help}`)
-  const device = await readDevice({ process: { run: (command) => capture([...command]) }, fs: { read: (path) => readFile(path, 'utf8') } })
+  const device = await readDevice({ process: { run: (command) => capture([...command]) }, fs: { read: (path) => readFile(path, 'utf8') } }, storeFolder(process.env))
   process.stdout.write(values.json ? `${JSON.stringify(device)}\n` : `${device.name}  ${device.os} ${device.arch}  ${device.id}\n`)
   return 0
 }

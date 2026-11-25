@@ -48,7 +48,7 @@ IF the work is done with the change:
 
 ## 5. Run the end gate
 
-The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root has no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
+The shell's `bun` is a function that turns `bun test` into `bun run test`. `env -C <folder> bun …` runs Bun itself. The root and `cli/` `test` scripts build this machine's `cmod` first, which their tests run. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 
 From the repository root, every command passes:
     bun run --cwd lint test
@@ -56,7 +56,7 @@ From the repository root, every command passes:
     bun run --cwd core check
     bun run --cwd cli test
     bun run --cwd cli check
-    env -C . bun test
+    bun run test
     env -C . bun x tsc --noEmit
     env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
     env HOME=<scratch home> bun run cli/src/main.ts check <mod>      (a mod on the tarball)

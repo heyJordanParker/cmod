@@ -1,9 +1,10 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { version } from '../package.json'
-import { cmod, deleteTemporaryHomes, temporaryHome } from './cmod.js'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const commandsFolder = join(import.meta.dir, '..', 'src', 'commands')

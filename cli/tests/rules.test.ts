@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { claudeAnswering, cmod, deleteTemporaryHomes, spawned, spawningTestLimitMs, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 import { excludeRules } from '../src/settings.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const record = (root: string) => JSON.stringify({ name: 'demo', version: '1.0.0', root, installedAt: '2026-10-14T10:00:00.000Z', scriptsSha256: '', uninstall: null, program: null, keys: {} })
@@ -33,6 +34,23 @@ test('cmod rules with no verb, which a released cmod plugin runs, links and prin
   expect(old).toEqual({ exitCode: 0, stdout: `demo  ${join(released, '.claude/rules/demo')}  sql, tests\n`, stderr: '' })
   expect([await readlink(join(synced, '.claude/rules/demo')), await readlink(join(released, '.claude/rules/demo'))]).toEqual([join(syncedRoot, 'rules'), join(releasedRoot, 'rules')])
   expect([other.exitCode, other.stderr.split('\n')[0]]).toEqual([1, 'cmod rules: cmod rules takes sync.'])
+})
+
+test("the cmod plugin's rules link to the copy Claude Code installed, whichever session's older copy asks, so sessions on different versions never flip the link", async () => {
+  const home = await temporaryHome()
+  const [installed, older] = [join(home, 'plugins/cmod/8.9.2'), join(home, 'plugins/cmod/8.7.0')]
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering([{ id: 'cmod@cmod', version: '8.9.2', scope: 'user', enabled: true, installPath: installed }]),
+    'plugins/cmod/8.9.2/rules/sessions.md': 'Reach sessions through cmod sessions.\n',
+    'plugins/cmod/8.7.0/rules/sessions.md': 'Reach sessions through the session tools.\n',
+  })
+
+  const fromOlder = await cmod(home, 'rules', 'sync', '--plugin', older)
+  const fromInstalled = await cmod(home, 'rules', 'sync', '--plugin', installed, '--json')
+
+  expect(fromOlder.exitCode).toBe(0)
+  expect(await readlink(join(home, '.claude/rules/cmod'))).toBe(join(installed, 'rules'))
+  expect(JSON.parse(fromInstalled.stdout)).toMatchObject({ placed: [], removed: [] })
 })
 
 test("cmod rules sync links a mod's rules into Claude Code's rules folder and prints them", async () => {
@@ -154,7 +172,7 @@ test('a rules exclusion waits for a settings change in progress and keeps it', a
   const before = process.env['HOME']
   process.env['HOME'] = home
   try {
-    const holder = Bun.spawn(['bun', '-e', `const { storePath, takeLock } = await import(${JSON.stringify(join(import.meta.dir, '../src/store.ts'))}); await takeLock(storePath('settings.lock')); console.log('held'); await Bun.sleep(60000)`], { env: { ...process.env, HOME: home }, stdout: 'pipe' })
+    const holder = spawned(['bun', '-e', `const { storePath, takeLock } = await import(${JSON.stringify(join(import.meta.dir, '../src/store.ts'))}); await takeLock(storePath('settings.lock')); console.log('held'); await Bun.sleep(60000)`], { env: { ...process.env, HOME: home }, stdout: 'pipe' })
     await holder.stdout.getReader().read()
     const excluded = excludeRules(local, '/rules/demo/**')
     await Bun.sleep(300)

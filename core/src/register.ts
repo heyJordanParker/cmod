@@ -6,10 +6,13 @@ import type { RoutedEvent } from './runtime/hooks.js'
 import { serveConversations } from './runtime/conversations.js'
 import { settledAfterAbort } from './runtime/deadline.js'
 import { readDevice } from './runtime/device.js'
+import { hotkeyCommand } from './records.js'
 import { createLifecycle, readPlugin, type Lifecycle, type ServeCmodPlugin } from './runtime/lifecycle.js'
 import { serveParts } from './runtime/parts.js'
 import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
+import { cmodStore } from './runtime/programs.js'
 import { serveWidgets } from './runtime/widgets.js'
+import { modComponents } from './ui/styles.js'
 import { messageOf } from './utils/text.js'
 
 let lifecycle: Lifecycle<object>
@@ -114,9 +117,9 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       sshConnection: () => $.env.get('SSH_CONNECTION'),
       display: () => $.env.get('DISPLAY'),
       waylandDisplay: () => $.env.get('WAYLAND_DISPLAY'),
-      terminal: async () => ({ program: await $.env.get('TERM_PROGRAM'), ghostty: await $.env.get('GHOSTTY_RESOURCES_DIR'), wezterm: await $.env.get('WEZTERM_EXECUTABLE') }),
+      terminal: async () => ({ program: await $.env.get('TERM_PROGRAM'), ghostty: await $.env.get('GHOSTTY_RESOURCES_DIR'), wezterm: await $.env.get('WEZTERM_EXECUTABLE'), kitty: await $.env.get('KITTY_WINDOW_ID') }),
     },
-    device: { read: () => readDevice(claude) },
+    device: { read: async () => readDevice(claude, await cmodStore(claude)) },
     cmod: { call: (input) => $.cmod.call(input) },
   }
   const [, answer] = await settledAfterAbort(Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]), passOn.signal)
@@ -137,6 +140,10 @@ const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, next: Next<'cmod.call
 
 const withoutCaller = (next: Next<'cmod.call'>) => (passed: Frozen<Args<'cmod.call'>>) => next(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>)
 
+async function hideHotkey(_$: EngineInterface, eventInput: Frozen<Args<'command.describe'>>, passOn: Next<'command.describe'>): Promise<EventResult<'command.describe'>> {
+  return { ...(await passOn(eventInput)), isHidden: true }
+}
+
 function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>): Promise<EventResult<'cmod.call'>> {
   return lifecycle.route('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn.signal)
 }
@@ -147,7 +154,7 @@ function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.cal
 
 export const serveCmodPlugin: ServeCmodPlugin = ({ claude, router, store, project, report, clear, tellRefusedPress, parts, markdownIn, tellStylers }) => {
   const conversations = serveConversations({ claude, router, store, project, report, clear, sessionCode: (name) => served.providers(name) })
-  const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn })
+  const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn, tellStore: (part) => conversations.tellStore(part) })
   const served = serveParts({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers, tellUi: (event, payload) => conversations.tellUi(event, payload), tellProviders: (names) => conversations.tellProviders(names) })
   conversations.serveUi(served.ui)
   conversations.onTurnClosed((turn) => served.turnClosed(turn))
@@ -160,13 +167,12 @@ export type { PluginOptions }
 
 export function registerMod<State extends object, Declared extends Options>(addHook: AddHook, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   registerHooks(addHook, definition, options)
-  addHook('ui.render', routeToMod).catch(routeFailure)
+  addHook('ui.render', { component: modComponents }, routeToMod).catch(routeFailure)
 }
 
 export function registerCmodPlugin<State extends object, Declared extends Options>(addHook: AddHook, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   registerHooks(addHook, definition, options, serveCmodPlugin)
   addHook('ui.render', { component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] }, routeToMod).catch(routeFailure)
-  addHook('command.describe', { command: /--/ }, routeToMod).catch(routeFailure)
   addHook('session.append', routeToMod).catch(routeFailure)
   addHook('session.receive', routeToMod).catch(routeFailure)
   addHook('agent.spawn', routeToMod).catch(routeFailure)
@@ -220,6 +226,10 @@ function registerHooks<State extends object, Declared extends Options>(addHook: 
   addHook('ui.close', routeToMod).catch(routeFailure)
   addHook('cmod.call', { to: definition.name }, routeCallToMod).catch(routeCallFailure)
   addHook('session.compact', routeToMod).catch(routeFailure)
+  const hotkeyCommands = Object.keys(definition.hotkeys ?? {}).map((hotkey) => hotkeyCommand(definition.name, hotkey))
+  if (hotkeyCommands.length > 0) {
+    addHook('command.describe', { command: hotkeyCommands }, hideHotkey).catch(hideHotkey)
+  }
 }
 
 export function registerPermissionCheck(addHook: AddHook): void {

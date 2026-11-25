@@ -219,7 +219,7 @@ test('/recall finds the earlier session about the deploy', async () => {
 })
 ```
 
-`shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, and its `task` for an owner. `fakes.agent.spawn` answers the current session's `startTask` and `fork`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. A background `startTask` and a background `fork` start their task in the fake session, after asking the mod's `beforeTaskStart` listeners, and so do another session's `startTask` and `fork`.
+`shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, its `task` for an owner, and `from`, the current session's id, which the test kit's cmod plugin adds to one sent with `as: Session`, as the cmod plugin does. Each `send` to a session resolves `{ id, state: 'delivered' }`, with the place of the message in `shown.sent` counted from 1. `fakes.agent.spawn` answers the current session's `startTask` and `fork`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. A background `startTask` and a background `fork` start their task in the fake session, after asking the mod's `beforeTaskStart` listeners, and so do another session's `startTask` and `fork`.
 
 A `before` listener on the current session answers what `raise` asks, such as `tested.raise.beforePrompt({ text: 'Deploy to prod' })` or `tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })`.
 
@@ -385,7 +385,7 @@ type Shown = {
   readonly commands: string[]
   readonly tools: string[]
   readonly schedules: { readonly id: string; readonly cron: string; readonly prompt: string }[]
-  readonly sent: { readonly session: string; readonly type: string; readonly text: string; readonly as?: string }[]
+  readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string; readonly from?: string }[]
   readonly view: ShownPart
   readonly page: ShownPart
   readonly pane: ShownPart

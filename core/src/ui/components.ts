@@ -1,4 +1,5 @@
 import { Box, Button, drawnIn, hostComponent, Text, type Color } from './elements.js'
+import { paletteOf, type Palette } from './palette.js'
 
 export type Tab = { readonly key: string; readonly label: string; readonly hotkey?: string }
 
@@ -6,12 +7,11 @@ export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'critical'
 
 type Pressed = () => void
 
-const toneColors: Readonly<Record<Tone, string | undefined>> = { neutral: undefined, info: 'suggestion', success: 'success', warning: 'warning', critical: 'error' }
+const palette = (): Palette => paletteOf(drawnIn().theme)
 
-const textOf = (tone: Tone) => {
-  const color = toneColors[tone]
-  return color === undefined ? { dimColor: true } : { color }
-}
+const toneTokens: Readonly<Record<Exclude<Tone, 'neutral'>, keyof Palette>> = { info: 'info', success: 'success', warning: 'warning', critical: 'destructive' }
+
+const textOf = (tone: Tone) => (tone === 'neutral' ? { dimColor: true } : { color: palette()[toneTokens[tone]] })
 
 export const Tabs = hostComponent(
   'Tabs',
@@ -23,7 +23,7 @@ export const Tabs = hostComponent(
   ({ key: prefix, tabs, children }: { readonly key: string; readonly tabs: readonly (Tab & { readonly isSelected: boolean; readonly onSelect: Pressed })[]; readonly children?: JSX.Children }) => {
     const row = tabs.map(({ key, label, hotkey, isSelected, onSelect }) =>
       isSelected
-        ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
+        ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: palette().primary, children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
         : Button({ plain: true, dimColor: true, key: `${prefix}tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: onSelect }),
     )
     return Box({ flexDirection: 'column', gap: 1, children: [Box({ gap: 3, children: row }), children] })
@@ -50,7 +50,7 @@ export const Panel = hostComponent(
       flexDirection: 'column',
       flexGrow: 1,
       children: [
-        Box({ flexDirection: 'column', flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children: [...header, children] }),
+        Box({ flexDirection: 'column', flexGrow: 1, gap: header.length === 0 ? 0 : 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: palette().border, paddingX: 1, children: [...header, children] }),
         Box({ position: 'absolute', top: 0, left: 2, children: Text({ bold: true, wrap: 'truncate-end', children: ` ${title} ` }) }),
       ],
     })
@@ -72,9 +72,9 @@ function card(text: string, isShown: boolean): JSX.Element {
     left: 0,
     width: Math.min(text.length + 2, cardColumns),
     ...(isShown ? {} : { display: 'none' as const, hover: { display: 'flex' as const } }),
-    backgroundColor: 'text',
+    backgroundColor: palette().foreground,
     paddingX: 1,
-    children: Text({ color: 'inverseText', wrap: 'wrap', children: text }),
+    children: Text({ color: palette().background, wrap: 'wrap', children: text }),
   })
 }
 
@@ -129,8 +129,6 @@ const roundedLeft = '\u{E0B6}'
 
 const roundedRight = '\u{E0B4}'
 
-const barColors: Readonly<Record<Tone, string>> = { neutral: 'inactive', info: 'suggestion', success: 'success', warning: 'warning', critical: 'error' }
-
 function filledSections(sections: readonly ProgressSection[]): ProgressSection[] {
   let reached = 0
   return sections.map((section) => {
@@ -150,15 +148,16 @@ export const Progress = hostComponent(
   },
   ({ value, width, sections, buffer }: ProgressData) => {
     const isRounded = drawnIn().hasNerdFont && width > 2
+    const colors = palette()
     const cells = isRounded ? width - 2 : width
     const units = cells * eighths.length
     let reached = 0
     const ends = (sections ?? [{ value }]).map((section) => {
       reached += section.value
-      return { end: Math.round((reached / 100) * units), color: 'color' in section ? section.color : section.tone === undefined ? 'claude' : barColors[section.tone] }
+      return { end: Math.round((reached / 100) * units), color: 'color' in section ? section.color : section.tone === undefined ? colors.primary : section.tone === 'neutral' ? colors.mutedForeground : colors[toneTokens[section.tone]] }
     })
     const buffered = Math.round(((buffer ?? 0) / 100) * units)
-    const colorAt = (unit: number) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? 'promptBorder' : 'subtle')
+    const colorAt = (unit: number) => ends.find(({ end }) => unit < end)?.color ?? (unit < buffered ? colors.input : colors.border)
     const drawn: BarCell[] = []
     for (let cell = 0; cell < cells; cell++) {
       const from = cell * eighths.length
@@ -215,7 +214,7 @@ export const ListItem = hostComponent(
     const { key, label, description, leading, trailing, tone, isSelected, depth, onPress } = props
     if (depth !== undefined) return treeRow(props)
     const shown = [...statusOf(tone), ...(leading === undefined ? [] : [Text({ dimColor: true, children: `${leading} ` })]), label, ...(description === undefined ? [] : [Text({ dimColor: true, children: ` ${description}` })]), ...(trailing === undefined ? [] : [' ', trailing])]
-    if (isSelected === true || onPress === undefined) return Box({ ...(isSelected === true ? { backgroundColor: 'userMessageBackground' } : {}), paddingX: 1, children: Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: shown }) })
+    if (isSelected === true || onPress === undefined) return Box({ ...(isSelected === true ? { backgroundColor: palette().accent } : {}), paddingX: 1, children: Text({ wrap: 'truncate-end', ...(isSelected === true ? { bold: true } : {}), children: shown }) })
     return Box({ paddingX: 1, children: Button({ plain: true, dimColor: true, key, onPress, children: shown }) })
   },
 )

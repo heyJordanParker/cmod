@@ -1,16 +1,17 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readlinkSync } from 'node:fs'
 import { chmod, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { captured, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const checkout = join(import.meta.dir, '..', '..')
 const build = `cmod-${process.platform}-${process.arch}`
 
 function program(version: string): string {
-  return `#!/bin/sh\nif [ "$1" = --version ]; then echo ${version}; else echo "cmod ${version} ran $*"; fi\n`
+  return `#!/bin/sh\nif [ "$1" = --version ]; then echo ${version}; else echo "cmod ${version} ran $*"; fi\n[ -z "$CMOD_INSTALLED_VERSION" ] || echo "installed $CMOD_INSTALLED_VERSION" >&2\n`
 }
 
 function sha256(text: string): string {
@@ -43,9 +44,7 @@ async function installPackage(folder: string, version: string): Promise<string> 
 }
 
 async function run(argv: string[], home: string, origin: string, path = '/usr/bin:/bin') {
-  const child = Bun.spawn(argv, { env: { HOME: home, PATH: path, CMOD_DIST_SERVER: origin }, stdout: 'pipe', stderr: 'pipe' })
-  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  return { stdout, stderr, exitCode }
+  return captured(argv, { env: { HOME: home, PATH: path, CMOD_DIST_SERVER: origin } })
 }
 
 const storeOf = (home: string) => join(home, '.local/share/cmod/bin/cmod')
@@ -75,6 +74,18 @@ test('the cmod launcher downloads its version, checks it against SHA256SUMS, and
   expect(result.stdout).toBe('cmod 0.1.1 ran list\n')
   expect(result.exitCode).toBe(0)
   expect(existsSync(join(storeOf(home), '0.1.1/cmod'))).toBe(true)
+})
+
+test('the cmod launcher tells the cmod it just installed that it is new, and tells nothing when it downloaded nothing', async () => {
+  const home = await temporaryHome()
+  using release = serveRelease('0.1.1')
+  const launcher = await installPackage(join(home, 'npm/cmod'), '0.1.1')
+
+  const first = await run([launcher, 'list'], home, release.origin)
+  const second = await run([launcher, 'list'], home, release.origin)
+
+  expect([first.stdout, first.stderr]).toEqual(['cmod 0.1.1 ran list\n', 'Downloading cmod 0.1.1\ninstalled 0.1.1\n'])
+  expect([second.stdout, second.stderr]).toEqual(['cmod 0.1.1 ran list\n', ''])
 })
 
 test('the cmod launcher runs the newest cmod in the store, and downloads nothing it already has', async () => {

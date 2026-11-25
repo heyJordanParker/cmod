@@ -2,17 +2,23 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { readSteps, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { readSteps, scriptsSha256, serveSocketPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
+import { listenMethod, methodName, onMethod, type Heard } from '@cmodjs/core/src/runtime/interfaces.js'
+import { addressCall, connectRpc } from '@cmodjs/core/src/runtime/rpc.js'
 import { ifMissing, listFiles, readText } from '../src/files.js'
+import { capture, type Captured, type RunOptions } from '../src/process.js'
+import { cmodBinary } from './cmod-binary.js'
 
-const main = join(import.meta.dir, '..', 'src', 'main.ts')
+export const spawningTestLimitMs = 60_000
+
 const homes: string[] = []
 type Started = { readonly exitCode: number | null; readonly exited: Promise<number>; kill(signal: NodeJS.Signals): void }
-const started: Started[] = []
+const started: (() => Promise<void>)[] = []
 const temporaryRoot = await realpath(tmpdir())
 
-export const cmodFromSource = `#!/bin/sh
-exec "${process.execPath}" "${main}" "$@"
+export const cmodExecutable = `#!/bin/sh
+exec "${cmodBinary}" "$@"
 `
 
 export const cmodOfStep = 'cmod=$PPID; [ "$(ps -o comm= -p $cmod)" = sh ] && cmod=$(ps -o ppid= -p $cmod | tr -d " ")'
@@ -100,8 +106,27 @@ exit $answered
 
 export async function deleteTemporaryHomes(): Promise<void> {
   const made = homes.splice(0)
-  await Promise.all([...started.splice(0).map(stopStarted), ...made.map(stopFakeService)])
+  await Promise.all([...started.splice(0).map((stop) => stop()), ...made.map(stopFakeService)])
   for (const home of made) await removeTemporary(home)
+}
+
+export function spawned<const In extends Bun.SpawnOptions.Writable = 'ignore', const Out extends Bun.SpawnOptions.Readable = 'pipe', const Err extends Bun.SpawnOptions.Readable = 'inherit'>(
+  argv: string[],
+  options?: Bun.SpawnOptions.SpawnOptions<In, Out, Err>,
+): Bun.Subprocess<In, Out, Err> {
+  const child = Bun.spawn(argv, options)
+  started.push(() => stopStarted(child))
+  return child
+}
+
+export function captured(argv: string[], options: RunOptions = {}): Promise<Captured> {
+  const stopping = new AbortController()
+  const result = capture(argv, { ...options, signal: stopping.signal })
+  started.push(async () => {
+    stopping.abort()
+    await Promise.allSettled([result])
+  })
+  return result
 }
 
 async function stopStarted(child: Started): Promise<void> {
@@ -202,14 +227,12 @@ export function startCmod(home: string, ...args: string[]) {
 }
 
 export function startCmodWith(home: string, env: Record<string, string>, ...args: string[]) {
-  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: { ...environment(home), ...env }, stdout: 'pipe', stderr: 'pipe' })
+  const child = spawned([cmodBinary, ...args], { cwd: home, env: { ...environment(home), ...env }, stdout: 'pipe', stderr: 'pipe' })
   return { child, ...watchOutput(child) }
 }
 
 export function startProcess(home: string, argv: string[], cwd = home): Started {
-  const child = Bun.spawn(argv, { cwd, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
-  started.push(child)
-  return child
+  return spawned(argv, { cwd, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
 }
 
 export async function cmodOnPath(home: string, path: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -217,7 +240,7 @@ export async function cmodOnPath(home: string, path: string, ...args: string[]):
 }
 
 export async function cmodWith(home: string, env: Record<string, string>, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: { ...environment(home), ...env }, stdout: 'pipe', stderr: 'pipe' })
+  const child = spawned([cmodBinary, ...args], { cwd: home, env: { ...environment(home), ...env }, stdout: 'pipe', stderr: 'pipe' })
   return watchOutput(child).done
 }
 
@@ -227,9 +250,9 @@ export async function cmodInTerminal(home: string, ...args: string[]): Promise<{
 }
 
 export function startCmodInTerminal(home: string, ...args: string[]) {
-  const command = ['sh', '-c', 'trap : INT; "$0" "$@"; exit $?', process.execPath, main, ...args]
+  const command = ['sh', '-c', 'trap : INT; "$0" "$@"; exit $?', cmodBinary, ...args]
   const terminal = process.platform === 'darwin' ? ['script', '-q', '/dev/null', ...command] : ['script', '-q', '-e', '-c', command.map(shellWord).join(' '), '/dev/null']
-  const child = Bun.spawn(terminal, {
+  const child = spawned(terminal, {
     cwd: home,
     env: environment(home),
     stdin: 'ignore',
@@ -245,7 +268,6 @@ function shellWord(word: string): string {
 }
 
 function watchOutput(child: Started & { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array> }) {
-  started.push(child)
   const output = { stdout: '', stderr: '' }
   let isDone = false
   const printedLine = Promise.withResolvers<void>()
@@ -377,12 +399,57 @@ export const lockNotice = 'Waiting for ~/.local/share/cmod/records/demo.json.loc
 export const isGone = (path: string) => lstat(path).then(() => false, ifMissing(true))
 
 export async function goneProcessId(): Promise<number> {
-  const child = Bun.spawn(['true'])
+  const child = spawned(['true'])
   await child.exited
   return child.pid
 }
 
 export async function startOf(processId: number): Promise<string> {
-  const ps = Bun.spawn(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, stdout: 'pipe' })
-  return (await new Response(ps.stdout).text()).trim()
+  return (await captured(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } })).stdout.trim()
+}
+
+export async function servedChanges(home: string) {
+  const serving = startCmod(home, 'serve')
+  await serving.waitForOutput('unix:')
+  return { serving, ...serveChanges(home) }
+}
+
+export function serveChanges(home: string) {
+  const heard = new Map<string, (payload: unknown) => void>()
+  const client = connectRpc({
+    call: addressCall(bunFetch, `unix:${serveSocketPath(storeFolder({ HOME: home }))}`),
+    handle: async (method, params) => {
+      if (method !== onMethod) throw new Error(`The test answers no ${method}.`)
+      heard.get((params as Heard).id)?.((params as Heard).payload)
+      return null
+    },
+    clock: bunClock(true),
+  })
+  started.push(() => client.close())
+  let next = 0
+  return {
+    tell: (name: string, method: string, args: readonly unknown[]) => client.request(methodName(name, method), args),
+    async listen(name: string, matcher?: Readonly<Record<string, unknown>>): Promise<() => Promise<unknown>> {
+      const id = String((next += 1))
+      const told: unknown[] = []
+      let wake = () => undefined as void
+      heard.set(id, (payload) => {
+        told.push(payload)
+        wake()
+      })
+      await client.request(listenMethod, { id, interface: name, event: 'Change', kind: 'on', ...(matcher === undefined ? {} : { matcher }) })
+      return () =>
+        new Promise((resolve) => {
+          if (told.length > 0) return resolve(told.shift())
+          wake = () => {
+            wake = () => undefined
+            resolve(told.shift())
+          }
+        })
+    },
+  }
+}
+
+export async function until(isDone: () => boolean): Promise<void> {
+  while (!isDone()) await Bun.sleep(100)
 }

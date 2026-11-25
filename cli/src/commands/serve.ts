@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { listenMethod, storeInterface } from '@cmodjs/core/src/runtime/interfaces.js'
 import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveAppsPath, serveSocketPath, storeFolder, webPath, type ServeApps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
@@ -21,8 +22,9 @@ cmod serve is the one server of this computer's Claude Code sessions. The cmod
 plugin runs it as a service of the computer, com.claudemodmanager.cmod.cmod, of
 launchd's Interactive class on macOS, because every session waits on it. It
 listens on serve.sock in the cmod store, which only you can open, and prints
-unix:<socket> once it listens. It exits 0 within 5 seconds of a newer cmod
-landing in the cmod store, so its service starts the newer one.
+unix:<socket> once it listens. It exits 0 once it finds a newer cmod in the
+cmod store, at its start and each time cmod/Store tells that the plugins
+changed, so its service starts the newer one.
 
 On that socket it serves the cmod/Sessions interface: the reads cmod sessions
 answers, from the conversation index it keeps open, the actions on a session,
@@ -69,8 +71,6 @@ Preferences, it serves the browser app on 127.0.0.1 at the port web.json keeps,
 and on your tailnet while Tailscale is signed in, as cmod web describes. cmod web
 serve runs the same server, for a session whose cmod plugin is older.`
 
-const checkMs = 5000
-
 export async function run(argv: string[]): Promise<number> {
   if (argv.length > 0) throw new Error(`cmod serve takes no arguments.\n\n${help}`)
   return serve()
@@ -85,7 +85,7 @@ export async function serve(): Promise<number> {
   await placeHerdrMod().catch((error: unknown) => report('placed no Herdr mod', error))
   const index = openIndex()
   const sessions = serveSessions({ index, report })
-  const web = webApp({ index, sessions })
+  const web = webApp({ sessions })
   await mkdir(dirname(socket), { recursive: true })
   await rm(socket, { force: true })
   const server = Bun.serve({
@@ -99,27 +99,34 @@ export async function serve(): Promise<number> {
   await writeAtomically(serveAppsPath(store), `${JSON.stringify({ url: apps.url, token: apps.token } satisfies ServeApps, null, 2)}\n`, { mode: 0o600 })
   const ending = new AbortController()
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => ending.abort())
-  process.stdout.write(`unix:${socket}\n`)
   let page: number | undefined
-  try {
-    while (!ending.signal.aborted && !(await isNewerCmodInstalled())) {
+  let checking = Promise.resolve()
+  const check = () =>
+    void (checking = checking.then(async () => {
+      if (ending.signal.aborted) return
+      if (await isNewerCmodInstalled()) return ending.abort()
       const isOn = parsePreferences(await readJson(preferencesPath(store)), preferencesPath(store)).servesWebUi
-      if (isOn && page === undefined) page = await openPage(web, store, report)
+      if (isOn && page === undefined) {
+        page = await openPage(web, store, report)
+        process.stderr.write(`cmod serve: serves the browser app at http://127.0.0.1:${page}/\n`)
+      }
       if (!isOn && page !== undefined) {
         page = undefined
         await web.close()
         await stopServing('cmod', 'cmod').catch((error: unknown) => report('kept the browser app on your tailnet', error))
+        process.stderr.write('cmod serve: closed the browser app, because it is off in Settings\n')
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, checkMs)
-        ending.signal.addEventListener('abort', () => {
-          clearTimeout(timer)
-          resolve()
-        })
-      })
-    }
+    }).catch((error: unknown) => void report('kept the browser app as it was', error)))
+  const own = { request: () => Promise.reject(new Error('cmod serve hears its own cmod/Store and answers no request.')), notify: check }
+  await sessions.interfaces.handler(own)(listenMethod, { id: 'serve', interface: storeInterface, event: 'Change', kind: 'on', matcher: { part: ['preferences', 'plugins'] } }, ending.signal)
+  check()
+  process.stdout.write(`unix:${socket}\n`)
+  try {
+    await new Promise<void>((resolve) => ending.signal.addEventListener('abort', () => resolve(), { once: true }))
+    await checking
     return 0
   } finally {
+    sessions.interfaces.closed(own)
     await web.stop()
     if (page !== undefined) await stopServing('cmod', 'cmod').catch((error: unknown) => report('kept the browser app on your tailnet', error))
     sessions.close()

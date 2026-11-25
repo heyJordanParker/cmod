@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test'
 import { defineMod, provide, providers, sessions, type Provided } from '../../src/mod.js'
-import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, providerHoldMs, routeSessions, serveProviders, showLeaseMs, uiInterface, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
+import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, programsInterface, providerActs, providerHoldMs, routeSessions, serveProviders, showLeaseMs, storeInterface, uiInterface, type ProgramReach, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes, type HttpFetch, type RpcHttpAnswer, type RpcRoutes } from '../../src/runtime/rpc.js'
 import { didNotAnswer } from '../../src/runtime/dependencies.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { program, type Program } from '../../src/jobs/program.js'
 import { testDevice } from '../../src/testing/fake-claude.js'
-
-const atOnce = async () => undefined
+import { memoryMail, retriesAtOnce, type Mailbox } from '../../src/testing/fake-serve.js'
 
 declare module 'claude-code' {
   interface CmodInterfaces {
@@ -20,7 +19,9 @@ declare module 'claude-code' {
 
 type Rules = { readonly mod: string; beforeCheck(listener: (check: { readonly tool: string }) => unknown): unknown }
 
-const noSessions: SessionComputer = {
+type Computer = Omit<SessionComputer, keyof Mailbox> & Partial<Mailbox>
+
+const noSessions: Computer = {
   sessions: () => [],
   session: () => undefined,
   search: () => [],
@@ -45,6 +46,7 @@ function manualClock() {
     after: (ms: number, run: () => void) => {
       const timer = { at: at + ms, run }
       due.push(timer)
+      if (ms === 0) void Promise.resolve().then(() => due.includes(timer) && (due.splice(due.indexOf(timer), 1), run()))
       return {
         cancel() {
           if (due.includes(timer)) due.splice(due.indexOf(timer), 1)
@@ -61,7 +63,8 @@ function manualClock() {
   }
 }
 
-function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, instances: Readonly<Record<string, string>> = {}, { device = { id: 'mac-id', name: 'mac' }, computer = noSessions, terminals }: { readonly device?: { readonly id: string; readonly name: string }; readonly computer?: SessionComputer; readonly terminals?: SessionTerminals } = {}) {
+function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, instances: Readonly<Record<string, string>> = {}, { device = { id: 'mac-id', name: 'mac' }, computer: given = noSessions, terminals, hasExited = async () => false }: { readonly device?: { readonly id: string; readonly name: string }; readonly computer?: Computer; readonly terminals?: SessionTerminals; readonly hasExited?: ProgramReach['hasExited'] } = {}) {
+  const computer: SessionComputer = { ...memoryMail(), ...given }
   const files = {
     list: async (path: string) => {
       const prefix = `${path}/`
@@ -74,7 +77,7 @@ function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, inst
   const report = (error: unknown) => void reported.push(String(error))
   const fetch: HttpFetch = (url, init) => fetchOf((socketPath) => (socketPath === '/store/serve.sock' ? serve.routes : programs[socketPath ?? '']))(url, init)
   const clock = manualClock()
-  const serve = routeSessions({ computer, device: async () => device, now: clock.now, after: clock.after, report, programs: { store: '/store', files, fetch, wait: atOnce }, ...(terminals === undefined ? {} : { terminals }) })
+  const serve = routeSessions({ computer, device: async () => device, now: clock.now, after: clock.after, report, programs: { store: '/store', files, fetch, clock: retriesAtOnce, hasExited }, ...(terminals === undefined ? {} : { terminals }) })
   const connect = (name: string, provider?: ProviderIdentity) => {
     const listeners = interfaceListeners({ report })
     let served: ServedProviders | undefined
@@ -89,7 +92,7 @@ function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, inst
         await served?.replay()
         await listeners.replay(connected)
       },
-      wait: atOnce,
+      clock: retriesAtOnce,
     })
     const mods = new Map<string, ReturnType<typeof createProviders>>()
     served = serveProviders({
@@ -109,7 +112,7 @@ function servedComputer(programs: Readonly<Record<string, RpcRoutes>> = {}, inst
     }
     return { client, listeners, served: answering, mod: join(name), join }
   }
-  return { serve, connect, reported, fetch, clock }
+  return { serve, connect, reported, fetch, clock, computer }
 }
 
 test("a mod's session code provides an interface, and providers names the mod and answers its methods", async () => {
@@ -200,6 +203,7 @@ test("a before listener past its timeoutMs counts as its onFailure says on the t
   const [own] = await providers('demo/Rules')
   own?.beforeCheck(() => new Promise(() => undefined), { timeoutMs: 20 })
   own?.beforeCheck(() => new Promise(() => undefined), { timeoutMs: 30, onFailure: 'refuse' })
+  await tested.settle()
   const due = new Map<number, () => void>()
   let added: () => void = () => undefined
   tested.fakes.clock.after = (ms, fire) => {
@@ -262,6 +266,39 @@ test("a provider's ask from inside its own beforeToolCall listener, which the cm
   expect(asksWhileHeld).toBe(0)
   expect(await answer).toEqual({ refuse: 'Bash is off in this mode' })
   expect(asks()).toBe(1)
+})
+
+test("a mod's providers call from inside its own beforeToolCall listener, which the cmod plugin calls, waits one 0 ms timer before it calls the cmod plugin, so Claude Code never skips the cmod plugin's hook as a re-entry", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup() {
+        provide('demo/Rules', {})
+        sessions.current.beforeToolCall(async () => void (await providers('demo/Rules')))
+      },
+    }),
+  )
+  await tested.start()
+  const held: (() => void)[] = []
+  let heldOne: () => void = () => undefined
+  const isHeld = new Promise<void>((resolve) => (heldOne = resolve))
+  tested.fakes.clock.after = (ms, fire) => {
+    if (ms === 0) {
+      held.push(fire)
+      heldOne()
+    }
+    return { cancel: () => undefined }
+  }
+  const lists = () => tested.calls.filter(({ call, args }) => call === 'cmod.call' && (args[0] as { readonly method: string }).method === 'cmod:providers').length
+
+  const answer = tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'ls' } })
+  await isHeld
+  const listsWhileHeld = lists()
+  for (const fire of held.splice(0)) fire()
+  await answer
+
+  expect(listsWhileHeld).toBe(0)
+  expect(lists()).toBe(1)
 })
 
 test("a program provider's ask reaches a session mod's beforeCheck listener through cmod serve, and one past its timeoutMs refuses as its onFailure says", async () => {
@@ -446,10 +483,10 @@ test("cmod serve that stops while it tells a session's cmod plugin the parts its
   const plugin = connectRpc({
     call: addressCall(fetch, 'unix:/store/serve.sock'),
     handle: (method) => (method === '$/ui' ? new Promise(() => isTold()) : null),
-    wait: atOnce,
+    clock: retriesAtOnce,
   })
   await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
-  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
   await app.request(methodName(uiInterface, 'show'), ['s1', 'browser:1', [{ mod: 'demo', id: 'runs' }]])
   await told
 
@@ -552,7 +589,7 @@ test("a request sent while cmod serve starts again, which the new cmod serve ans
   const served = (name: string) => rpcRoutes({ handle: () => async (method) => `${name} answered ${method}`, now: () => Date.now() })
   const first = served('first')
   let routes = first
-  const client = connectRpc({ call: addressCall(fetchOf(() => routes), 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce, retryMs: 0 })
+  const client = connectRpc({ call: addressCall(fetchOf(() => routes), 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce, retryMs: 0 })
   const before = await client.request<string>('demo/Echo.echo', ['ping'])
 
   first.close()
@@ -577,7 +614,7 @@ test("an answer larger than Claude Code's 4 MiB fetch limit reaches the client w
     if (init.method === 'GET') polled.push(bytes)
     return answer
   }
-  const client = connectRpc({ call: addressCall(claudeFetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const client = connectRpc({ call: addressCall(claudeFetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
 
   const read = await client.request<string>('demo/Read.everything')
   const after = await client.request<string>('demo/Echo.ping')
@@ -608,18 +645,111 @@ test('a poll its client abandons drops its connection at once: cmod serve forget
   expect((await asked('GET', `/rpc/${id}`)).status).toBe(410)
 })
 
-test('a client that died between two polls drops its connection once a message waits a poll time for it, so a call to it fails instead of waiting out its deadline', async () => {
-  const closed: string[] = []
-  const routes = rpcRoutes({ handle: () => async () => null, onClose: (connection) => void closed.push(connection.id), now: () => Date.now(), pollMs: 20 })
-  const asked = (method: string, path: string) => routes.route({ method, path, signal: new AbortController().signal, json: async () => [] }) as Promise<RpcHttpAnswer>
-  const id = ((await asked('POST', '/rpc/connect')).json as { readonly connection: string }).connection
-  const [connection] = routes.connections()
+test('a request made while cmod serve is down waits for it, and the cmod serve that comes back answers it', async () => {
+  let routes: RpcRoutes | undefined = rpcRoutes({ handle: () => async (method) => `first answered ${method}`, now: () => Date.now() })
+  let comeBack: () => void = () => undefined
+  const cameBack = new Promise<void>((resolve) => {
+    comeBack = resolve
+  })
+  let noticed: () => void = () => undefined
+  const isNoticed = new Promise<void>((resolve) => {
+    noticed = resolve
+  })
+  const fetch: HttpFetch = async (url, init) => {
+    if (routes === undefined) throw new Error('ECONNREFUSED')
+    return fetchOf(() => routes)(url, init)
+  }
+  const client = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: { after: (ms, run) => {
+    if (ms === 2000) {
+      noticed()
+      void cameBack.then(run)
+    }
+    return { cancel: () => undefined }
+  } } })
+  const before = await client.request<string>('demo/Echo.echo', ['ping'])
 
-  const call = await connection?.request('$/ping').catch((error: unknown) => (error as Error).message)
+  routes.close()
+  routes = undefined
+  await isNoticed
+  const asked = client.request<string>('demo/Echo.echo', ['ping'])
+  routes = rpcRoutes({ handle: () => async (method) => `second answered ${method}`, now: () => Date.now() })
+  comeBack()
 
-  expect(call).toBe('The connection closed: no poll for 0.02 s while a message waited')
-  expect(closed).toEqual([id])
-  expect(routes.connections()).toEqual([])
+  expect([before, await asked]).toEqual(['first answered demo/Echo.echo', 'second answered demo/Echo.echo'])
+  await client.close()
+  routes.close()
+})
+
+test('a request that waits for cmod serve fails at its 30 s deadline on the client clock, though the connect it waits on never answers', async () => {
+  const clock = manualClock()
+  const client = connectRpc({ call: addressCall(() => new Promise<never>(() => undefined), 'unix:/store/serve.sock'), handle: async () => null, clock, keepsConnecting: true })
+
+  const asked = client.request('demo/Echo.echo', ['ping']).catch((error: unknown) => (error as Error).message)
+  clock.pass(29_999)
+  const early = await Promise.race([asked, Promise.resolve('still waiting')])
+  clock.pass(1)
+
+  expect([early, await asked]).toEqual(['still waiting', 'demo/Echo.echo passed its 30 s deadline'])
+  await client.close()
+})
+
+async function rawProvider(fetch: HttpFetch, program: string) {
+  const ask = async (method: 'GET' | 'POST', path: string, body?: unknown) => fetch(`http://localhost${path}`, { method, socketPath: '/store/serve.sock', ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  const { connection } = JSON.parse((await ask('POST', '/rpc/connect')).text) as { readonly connection: string }
+  await ask('POST', `/rpc/${connection}`, [{ jsonrpc: '2.0', id: 1, method: providerActs.provide, params: { interface: 'demo/Echo', mod: 'demo', program } }])
+  const received = async () => JSON.parse((await ask('GET', `/rpc/${connection}`)).text) as { readonly id: number; readonly params?: readonly string[] }[]
+  await received()
+  return { received, answer: (id: number, result: unknown) => ask('POST', `/rpc/${connection}`, [{ jsonrpc: '2.0', id, result }]) }
+}
+
+test("a provider that polls late keeps its connection and answers the call that waited 8 s for it, while a call to a provider whose copy exited fails at once", async () => {
+  const exited = new Set<string>()
+  let checked: (program: string) => void = () => undefined
+  const { serve, connect, fetch, clock } = servedComputer({}, {}, { hasExited: async (_mod, program) => (checked(program), exited.has(program)) })
+  const slow = await rawProvider(fetch, 'slow')
+  await rawProvider(fetch, 'dead')
+  const { client } = connect('caller')
+  const callTo = (program: string) => client.request<string>(providerActs.call, { interface: 'demo/Echo', method: 'echo', args: ['ping'], mod: 'demo', program })
+  const slowChecked = new Promise<void>((resolve) => {
+    checked = (program) => program === 'slow' && resolve()
+  })
+
+  exited.add('dead')
+  const dead = await callTo('dead').catch((error: unknown) => (error as Error).message)
+  const answered = callTo('slow')
+  await slowChecked
+  clock.pass(8_100)
+  const [late] = await slow.received()
+  await slow.answer(late?.id ?? 0, `slow heard ${late?.params?.[0]}`)
+
+  expect(dead).toBe("The connection closed: demo's dead program exited")
+  expect(await answered).toBe('slow heard ping')
+  expect((await serve.providers.list('demo/Echo')).map((each) => each.program)).toEqual(['slow'])
+  await client.close()
+  serve.close()
+})
+
+test("a session's listener on a provider that is not there yet, as after cmod serve starts again, hears the provider once it provides, and reports nothing", async () => {
+  const { serve, connect, reported } = servedComputer()
+  const session = connect('session')
+  session.listeners.followProviders(session.client)
+  let told: string | undefined
+  session.listeners.listen(session.client, { ...listeningOf('demo/Echo', 'on', 'Change', [], undefined), provider: { mod: 'demo', program: 'echo' } }, (change: { readonly text: string }) => {
+    told = change.text
+  })
+  await session.client.request(providerActs.providers, { interface: 'demo/Echo' })
+
+  const provider = connect('echo', { mod: 'demo', program: 'echo' })
+  const provided = provider.served.provide('demo/Echo', { echo: (text: string) => text })
+  for (let round = 0; round < 50 && told === undefined; round += 1) {
+    provided.tell('Change', { text: 'eu-2' })
+    await provider.client.request(providerActs.providers, { interface: 'demo/Echo' })
+  }
+
+  expect(told).toBe('eu-2')
+  expect(reported).toEqual([])
+  for (const each of [session, provider]) await each.client.close()
+  serve.close()
 })
 
 test('a listener added before its program answers reports nothing, and hears the program once it connects', async () => {
@@ -644,7 +774,10 @@ test('a listener added before its program answers reports nothing, and hears the
     await listeners.replay(client)
     connected()
   }
-  const client = connectRpc({ call: addressCall(fetch, 'unix:/store/boat.sock'), handle: (method, params, signal) => listeners.handler(method, params, signal), onConnect: replayed, wait: () => cameUp, keepsConnecting: true })
+  const client = connectRpc({ call: addressCall(fetch, 'unix:/store/boat.sock'), handle: (method, params, signal) => listeners.handler(method, params, signal), onConnect: replayed, clock: { after: (ms, run) => {
+    if (ms < 30_000) void cameUp.then(run)
+    return { cancel: () => undefined }
+  } }, keepsConnecting: true })
 
   const heard = new Promise<string>((resolve) => listeners.listen(client, listeningOf('demo/Platform', 'on', 'MachineChange', [], undefined), (machine: { readonly name: string }) => resolve(machine.name)))
   isUp = true
@@ -671,10 +804,10 @@ test("cmod serve tells a session's cmod plugin the parts its apps show, tells no
       heard.shift()?.()
       return null
     },
-    wait: atOnce,
+    clock: retriesAtOnce,
   })
   await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
-  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
   const ui = { show: (...args: unknown[]) => app.request(methodName(uiInterface, 'show'), args) }
 
   const shown = nextTold()
@@ -711,10 +844,10 @@ test("cmod serve tells a session's cmod plugin it is hosted while one app's show
       heard.shift()?.()
       return null
     },
-    wait: atOnce,
+    clock: retriesAtOnce,
   })
   await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
-  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
   const ui = { show: (...args: unknown[]) => app.request(methodName(uiInterface, 'show'), args) }
 
   const hosted = nextTold()
@@ -737,9 +870,9 @@ test("cmod serve tells a session's cmod plugin it is hosted while one app's show
 
 test("an app that asks for the views of a session whose cmod plugin predates cmod/UI hears that the session runs an older cmod plugin and to reload it", async () => {
   const { serve, fetch } = servedComputer()
-  const plugin = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `The cmod plugin of session s1 answers no ${method}.`)), wait: atOnce })
+  const plugin = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `The cmod plugin of session s1 answers no ${method}.`)), clock: retriesAtOnce })
   await plugin.request('$/hold', { session: 's1', project: '/work/app', cwd: '/work/app' })
-  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
 
   const asked = app.request(methodName(uiInterface, 'views'), ['s1'])
 
@@ -750,9 +883,9 @@ test("an app that asks for the views of a session whose cmod plugin predates cmo
 })
 
 test("an app that asks for the views of a session that runs on this computer with no cmod plugin holding it hears to reload it, and one for a session that runs nowhere here hears that it runs nowhere here", async () => {
-  const running: SessionComputer = { ...noSessions, sessions: (scope) => (scope['running'] === true ? [{ id: 's1', title: 'app', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '', lastAt: '', isRunning: true }] : []) }
+  const running: Computer = { ...noSessions, sessions: (scope) => (scope['running'] === true ? [{ id: 's1', title: 'app', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '', lastAt: '', isRunning: true }] : []) }
   const { serve, fetch } = servedComputer({}, {}, { computer: running })
-  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, wait: atOnce })
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
 
   const [unheld, elsewhere] = await Promise.allSettled([app.request(methodName(uiInterface, 'views'), ['s1']), app.request(methodName(uiInterface, 'views'), ['s2'])])
 
@@ -768,7 +901,7 @@ const macDevice = { id: 'mac-id', name: 'mac' }
 
 const devboxDevice = { id: 'devbox-id', name: 'devbox' }
 
-function linkedDevices(devboxComputer: SessionComputer = noSessions, macComputer: SessionComputer = noSessions) {
+function linkedDevices(devboxComputer: Computer = noSessions, macComputer: Computer = noSessions) {
   const mac = servedComputer({}, {}, { device: macDevice, computer: macComputer })
   const devbox = servedComputer({}, {}, { device: devboxDevice, computer: devboxComputer })
   const sent: { readonly from: string; readonly message: unknown }[] = []
@@ -852,9 +985,11 @@ test("a session reaches a program on another device over the message channel a c
 
 test("a session lists another device's sessions over the message channel, and a message to one of them reaches that device", async () => {
   const started: unknown[] = []
+  const ended = { id: 'devbox-1', title: 'Upgrade the dependencies', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning: false, device: devboxDevice }
   const devices = linkedDevices({
     ...noSessions,
-    sessions: () => [{ id: 'devbox-1', title: 'Upgrade the dependencies', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning: false, device: devboxDevice }],
+    sessions: () => [ended],
+    session: (id) => (id === ended.id ? ended : undefined),
     unheld: async (session, action, input) => void started.push([session, action, input]),
   })
   const session = devices.connect(devices.mac, 'boat')
@@ -872,19 +1007,211 @@ test("a session lists another device's sessions over the message channel, and a 
   await devices.close()
 })
 
-test('cmod serve acts on no session it does not hold while another device runs it, so a message never starts a second copy there, and acts on one no device runs', async () => {
+test('cmod serve acts on no session it does not hold while another device runs it, so a message never starts a second copy there and is not stored here, and acts on one no device runs', async () => {
   const resumed: unknown[] = []
   const running = { id: 'shared', title: 'Release', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning: true, device: devboxDevice }
-  const devices = linkedDevices({ ...noSessions, session: (id) => (id === 'shared' ? running : undefined) }, { ...noSessions, unheld: async (session, action) => void resumed.push([session, action]) })
+  const devices = linkedDevices({ ...noSessions, session: (id) => (id === 'shared' ? running : undefined) }, { ...noSessions, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action) => void resumed.push([session, action]) })
   const session = devices.connect(devices.mac, 'boat')
   await devices.linked()
 
   const shared = await session.client.request('cmod/Sessions.send', ['shared', { type: 'prompt', text: 'Go on' }, {}]).catch((error: unknown) => error as RpcError)
-  await session.client.request('cmod/Sessions.send', ['ended', { type: 'prompt', text: 'Go on' }, {}])
+  const ended = await session.client.request('cmod/Sessions.send', ['ended', { type: 'prompt', text: 'Go on' }, {}])
 
   expect([(shared as RpcError).code, (shared as RpcError).message]).toEqual([rpcCodes.notHeld, 'Session shared runs on devbox, so this computer takes no send for it.'])
+  expect(await devices.mac.computer.mail('shared', {})).toEqual([])
+  expect(ended).toEqual({ id: 1, state: 'delivered' })
   expect(resumed).toEqual([['ended', 'send']])
   await devices.close()
+})
+
+const planner = { session: '4b1e9c2a-7d3f-4e15-9a0b-2c6d8e1f3a57', title: 'Plan the release' }
+
+const fromPlanner = (id: number, text: string) => `<cmod-message from="${planner.session}" title="${planner.title}" reply="cmod sessions send 4b1e9c2a --reply-to ${id}">\n${text}\n</cmod-message>`
+
+function sessionNamed(id: string, isRunning: boolean) {
+  return { id, title: 'Release', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z', isRunning }
+}
+
+function heldBy(fetch: HttpFetch, session: string, act: (input: unknown) => unknown = () => null) {
+  const acted: unknown[] = []
+  const callers: unknown[] = []
+  let heard: { readonly count: number; readonly resolve: () => void } | undefined
+  const plugin = connectRpc({
+    call: addressCall(fetch, 'unix:/store/serve.sock'),
+    handle: async (method, params) => {
+      if (method !== '$/act') return null
+      const { action, input, caller } = params as { readonly action: string; readonly input: unknown; readonly caller?: unknown }
+      acted.push([action, input])
+      callers.push(caller)
+      const answer = act(input)
+      if (heard !== undefined && acted.length >= heard.count) heard.resolve()
+      return answer
+    },
+    clock: retriesAtOnce,
+  })
+  return {
+    acted,
+    callers,
+    plugin,
+    hold: () => plugin.request('$/hold', { session, project: '/work/app', cwd: '/work/app' }),
+    actedTimes: (count: number) => new Promise<void>((resolve) => (acted.length >= count ? resolve() : (heard = { count, resolve }))),
+  }
+}
+
+function appOn(fetch: HttpFetch) {
+  const app = connectRpc({ call: addressCall(fetch, 'unix:/store/serve.sock'), handle: async () => null, clock: retriesAtOnce })
+  return { app, send: (session: string, message: object, context: object = {}) => app.request('cmod/Sessions.send', [session, message, context]) }
+}
+
+test('a send to a session a cmod plugin holds stores the mail, delivers it labelled with its sender through the act that cmod plugin answers, and answers delivered', async () => {
+  const { serve, fetch, computer, reported } = servedComputer()
+  const worker = heldBy(fetch, 'worker')
+  await worker.hold()
+  const { app, send } = appOn(fetch)
+
+  const sent = await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: planner })
+  const answered = await send('worker', { type: 'note', text: 'The deploy key rotated.', from: planner, replyTo: 1 })
+  const bare = await send('worker', { type: 'prompt', text: 'Ship it.', as: 'person' })
+
+  expect([sent, answered, bare]).toEqual([
+    { id: 1, state: 'delivered' },
+    { id: 2, state: 'delivered' },
+    { id: 3, state: 'delivered' },
+  ])
+  expect(worker.acted).toEqual([
+    ['send', { type: 'prompt', text: fromPlanner(1, 'Rerun the deploy') }],
+    ['send', { type: 'note', text: `<cmod-message from="${planner.session}" title="${planner.title}" reply="cmod sessions send 4b1e9c2a --reply-to 2" reply-to="1">\nThe deploy key rotated.\n</cmod-message>` }],
+    ['send', { type: 'prompt', text: 'Ship it.', as: 'person' }],
+  ])
+  expect((await computer.mail('worker', {})).map((mail) => [mail.id, mail.from, mail.deliveredAt === undefined])).toEqual([
+    [1, planner.session, false],
+    [2, planner.session, false],
+    [3, undefined, false],
+  ])
+  expect(reported).toEqual([])
+  await app.close()
+  await worker.plugin.close()
+  serve.close()
+})
+
+test("a send to a session that runs with no cmod plugin holding it stays queued, and its cmod plugin's $/hold delivers each queued mail once, in the order it was sent", async () => {
+  const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, session: (id) => (id === 'worker' ? sessionNamed('worker', true) : undefined) } })
+  const { app, send } = appOn(fetch)
+
+  const queued = [await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: planner }), await send('worker', { type: 'note', text: 'The deploy key rotated.' })]
+  const worker = heldBy(fetch, 'worker')
+  await worker.hold()
+  await worker.actedTimes(2)
+  await worker.hold()
+  const after = await send('worker', { type: 'prompt', text: 'Ship it.' })
+
+  expect(queued).toEqual([
+    { id: 1, state: 'queued' },
+    { id: 2, state: 'queued' },
+  ])
+  expect(after).toEqual({ id: 3, state: 'delivered' })
+  expect(worker.acted).toEqual([
+    ['send', { type: 'prompt', text: fromPlanner(1, 'Rerun the deploy') }],
+    ['send', { type: 'note', text: 'The deploy key rotated.' }],
+    ['send', { type: 'prompt', text: 'Ship it.' }],
+  ])
+  expect((await computer.queued('worker')).map((mail) => mail.id)).toEqual([])
+  expect(reported).toEqual([])
+  await app.close()
+  await worker.plugin.close()
+  serve.close()
+})
+
+test("a mail whose holder's act fails stays queued, holds back the session's later mail, is tried again at each send and $/hold, reports once for its id, and the holder's next accepting $/hold delivers both in order", async () => {
+  const { serve, fetch, computer, reported } = servedComputer()
+  let refuses = true
+  const worker = heldBy(fetch, 'worker', () => {
+    if (refuses) throw new Error('Claude Code dropped the prompt: the session is closing')
+    return null
+  })
+  await worker.hold()
+  const { app, send } = appOn(fetch)
+
+  const sent = await send('worker', { type: 'prompt', text: 'Rerun the deploy' })
+  const held = await send('worker', { type: 'prompt', text: 'Ship it.' })
+  await worker.hold()
+  await worker.actedTimes(3)
+  const kept = (await computer.queued('worker')).map((mail) => mail.id)
+  refuses = false
+  await worker.hold()
+  await worker.actedTimes(5)
+  const after = await send('worker', { type: 'prompt', text: 'Tag it.' })
+
+  expect([sent, held]).toEqual([
+    { id: 1, state: 'queued' },
+    { id: 2, state: 'queued' },
+  ])
+  expect(kept).toEqual([1, 2])
+  expect(reported).toEqual(['Error: Claude Code dropped the prompt: the session is closing'])
+  expect(after).toEqual({ id: 3, state: 'delivered' })
+  expect(worker.acted.map((each) => (each as readonly [string, { readonly text: string }])[1].text)).toEqual(['Rerun the deploy', 'Rerun the deploy', 'Rerun the deploy', 'Rerun the deploy', 'Ship it.', 'Tag it.'])
+  expect(await computer.queued('worker')).toEqual([])
+  await app.close()
+  await worker.plugin.close()
+  serve.close()
+})
+
+test('a note queued before a cmod serve restart reaches the holder with the mod that sent it, read from its mail row', async () => {
+  const mailbox = memoryMail()
+  const computer: Computer = { ...noSessions, ...mailbox, session: (id) => (id === 'worker' ? sessionNamed('worker', true) : undefined) }
+  const before = servedComputer({}, {}, { computer })
+  const { app, send } = appOn(before.fetch)
+  const queued = await send('worker', { type: 'note', text: 'The deploy key rotated.' }, { caller: 'demo' })
+  await app.close()
+  before.serve.close()
+
+  const after = servedComputer({}, {}, { computer })
+  const worker = heldBy(after.fetch, 'worker')
+  await worker.hold()
+  await worker.actedTimes(1)
+
+  expect(queued).toEqual({ id: 1, state: 'queued' })
+  expect((await mailbox.mail('worker', {})).map((mail) => mail.caller)).toEqual(['demo'])
+  expect(worker.acted).toEqual([['send', { type: 'note', text: 'The deploy key rotated.' }]])
+  expect(worker.callers).toEqual(['demo'])
+  await worker.plugin.close()
+  after.serve.close()
+})
+
+test('a send to a session that ended resumes it with the labelled text, marks the mail delivered, and a send to a session this computer has none of is not stored', async () => {
+  const resumed: unknown[] = []
+  const { serve, fetch, computer } = servedComputer({}, {}, { computer: { ...noSessions, session: (id) => (id === 'ended' ? sessionNamed('ended', false) : undefined), unheld: async (session, action, input) => void resumed.push([session, action, input]) } })
+  const { app, send } = appOn(fetch)
+
+  const sent = await send('ended', { type: 'prompt', text: 'Run it again', from: planner })
+  const gone = await send('gone', { type: 'prompt', text: 'Run it again' }).catch((error: unknown) => error as RpcError)
+
+  expect(sent).toEqual({ id: 1, state: 'delivered' })
+  expect(resumed).toEqual([['ended', 'send', { type: 'prompt', text: fromPlanner(1, 'Run it again') }]])
+  expect((await computer.mail('ended', {})).map((mail) => mail.deliveredAt === undefined)).toEqual([false])
+  expect([(gone as RpcError).code, (gone as RpcError).message]).toEqual([rpcCodes.notHeld, 'No session gone on this computer.'])
+  expect(await computer.mail('gone', {})).toEqual([])
+  await app.close()
+  serve.close()
+})
+
+test("cmod serve reads a session's mail, sent to it and sent by it, newest last, and answers not held for a session it has no mail or record of", async () => {
+  const { serve, fetch } = servedComputer({}, {}, { computer: { ...noSessions, session: (id) => (id === 'worker' || id === planner.session ? sessionNamed(id, true) : undefined) } })
+  const { app, send } = appOn(fetch)
+  await send('worker', { type: 'prompt', text: 'Rerun the deploy', from: planner })
+  await send(planner.session, { type: 'prompt', text: 'Deployed.', from: { session: 'worker', title: 'Deploy' }, replyTo: 1 })
+
+  const read = (session: string, options: object = {}) => app.request<readonly { readonly id: number; readonly session: string }[]>('cmod/Sessions.read', [session, 'mail', options])
+  const gone = await read('gone').catch((error: unknown) => error as RpcError)
+
+  expect((await read('worker')).map((mail) => [mail.id, mail.session])).toEqual([
+    [1, 'worker'],
+    [2, planner.session],
+  ])
+  expect((await read('worker', { last: 1 })).map((mail) => mail.id)).toEqual([2])
+  expect((gone as RpcError).code).toBe(rpcCodes.notHeld)
+  await app.close()
+  serve.close()
 })
 
 test('a message channel carries nothing while it is idle, across every lease of cmod serve', async () => {
@@ -963,7 +1290,9 @@ test("a device whose cmod serve starts again links again over the message channe
 function echoOnProgram(echo: (clock: ReturnType<typeof manualClock>) => Promise<unknown>) {
   const clock = manualClock()
   const tested = testMod(defineMod({ name: 'notes', setup() {} }))
-  const call = async ({ method }: { readonly method: string }) => (method === interfaceMethods.providers ? { mods: [], programs: [{ mod: 'demo', program: 'echo' }] } : method === interfaceMethods.provided ? echo(clock) : null)
+  let reached: () => void = () => undefined
+  const isReached = new Promise<void>((resolve) => (reached = resolve))
+  const call = async ({ method }: { readonly method: string }) => (method === interfaceMethods.providers ? { mods: [], programs: [{ mod: 'demo', program: 'echo' }] } : method === interfaceMethods.provided ? (reached(), echo(clock)) : null)
   const start = async () => {
     await tested.start()
     tested.fakes.cmod.call = call
@@ -971,7 +1300,7 @@ function echoOnProgram(echo: (clock: ReturnType<typeof manualClock>) => Promise<
     const [found] = await providers('demo/Echo')
     return found
   }
-  return { clock, start }
+  return { clock, start, isReached }
 }
 
 test("a session mod's call to a program's provider that never answers rejects once the test kit's clock passes 30 s", async () => {
@@ -993,10 +1322,11 @@ test("a session mod's call to a program's provider that never answers rejects on
 })
 
 test("a session mod's call to a program's provider that answers at 29 s resolves with its answer", async () => {
-  const { clock, start } = echoOnProgram((at) => new Promise((resolve) => void at.after(29_000, () => resolve('heard ping'))))
+  const { clock, start, isReached } = echoOnProgram((at) => new Promise((resolve) => void at.after(29_000, () => resolve('heard ping'))))
   const echo = await start()
 
   const called = echo?.echo('ping')
+  await isReached
   clock.pass(29_000)
 
   expect(await called).toBe('heard ping')
@@ -1016,7 +1346,7 @@ async function silentEcho(computer: ReturnType<typeof servedComputer>) {
       heard = signal
       return new Promise(() => undefined)
     },
-    wait: atOnce,
+    clock: retriesAtOnce,
   })
   await provider.request('$/provide', { interface: 'demo/Echo', mod: 'demo', program: 'echo' })
   return { provider, heard: () => heard }
@@ -1252,4 +1582,32 @@ test("testMod refuses a fake session-code provider on another device, with the p
   expect(() => testMod(defineMod({ name: 'notes', setup: () => undefined }), { providers: [{ name: 'demo/Echo', mod: 'boat', device: devboxDevice, methods: { echo: (text) => text } }] })).toThrow(
     "boat's session code provides demo/Echo only in this session, on this computer, so it takes no device. Give the program that provides it on devbox, with program: '<executable>'.",
   )
+})
+
+test("cmod serve tells every listener of cmod/Store the part a writer stored, and refuses a part it does not keep", async () => {
+  const { connect } = servedComputer()
+  const writer = connect('writer')
+  const reader = connect('reader')
+  const heard = new Promise<unknown>((resolve) => reader.listeners.listen(reader.client, listeningOf(storeInterface, 'on', 'Change', [], undefined), resolve))
+  await reader.client.request(providerActs.providers, { interface: storeInterface })
+
+  await writer.client.request(methodName(storeInterface, 'changed'), ['plugins'])
+
+  expect(await heard).toEqual({ part: 'plugins' })
+  await expect(writer.client.request(methodName(storeInterface, 'changed'), ['records'])).rejects.toThrow('cmod/Store.changed takes the part a writer stored: plugins, widgets, buildFailures, preferences, links.')
+})
+
+test("cmod serve tells a listener of cmod/Programs the program whose instance file changed, and lists itself as the provider", async () => {
+  const { connect } = servedComputer()
+  const holder = connect('holder')
+  const session = connect('session')
+  const [found] = await session.mod.providers(programsInterface)
+  const heard = new Promise<unknown>((resolve) => (found as { onChange(matcher: object, listener: (change: unknown) => void): unknown } | undefined)?.onChange({ mod: 'demo' }, resolve))
+  await session.client.request(providerActs.providers, { interface: programsInterface })
+
+  await holder.client.request(methodName(programsInterface, 'changed'), ['other', 'echo'])
+  await holder.client.request(methodName(programsInterface, 'changed'), ['demo', 'echo'])
+
+  expect(found?.['mod']).toBe('cmod')
+  expect(await heard).toEqual({ mod: 'demo', program: 'echo' })
 })

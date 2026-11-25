@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch, type Stats } from 'node:fs'
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, type Stats } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
 import { SHARE_ENV, threadId } from 'node:worker_threads'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
@@ -35,6 +35,8 @@ type Step = { readonly transcript: Transcript; readonly line: Line; readonly raw
 
 export type Scope = { readonly project: string; readonly everyProject: boolean; readonly since: string | undefined; readonly running?: boolean; readonly held?: readonly string[] }
 
+const orderIndexes ='create index if not exists messages_by_seq on messages (session, seq);'
+
 const schema = `
 create table files (id integer primary key, path text not null unique, session text not null, task text not null, offset integer not null);
 create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, color text, agent_type text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
@@ -45,6 +47,7 @@ create index messages_by_task on messages (session, task, seq);
 create index messages_by_turn on messages (session, turn, seq);
 create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
+${orderIndexes}
 create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, device text, primary key (session, prompt));
 create table contexts (session text not null, task text not null default '', number integer not null, opened_at text not null, closed_at text, primary key (session, task, number));
 create table tasks (session text not null, id text not null, title text not null, agent_type text, forked_from text, model text, opened_by text not null, opened_at text not null, closed_at text, status text, parent text, context integer not null, primary key (session, id));
@@ -80,33 +83,28 @@ export function openHistory({ isInMemory = false }: { readonly isInMemory?: bool
   const db = new Database(path)
   db.exec('pragma busy_timeout = 120000')
   db.exec('pragma synchronous = normal')
+  db.exec(orderIndexes)
   return db
 }
 
 export type IndexCall = { readonly id: number; readonly method: string; readonly args: readonly unknown[] }
 
-export type FollowedChange = { readonly session: string; readonly change: SessionChange; readonly isInProject: boolean }
-
-export type IndexAnswer = { readonly id: number; readonly value?: unknown; readonly error?: string; readonly change?: FollowedChange }
+export type IndexAnswer = { readonly id: number; readonly value?: unknown; readonly error?: string }
 
 type IndexReads = { readonly [Method in keyof IndexMethods]: IndexMethods[Method] extends (db: Database, ...args: infer Args) => infer Value ? (...args: Args) => Promise<Value> : never }
 
-export type HistoryIndex = IndexReads & {
-  follow(sessions: readonly string[], project: string, onChange: (followed: FollowedChange) => void, signal: AbortSignal): Promise<void>
-  close(): Promise<void>
-}
+export type HistoryIndex = IndexReads & { close(): Promise<void> }
 
-type IndexWorker = { ask(method: string, args: readonly unknown[], onChange?: (followed: FollowedChange) => void): { readonly id: number; readonly answer: Promise<unknown> }; close(): Promise<void> }
+type IndexWorker = { ask(method: string, args: readonly unknown[]): Promise<unknown>; close(): Promise<void> }
 
 function startIndexWorker(): IndexWorker {
   const worker = new Worker(new URL('./history-worker.ts', import.meta.url).href, { env: SHARE_ENV })
-  type Waiting = { resolve(value: unknown): void; reject(error: Error): void; onChange?: (followed: FollowedChange) => void }
+  type Waiting = { resolve(value: unknown): void; reject(error: Error): void }
   const waiting = new Map<number, Waiting>()
   let last = 0
   let failure: Error | undefined
-  worker.onmessage = ({ data: { id, value, error, change } }: MessageEvent<IndexAnswer>) => {
+  worker.onmessage = ({ data: { id, value, error } }: MessageEvent<IndexAnswer>) => {
     const asked = waiting.get(id)
-    if (change !== undefined) return asked?.onChange?.(change)
     waiting.delete(id)
     if (error === undefined) asked?.resolve(value)
     else asked?.reject(new Error(error))
@@ -116,25 +114,20 @@ function startIndexWorker(): IndexWorker {
     for (const asked of waiting.values()) asked.reject(failure)
     waiting.clear()
   }
-  const ask = (method: string, args: readonly unknown[], onChange?: (followed: FollowedChange) => void) => {
-    last += 1
-    const id = last
-    return {
-      id,
-      answer: new Promise<unknown>((resolve, reject) => {
-        if (failure !== undefined) return reject(failure)
-        waiting.set(id, { resolve, reject, ...(onChange === undefined ? {} : { onChange }) })
-        worker.postMessage({ id, method, args } satisfies IndexCall)
-      }),
-    }
-  }
-  return { ask, close: async () => void (await ask('close', []).answer.finally(() => worker.terminate())) }
+  const ask = (method: string, args: readonly unknown[]) =>
+    new Promise<unknown>((resolve, reject) => {
+      if (failure !== undefined) return reject(failure)
+      last += 1
+      waiting.set(last, { resolve, reject })
+      worker.postMessage({ id: last, method, args } satisfies IndexCall)
+    })
+  return { ask, close: async () => void (await ask('close', []).finally(() => worker.terminate())) }
 }
 
 export function openIndex(): HistoryIndex {
   const reads = startIndexWorker()
   const scans = startIndexWorker()
-  const read = <Method extends keyof IndexMethods>(method: Method, worker = reads) => ((...args: readonly unknown[]) => worker.ask(method, args).answer) as IndexReads[Method]
+  const read = <Method extends keyof IndexMethods>(method: Method, worker = reads) => ((...args: readonly unknown[]) => worker.ask(method, args)) as IndexReads[Method]
   return {
     listSessions: read('listSessions'),
     getSession: read('getSession'),
@@ -146,13 +139,6 @@ export function openIndex(): HistoryIndex {
     readGoal: read('readGoal'),
     readState: read('readState'),
     removeSession: read('removeSession'),
-    async follow(sessions, project, onChange, signal) {
-      const { id, answer } = reads.ask('follow', [sessions, project], onChange)
-      const unfollow = () => void reads.ask('unfollow', [id]).answer
-      if (signal.aborted) unfollow()
-      else signal.addEventListener('abort', unfollow, { once: true })
-      await answer.finally(() => signal.removeEventListener('abort', unfollow))
-    },
     async close() {
       await Promise.all([reads.close(), scans.close()])
     },
@@ -281,11 +267,9 @@ export function runningSessions(): Set<string> {
   return new Set(runningEntries().map(({ session }) => session))
 }
 
-function runningIn(project: string): string[] {
+function runningIn(project: string): RunningEntry[] {
   const folder = folderOf(project)
-  return runningEntries()
-    .filter(({ session, cwd }) => cwd === project || cwd.startsWith(`${project}${sep}`) || existsSync(join(folder, `${session}.jsonl`)))
-    .map(({ session }) => session)
+  return runningEntries().filter(({ session, cwd }) => cwd === project || cwd.startsWith(`${project}${sep}`) || existsSync(join(folder, `${session}.jsonl`)))
 }
 
 function isAlive(pid: number): boolean {
@@ -319,6 +303,13 @@ function taskTranscripts(main: Transcript): Transcript[] {
 function sessionFolder(session: string, project: string): string | undefined {
   const preferred = folderOf(project)
   return [preferred, ...foldersIn({ project, everyProject: true }).filter((folder) => folder !== preferred)].find((each) => existsSync(join(each, `${session}.jsonl`)))
+}
+
+export function transcriptPaths(session: string, project: string): string[] {
+  const folder = existsSync(join(folderOf(project), `${session}.jsonl`)) ? folderOf(project) : sessionFolder(session, project)
+  if (folder === undefined) return []
+  const main = { path: join(folder, `${session}.jsonl`), folder, session, task: undefined }
+  return [main.path, ...taskTranscripts(main).map((transcript) => transcript.path)]
 }
 
 export function hasTranscript(session: string, project: string): boolean {
@@ -925,43 +916,41 @@ export function searchMessages(db: Database, text: string, scope: SearchScope): 
   })
 }
 
-export async function followSessions(db: Database, { sessions, isEveryRunning }: { readonly sessions: readonly string[]; readonly isEveryRunning: boolean }, project: string, onChange: (session: string, change: SessionChange, isInProject: boolean) => void, signal: AbortSignal): Promise<void> {
+export type SessionsFollower = { look(): void; step(session?: string): void }
+
+export function followSessions(db: Database, { sessions, isEveryRunning }: { readonly sessions: readonly string[]; readonly isEveryRunning: boolean }, project: string, onChange: (session: string, change: SessionChange, isInProject: boolean) => void): SessionsFollower {
   const own = process.env['CLAUDE_CODE_SESSION_ID']
-  const followed = new Set<string>()
-  const followers: Promise<void>[] = []
-  const add = (session: string) => {
+  const began = Date.now()
+  const followed = new Map<string, () => void>()
+  const add = (session: string, since?: number) => {
     if (followed.has(session) || session === own) return
-    followed.add(session)
-    const isInProject = runningIn(project).includes(session) || existsSync(join(folderOf(project), `${session}.jsonl`))
-    followers.push(followSession(db, session, project, (change) => onChange(session, change, isInProject), signal))
+    const isInProject = runningIn(project).some((entry) => entry.session === session) || existsSync(join(folderOf(project), `${session}.jsonl`))
+    const step = followSession(db, session, project, (change) => onChange(session, change, isInProject), since)
+    followed.set(session, step)
+    step()
   }
   for (const session of sessions) add(session)
-  if (!isEveryRunning) {
-    await Promise.all(followers)
-    return
+  return {
+    look() {
+      if (isEveryRunning) for (const { session, startedAt } of runningIn(project)) add(session, startedAt !== undefined && startedAt > began ? startedAt : undefined)
+    },
+    step(session) {
+      for (const [each, step] of followed) if (session === undefined || session === each) step()
+    },
   }
-  const look = () => {
-    for (const session of runningIn(project)) add(session)
-  }
-  mkdirSync(runningFolder(), { recursive: true })
-  watch(runningFolder(), { signal }).on('change', look).on('error', () => undefined)
-  look()
-  await new Promise<void>((resolve) => (signal.aborted ? resolve() : signal.addEventListener('abort', () => resolve(), { once: true })))
 }
 
-async function followSession(db: Database, session: string, project: string, onChange: (change: SessionChange) => void, signal: AbortSignal): Promise<void> {
-  const folder = sessionFolder(session, project) ?? folderOf(project)
-  mkdirSync(folder, { recursive: true })
-  const prefix = `${session}.jsonl`
-  const tasksPrefix = join(session, 'subagents')
-  const watcher = watch(folder, { recursive: true, signal })
+function followSession(db: Database, session: string, project: string, onChange: (change: SessionChange) => void, since: number | undefined): () => void {
   let conversation: Conversation | undefined
   let offsets = new Map<string, number>()
   const transcripts = () => {
-    const main = { path: join(folder, prefix), folder, session, task: undefined }
-    return existsSync(main.path) ? [main, ...taskTranscripts(main)] : []
+    const folder = sessionFolder(session, project)
+    if (folder === undefined) return []
+    const main = { path: join(folder, `${session}.jsonl`), folder, session, task: undefined }
+    return [main, ...taskTranscripts(main)]
   }
-  const step = () => {
+  return () => {
+    if (conversation === undefined && since !== undefined) conversation = createConversation(emptyConversation(session))
     if (conversation === undefined) {
       const found = transcripts()
       readSession(db, found)
@@ -971,22 +960,13 @@ async function followSession(db: Database, session: string, project: string, onC
       return
     }
     const reached = stepThrough(conversation, transcripts(), offsets, ({ transcript, raw, changes }) => {
+      if (since !== undefined && typeof raw['timestamp'] === 'string' && Date.parse(raw['timestamp']) < since) return
       for (const change of changes) onChange(change)
       const usage = transcript.task === undefined ? usageOfRow(raw) : undefined
       if (usage !== undefined) onChange({ type: UsageChange, usage })
     })
     for (const [path, offset] of reached ?? []) offsets.set(path, offset)
   }
-  watcher.on('change', (_event, name) => {
-    const changed = String(name)
-    if (changed === prefix || changed.startsWith(tasksPrefix)) step()
-  })
-  step()
-  await new Promise<void>((resolve) => {
-    watcher.on('close', resolve)
-    watcher.on('error', () => resolve())
-    signal.addEventListener('abort', () => resolve(), { once: true })
-  })
 }
 
 function foldersMarks(count: number): string {

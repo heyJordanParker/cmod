@@ -1,6 +1,10 @@
 import { interfaceName, isObject, type ProgramInstance } from '../records.js'
 import type { Device } from '../session/context/turn/device.js'
 import type { SessionData } from '../session/conversation.js'
+import { Note } from '../session/context/turn/message/note.js'
+import { Prompt } from '../session/context/turn/message/prompt.js'
+import { Person } from '../session/context/turn/message/sender.js'
+import type { SendReceipt } from '../session/session.js'
 import { matches, receivedMatcher, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
@@ -8,7 +12,7 @@ import type { Claude } from './claude.js'
 import { beforeDeadline, callDeadline, hookMs, listenerMs, listenerOf } from './deadline.js'
 import { cmodPluginName } from './dependencies.js'
 import { unaborted } from './router.js'
-import { addressCall, connectRpc, isConnectionGone, RpcError, rpcCodes, rpcRoutes, RpcUnreached, type HttpFetch, type Peer, type RpcClient, type RpcConnection, type RpcHandler, type RpcMessage, type RpcRoutes } from './rpc.js'
+import { addressCall, connectRpc, isConnectionGone, RpcError, rpcCodes, rpcRoutes, RpcUnreached, type HttpFetch, type Peer, type RpcClient, type RpcClock, type RpcConnection, type RpcHandler, type RpcMessage, type RpcRoutes } from './rpc.js'
 
 export type InterfaceName = `${string}/${string}`
 
@@ -70,8 +74,19 @@ export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPer
 
 export type VisitedAt = Readonly<Record<string, string>>
 
-export type StoreChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' }
+export type SessionsChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' }
 
+export const storeInterface = 'cmod/Store'
+
+export const storeParts = ['plugins', 'widgets', 'buildFailures', 'preferences', 'links'] as const
+
+export type StorePart = (typeof storeParts)[number]
+
+export type StoreChange = { readonly part: StorePart }
+
+export const programsInterface = 'cmod/Programs'
+
+export type ProgramsChange = { readonly mod: string; readonly program: string }
 
 export type ListenKind = 'on' | 'before'
 
@@ -228,12 +243,13 @@ export function interfaceServer({
 
 export type Listener = (payload: never, signal: AbortSignal) => unknown
 
-type Registered = { readonly listening: Listening; readonly listener: Listener; cursor: string | undefined }
+type Registered = { readonly listening: Listening; readonly listener: Listener; cursor: string | undefined; isPending: boolean }
 
 export type InterfaceListeners = {
   listen(request: Pick<Peer, 'request'>, listening: Omit<Listening, 'id'>, listener: Listener): Subscription
   handler(method: string, params: unknown, signal: AbortSignal): { readonly result: unknown } | undefined | Promise<{ readonly result: unknown }>
   replay(request: Pick<Peer, 'request'>): Promise<void>
+  followProviders(request: Pick<Peer, 'request'>): Subscription
 }
 
 export function interfaceListeners({ report: reportAll }: { readonly report: (error: unknown) => void }): InterfaceListeners {
@@ -244,14 +260,20 @@ export function interfaceListeners({ report: reportAll }: { readonly report: (er
   }
 
   const send = (request: Pick<Peer, 'request'>, each: Registered) =>
-    request.request(listenMethod, { ...each.listening, ...(each.cursor === undefined ? {} : { after: each.cursor }) } satisfies Listening)
+    request.request(listenMethod, { ...each.listening, ...(each.cursor === undefined ? {} : { after: each.cursor }) } satisfies Listening).then(
+      () => void (each.isPending = false),
+      (error: unknown) => {
+        each.isPending = error instanceof RpcError && error.code === rpcCodes.notProvided
+        if (!each.isPending) report(error)
+      },
+    )
 
-  return {
+  const listeners: InterfaceListeners = {
     listen(request, listening, listener) {
       const id = `${(next += 1)}`
-      const each: Registered = { listening: { ...listening, id }, listener, cursor: undefined }
+      const each: Registered = { listening: { ...listening, id }, listener, cursor: undefined, isPending: false }
       registered.set(id, each)
-      void send(request, each).catch(report)
+      void send(request, each)
       return {
         remove() {
           if (!registered.delete(id)) return
@@ -272,9 +294,14 @@ export function interfaceListeners({ report: reportAll }: { readonly report: (er
       return (async () => ({ result: (await each.listener(heard.payload as never, signal)) ?? null }))()
     },
     async replay(request) {
-      await Promise.all([...registered.values()].map((each) => send(request, each).catch(report)))
+      await Promise.all([...registered.values()].map((each) => send(request, each)))
     },
+    followProviders: (request) =>
+      listeners.listen(request, listeningOf(providersInterface, 'on', 'Change', [], undefined), (told: ProvidersChange) => {
+        for (const each of registered.values()) if (each.isPending && each.listening.interface === told.interface) void send(request, each)
+      }),
   }
+  return listeners
 }
 
 export function listeningOf(name: string, kind: ListenKind, event: string, args: readonly unknown[], matcher: unknown, options: ListenOptions = {}): Omit<Listening, 'id'> {
@@ -314,6 +341,20 @@ export type HoldingOf = (session: string) => HeldSession | undefined
 
 export type ToldAt = ReadonlyMap<string, number>
 
+export type Mail = {
+  readonly id: number
+  readonly session: string
+  readonly from?: string
+  readonly fromTitle?: string
+  readonly caller?: string
+  readonly type: typeof Prompt | typeof Note
+  readonly text: string
+  readonly replyTo?: number
+  readonly asUser: boolean
+  readonly sentAt: string
+  readonly deliveredAt?: string
+}
+
 export type SessionComputer = {
   sessions(scope: Readonly<Record<string, unknown>>, holding: HoldingOf, told: ToldAt): readonly SessionData[] | Promise<readonly SessionData[]>
   session(session: string, holding: HoldingOf, told: ToldAt): SessionData | undefined | Promise<SessionData | undefined>
@@ -322,20 +363,24 @@ export type SessionComputer = {
   unheld(session: string, action: string, input: unknown, context: SessionContext, holding: HoldingOf): Promise<unknown>
   visit(session: string, at: string, holding: HoldingOf): Promise<void>
   remove(session: string, context: SessionContext, holding: HoldingOf): Promise<void>
+  queue(mail: Omit<Mail, 'id' | 'deliveredAt'>): Promise<number>
+  queued(session: string): Promise<readonly Mail[]>
+  delivered(id: number, at: string): Promise<void>
+  mail(session: string, options: { readonly last?: number }): Promise<readonly Mail[]>
 }
 
 export type SessionRouting = {
   readonly routes: RpcRoutes
   readonly interfaces: InterfaceServer
-  readonly providers: Pick<ProviderRouting, 'list' | 'call'>
+  readonly providers: Pick<ProviderRouting, 'list' | 'call' | 'hear'>
   holding: HoldingOf
   heldSessions(): readonly HeldSession[]
   call<Result>(session: string, action: string, input: unknown, context?: SessionContext): Promise<Result>
-  changed(change: StoreChange): void
+  changed(change: SessionsChange): void
   close(): void
 }
 
-export const sessionActions = ['send', 'abort', 'end', 'fork', 'startTask', 'callTool', 'usage', 'surfaces', 'visit', 'delete', 'compact', 'startBackgroundTask', 'sendTo'] as const
+export const sessionActions = ['send', 'abort', 'end', 'fork', 'startTask', 'callTool', 'usage', 'surfaces', 'visit', 'delete', 'compact', 'startBackgroundTask'] as const
 
 export const showLeaseMs = 16_000
 
@@ -348,6 +393,7 @@ export function routeSessions({
   aliases = [],
   programs,
   terminals,
+  onListen = () => undefined,
 }: {
   readonly computer: SessionComputer
   readonly device: () => Promise<Pick<Device, 'id' | 'name'>>
@@ -357,6 +403,7 @@ export function routeSessions({
   readonly aliases?: readonly string[]
   readonly programs?: ProgramReach
   readonly terminals?: SessionTerminals
+  readonly onListen?: (listening: Listening) => void
 }): SessionRouting {
   type Holder = HeldSession & { readonly connection: Pick<Peer, 'request' | 'notify'>; readonly told: HeldStatus; readonly toldAt: number }
   const holders = new Map<Pick<Peer, 'request' | 'notify'>, Holder>()
@@ -368,9 +415,28 @@ export function routeSessions({
   }
   const names = [sessionsInterface, ...aliases]
 
-  const changed = (change: StoreChange) => {
+  const changed = (change: SessionsChange) => {
     for (const name of names) interfaces.emit(name, 'Change', change, [change.session])
   }
+
+  const store: Implementation = {
+    changed: (part: unknown) => {
+      if (!(storeParts as readonly unknown[]).includes(part)) throw new RpcError(rpcCodes.invalidParams, `${storeInterface}.changed takes the part a writer stored: ${storeParts.join(', ')}.`)
+      interfaces.emit(storeInterface, 'Change', { part: part as StorePart } satisfies StoreChange)
+      return null
+    },
+  }
+
+  const programChanges: Implementation = {
+    changed: async (mod: unknown, program: unknown) => {
+      if (typeof mod !== 'string' || typeof program !== 'string') throw new RpcError(rpcCodes.invalidParams, `${programsInterface}.changed takes the mod and the program whose instance file changed.`)
+      interfaces.emit(programsInterface, 'Change', { mod, program } satisfies ProgramsChange)
+      await providers.programChanged(mod, program)
+      return null
+    },
+  }
+
+  const isServed = (name: string) => name === storeInterface || name === programsInterface
 
   const call = async (session: string, action: string, input: unknown, context: SessionContext = {}): Promise<unknown> => {
     if (!(sessionActions as readonly string[]).includes(action)) throw new RpcError(rpcCodes.methodNotFound, `A session takes no ${action}.`)
@@ -385,6 +451,7 @@ export function routeSessions({
       changed({ session, part: 'deleted' })
       return null
     }
+    if (action === 'send' && context['task'] === undefined) return send(session, input, context)
     const holder = holderOf(session)
     if (holder !== undefined) return holder.connection.request(sessionActs.act, { action, input, ...context })
     const runner = action === 'startTask' ? undefined : await runnerElsewhere(session)
@@ -406,6 +473,61 @@ export function routeSessions({
     return undefined
   }
 
+  const chains = new Map<string, Promise<unknown>>()
+  const refused = new Set<number>()
+
+  const inOrder = <Value>(session: string, work: () => Promise<Value>): Promise<Value> => {
+    const run = Promise.allSettled([chains.get(session)]).then(work)
+    chains.set(session, run)
+    void Promise.allSettled([run]).then(() => chains.get(session) === run && chains.delete(session))
+    return run
+  }
+
+  const deliver = (session: string, resumes: boolean) =>
+    inOrder(session, async () => {
+      const done: number[] = []
+      for (const mail of await computer.queued(session)) {
+        const holder = holderOf(session)
+        if (holder === undefined && (!resumes || done.length > 0)) break
+        const sent = { type: mail.type, text: labelledText(mail), ...(mail.asUser ? { as: Person } : {}) }
+        const context = mail.caller === undefined ? {} : { caller: mail.caller }
+        try {
+          await (holder === undefined ? computer.unheld(session, 'send', sent, context, holding) : holder.connection.request(sessionActs.act, { action: 'send', input: sent, ...context }))
+        } catch (error) {
+          if (!refused.has(mail.id)) report(error)
+          refused.add(mail.id)
+          break
+        }
+        refused.delete(mail.id)
+        await computer.delivered(mail.id, new Date(now()).toISOString())
+        done.push(mail.id)
+      }
+      return done
+    })
+
+  const unheldSession = async (session: string) => {
+    const runner = await runnerElsewhere(session)
+    if (runner !== undefined) throw new RpcError(rpcCodes.notHeld, `Session ${session} runs on ${runner}, so this computer takes no send for it.`)
+    const found = await computer.session(session, holding, toldAt())
+    if (found === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+    return found
+  }
+
+  const send = async (session: string, input: unknown, context: SessionContext): Promise<SendReceipt> => {
+    const sent = sentMail(input)
+    const found = holderOf(session) === undefined ? await unheldSession(session) : undefined
+    const caller = typeof context['caller'] === 'string' ? { caller: context['caller'] } : {}
+    const id = await computer.queue({ session, ...sent, ...caller, sentAt: new Date(now()).toISOString() })
+    const done = await deliver(session, found?.isRunning === false)
+    return { id, state: done.includes(id) ? 'delivered' : 'queued' }
+  }
+
+  const readMail = async (session: string, options: Readonly<Record<string, unknown>>) => {
+    const kept = await computer.mail(session, typeof options['last'] === 'number' ? { last: options['last'] } : {})
+    if (kept.length > 0 || holderOf(session) !== undefined || (await computer.session(session, holding, toldAt())) !== undefined) return kept
+    throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
+  }
+
   const withStatus = (listed: SessionData, told: HeldStatus | undefined): SessionData => {
     if (told === undefined) return listed
     const status = listed.status ?? told.status
@@ -423,6 +545,7 @@ export function routeSessions({
     },
     search: (text: string, options: Readonly<Record<string, unknown>> = {}) => computer.search(text, options),
     read: async (session: string, part: string, options: Readonly<Record<string, unknown>> = {}) => {
+      if (part === 'mail') return readMail(session, options)
       const saved = await computer.read(session, part, options, holding)
       const holder = holderOf(session)
       if (part !== 'tasks' || holder === undefined) return saved
@@ -511,7 +634,7 @@ export function routeSessions({
         }
 
   const interfaces = interfaceServer({
-    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, [providersInterface]: {}, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
+    implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, [providersInterface]: {}, [storeInterface]: store, [programsInterface]: programChanges, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
     onListen: (_connection, listening) => {
       if (listening.interface === uiInterface) {
         if (!uiEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${uiInterface} tells only Change, Redraw, Open, and Close.`)
@@ -521,7 +644,8 @@ export function routeSessions({
         if (!terminalEvents.includes(listening.event)) throw new RpcError(rpcCodes.methodNotFound, `${terminalInterface} tells only ${terminalEvents.join(' and ')}.`)
         return
       }
-      if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, listening.interface === providersInterface ? `${providersInterface} tells only Change.` : `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
+      if (listening.event !== 'Change') throw new RpcError(rpcCodes.methodNotFound, listening.interface === providersInterface || isServed(listening.interface) ? `${listening.interface} tells only Change.` : `${listening.interface} tells only Change, because a mod hears only the session it runs in.`)
+      after(0, () => onListen(listening))
     },
     extraMethod: (connection, method, params) => {
       if (method === sessionActs.uiEvent) {
@@ -539,10 +663,11 @@ export function routeSessions({
         relisted(session)
         toldShown.delete(session)
         tellShown(session)
+        void deliver(session, false).catch(report)
         return { result: {} }
       }
       if (method === sessionActs.changed) {
-        changed(params as StoreChange)
+        changed(params as SessionsChange)
         return { result: null }
       }
       if (method === sessionActs.status) {
@@ -569,7 +694,7 @@ export function routeSessions({
       }
     })().catch(report)
 
-  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface || name === providersInterface || (terminal !== undefined && name === terminalInterface), listsSelf: (name) => name === providersInterface || (terminal !== undefined && name === terminalInterface), changed: providersChanged, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
+  const providers = routeProviders({ isOwn: (name) => names.includes(name) || name === uiInterface || name === providersInterface || isServed(name) || (terminal !== undefined && name === terminalInterface), listsSelf: (name) => name === providersInterface || isServed(name) || (terminal !== undefined && name === terminalInterface), changed: providersChanged, own: (connection) => interfaces.handler(connection), device, report, channel: (send) => routes.channel(send), ...(programs === undefined ? {} : { programs }) })
 
   const routes = rpcRoutes({
     handle: (connection) => {
@@ -587,6 +712,7 @@ export function routeSessions({
       changed({ session: holder.session, part: 'running' })
       if (Object.keys(holder.told).length > 0) changed({ session: holder.session, part: 'status' })
     },
+    onUnpolled: (connection) => providers.unpolled(connection),
     now,
   })
 
@@ -605,12 +731,31 @@ export function routeSessions({
   }
 }
 
-export type ProgramReach = { readonly store: string; readonly files: InstanceFiles; readonly fetch: HttpFetch; readonly wait: (ms: number) => Promise<void> }
+function sentMail(input: unknown): Pick<Mail, 'type' | 'text' | 'from' | 'fromTitle' | 'replyTo' | 'asUser'> {
+  const { type, text, from, replyTo, as } = (isObject(input) ? input : {}) as Readonly<Record<string, unknown>>
+  if (type !== Prompt && type !== Note) throw new RpcError(rpcCodes.invalidParams, `send takes a type, ${Prompt} or ${Note}.`)
+  if (typeof text !== 'string' || text.trim() === '') throw new RpcError(rpcCodes.invalidParams, 'send needs text.')
+  if (from !== undefined && !(isObject(from) && typeof from['session'] === 'string' && from['session'] !== '' && typeof from['title'] === 'string')) throw new RpcError(rpcCodes.invalidParams, 'send takes from as { session, title }, the session that sends it.')
+  if (replyTo !== undefined && !Number.isInteger(replyTo)) throw new RpcError(rpcCodes.invalidParams, 'send takes replyTo as the id of the mail it answers.')
+  return { type, text, ...(isObject(from) ? { from: String(from['session']), fromTitle: String(from['title']) } : {}), ...(typeof replyTo === 'number' ? { replyTo } : {}), asUser: as === Person }
+}
+
+function labelledText(mail: Mail): string {
+  if (mail.from === undefined) return mail.text
+  const quoted = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  const replyTo = mail.replyTo === undefined ? '' : ` reply-to="${mail.replyTo}"`
+  return `<cmod-message from="${quoted(mail.from)}" title="${quoted(mail.fromTitle ?? '')}" reply="cmod sessions send ${quoted(mail.from.slice(0, 8))} --reply-to ${mail.id}"${replyTo}>\n${mail.text}\n</cmod-message>`
+}
+
+export type ProgramReach = { readonly store: string; readonly files: InstanceFiles; readonly fetch: HttpFetch; readonly clock: RpcClock; hasExited(mod: string, program: string): Promise<boolean> }
 
 export type ProviderRouting = {
   handler(connection: RpcConnection, method: string, params: unknown, signal: AbortSignal): Promise<unknown> | undefined
   list(name: string): Promise<ProviderIdentity[]>
   call(called: ProvidedCall, signal?: AbortSignal): Promise<unknown>
+  hear(listening: Omit<Listening, 'id' | 'provider'>, provider: ProviderIdentity, heard: (payload: unknown) => void): Promise<Subscription>
+  unpolled(connection: RpcConnection): void
+  programChanged(mod: string, program: string): Promise<void>
   closed(connection: RpcConnection): void
   close(): Promise<void>
 }
@@ -674,6 +819,12 @@ export function routeProviders({
   let following: Promise<void> = Promise.resolve()
   const keyOf = ({ mod, program }: ProviderIdentity) => `${mod}\n${program ?? ''}`
   const named = ({ mod, program }: ProviderIdentity) => `${mod}'s ${program ?? mod} program`
+
+  const closeIfExited = async (end: ProviderEnd, connection: RpcConnection) => {
+    if (programs === undefined) return
+    const { mod, program = mod } = end.identity
+    if ((await programs.hasExited(mod, program)) && end.connection === connection) connection.close(new Error(`${named(end.identity)} exited`))
+  }
   const isSelf = ({ mod, program }: Partial<ProviderIdentity>) => mod === cmodPluginName && program === cmodPluginName
 
   const endOf = (identity: ProviderIdentity): ProviderEnd => {
@@ -735,7 +886,7 @@ export function routeProviders({
   const reachOlder = (end: ProviderEnd, address: string, reach: ProgramReach) => {
     if (end.older?.address === address) return
     void end.older?.client.close()
-    const client = connectRpc({ call: addressCall(reach.fetch, address), handle: heardBy(end.listeners, named(end.identity)), onConnect: (connected) => end.listeners.replay(connected), wait: reach.wait })
+    const client = connectRpc({ call: addressCall(reach.fetch, address), handle: heardBy(end.listeners, named(end.identity)), onConnect: (connected) => end.listeners.replay(connected), clock: reach.clock })
     end.older = { address, client }
   }
 
@@ -833,7 +984,7 @@ export function routeProviders({
         await listeners.replay(connected)
       },
       onError: () => reached(),
-      wait: reach.wait,
+      clock: reach.clock,
       keepsConnecting: true,
     })
     devices.set(id, { name, address, client, listeners })
@@ -889,7 +1040,7 @@ export function routeProviders({
     }
     if (asked.device !== undefined && asked.device.id !== (await device()).id) {
       const carrier = devices.get(asked.device.id)
-      if (carrier === undefined) throw new Error(`cmod serve reaches no device ${asked.device.name}, so ${named(asked)} there answers no ${name}.`)
+      if (carrier === undefined) throw new RpcError(rpcCodes.notProvided, `cmod serve reaches no device ${asked.device.name}, so ${named(asked)} there answers no ${name}.`)
       return { listeners: carrier.listeners, link: providerPeer(peerOf(carrier), asked), provider: asked }
     }
     if (isSelf(asked)) return undefined
@@ -900,7 +1051,7 @@ export function routeProviders({
     const end = endOf(asked)
     if (end.connection !== undefined && end.names.has(name)) return end
     const older = programs === undefined ? undefined : (await instances(name)).find((each) => keyOf(each) === keyOf(asked))
-    if (older === undefined || programs === undefined) throw new Error(`${named(asked)} does not run, so it answers no ${name}.`)
+    if (older === undefined || programs === undefined) throw new RpcError(rpcCodes.notProvided, `${named(asked)} does not run, so it answers no ${name}.`)
     reachOlder(end, older.address, programs)
     return end
   }
@@ -1007,6 +1158,18 @@ export function routeProviders({
     },
     list: (name) => listed(name, undefined),
     call: (called, signal) => call(undefined, called, signal),
+    async hear(listening, provider, heard) {
+      const target = await targetOf(listening.interface, provider)
+      if (target === undefined) throw new Error(`cmod serve hears its own ${listening.interface} on a connection.`)
+      return target.listeners.listen(target.link, { ...listening, ...(target.provider === undefined ? {} : { provider: target.provider }) }, (payload) => heard(payload))
+    },
+    unpolled(connection) {
+      const end = [...ends.values()].find((each) => each.connection === connection)
+      if (end !== undefined) void closeIfExited(end, connection).catch(report)
+    },
+    async programChanged(mod, program) {
+      await Promise.all([...ends.values()].flatMap((end) => (end.connection !== undefined && end.identity.mod === mod && (end.identity.program ?? mod) === program ? [closeIfExited(end, end.connection)] : [])))
+    },
     closed(connection) {
       let listedDevices = false
       for (const end of ends.values()) {
@@ -1094,6 +1257,7 @@ export type Providers = {
   provided(): readonly string[]
   provide(name: string, methods: Implementation): Provided
   providers(name: string): Promise<Readonly<Record<string, unknown>>[]>
+  serveProvider(name: string): Readonly<Record<string, unknown>>
   answer(method: string, input: unknown, caller: string, signal: AbortSignal): Promise<unknown> | undefined
 }
 
@@ -1138,7 +1302,7 @@ export function createProviders({ name, call, changed, after, report }: { readon
       checkInterfaceName(named)
       provided.set(named, methods)
       changed()
-      const send = (method: string, event: string, payload: unknown) => new Promise<unknown>((resolve) => after(0, () => resolve(call(cmodPluginName, method, { interface: named, event, payload } satisfies ProvidedTell))))
+      const send = (method: string, event: string, payload: unknown) => call(cmodPluginName, method, { interface: named, event, payload } satisfies ProvidedTell)
       return {
         remove() {
           if (provided.get(named) === methods && provided.delete(named)) changed()
@@ -1151,6 +1315,7 @@ export function createProviders({ name, call, changed, after, report }: { readon
       const listed = (await call(cmodPluginName, interfaceMethods.providers, { name: named })) as ProviderList
       return [...listed.mods.map((mod) => client(named, { mod, device: listed.device })), ...listed.programs.map((identity) => client(named, identity))]
     },
+    serveProvider: (named) => client(named, { mod: cmodPluginName, program: cmodPluginName }),
     answer,
   }
 }

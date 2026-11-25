@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { consentPath, isAtLeast, isObject, linksPath, parseConsent, parseLinks, parsePluginsChanged, pluginsChangedPath, pluginsChangedText, readCmodVersion, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
+import type { StorePart } from '@cmodjs/core/src/runtime/interfaces.js'
 import { version } from '../package.json'
 import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
@@ -26,7 +27,7 @@ export async function markPluginsChanged(linked?: { readonly mod: string; readon
   const path = pluginsChangedPath(store)
   const marked = parsePluginsChanged((await readText(path)) ?? '')
   await writeAtomically(path, pluginsChangedText(linked === undefined ? { ...marked, command: `${Date.now()} ${process.pid}` } : { ...marked, linked: new Map(marked.linked).set(linked.mod, linked.at) }))
-  await markStoreChanged()
+  await markStoreChanged('plugins')
 }
 
 export async function isNewerCmodInstalled(): Promise<boolean> {
@@ -34,9 +35,12 @@ export async function isNewerCmodInstalled(): Promise<boolean> {
   return installed !== undefined && !isAtLeast(version, installed)
 }
 
-export async function markStoreChanged(): Promise<void> {
+export async function markStoreChanged(part: StorePart): Promise<void> {
   const store = storeFolder(process.env)
-  if (existsSync(store)) await writeAtomically(storeChangedPath(store), '')
+  if (!existsSync(store)) return
+  await writeAtomically(storeChangedPath(store), '')
+  const [{ tellServe }, { methodName, storeInterface }] = await Promise.all([import('@cmodjs/core/src/runtime/bun.js'), import('@cmodjs/core/src/runtime/interfaces.js')])
+  await tellServe(methodName(storeInterface, 'changed'), [part])
 }
 
 export async function recordNames(): Promise<string[]> {
@@ -131,6 +135,11 @@ export async function isHolding(processId: number, started: string | undefined):
   return current === '' || current === started
 }
 
+export async function isLockHeld(path: string): Promise<boolean> {
+  for (const holder of await readdir(path).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(path, holder)))) return true
+  return false
+}
+
 function isRunning(processId: number): boolean {
   try {
     process.kill(processId, 0)
@@ -204,7 +213,10 @@ export async function changeLinks<Result>(change: (links: LinksChange) => Promis
     } finally {
       const path = linksPath(storeFolder(process.env))
       const isEmpty = Object.keys(links.marketplaces).length === 0 && Object.keys(links.turnedOff).length === 0
-      if (JSON.stringify(links) !== before) await (isEmpty ? rm(path, { force: true }) : writeAtomically(path, `${JSON.stringify(links, null, 2)}\n`))
+      if (JSON.stringify(links) !== before) {
+        await (isEmpty ? rm(path, { force: true }) : writeAtomically(path, `${JSON.stringify(links, null, 2)}\n`))
+        await markStoreChanged('links')
+      }
     }
   } finally {
     await lock[Symbol.asyncDispose]()

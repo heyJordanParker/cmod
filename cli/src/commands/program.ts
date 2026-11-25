@@ -1,18 +1,19 @@
-import { existsSync, watch } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as after } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
 import { instancePath, interfaceName, processTypes, serviceLogPath, storeFolder, type ProcessType, type ProgramInstance } from '@cmodjs/core/src/records.js'
-import { connectServe } from '@cmodjs/core/src/runtime/bun.js'
-import { providerActs } from '@cmodjs/core/src/runtime/interfaces.js'
+import { connectServe, hearServe, tellServe } from '@cmodjs/core/src/runtime/bun.js'
+import { listeningOf, methodName, programsInterface, providerActs, storeInterface, type ProgramsChange } from '@cmodjs/core/src/runtime/interfaces.js'
 import { isConnectionGone, RpcError, rpcCodes } from '@cmodjs/core/src/runtime/rpc.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
+import { ifMissing, readJson, writeAtomically } from '../files.js'
+import { observe, type Observer } from '../observer.js'
 import { readLines, spawn } from '../process.js'
 import { folderEnvironment, killMs, programsFolder, stopCopy } from '../program.js'
 import { removeService, serviceNames, startService } from '../service.js'
-import { isHolding, modLock, startTime, takeLock } from '../store.js'
+import { isHolding, isLockHeld, modLock, startTime, takeLock } from '../store.js'
 import { hasTailnetChanged, readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 
 export const summary = "Run one copy of a mod's program for every session."
@@ -25,15 +26,16 @@ Each session runs it for a program job with singleInstance. The first one
 holds instances/<mod>/<program>.json.lock in the cmod store, runs the command
 without CLAUDE_CODE_SESSION_ID, because the copy serves every session, writes the command's first line on standard output, its address, to
 instances/<mod>/<program>.json with the copy's pid and start time, and prints
-it. For a command that prints nothing and only provides interfaces, it writes
+it. It tells cmod serve through cmod/Programs each time it writes or deletes
+that file. For a command that prints nothing and only provides interfaces, it writes
 the pid and start time there once cmod serve says the copy provided one, and
 prints provided. The command gets CMOD_MOD, the
 mod's name, and CMOD_PROGRAM, the program's, which connect() from
 @cmodjs/core/rpc.js reads to provide interfaces, and CMOD_DATA and CMOD_CACHE,
 the mod's data and cache folders, as an install step gets them. It touches its file in the lock
 every 5 seconds, so a session can tell a live holder from a killed one. Every
-other one prints the address in that file, then each new one, and takes over
-once the holder exits. With --no-wait, another one touches the holder's file,
+other one prints the address in that file, then each new one it reads when
+that file changes, and takes over once the holder exits. With --no-wait, another one touches the holder's file,
 prints held, and exits 0, and the session follows the instance file itself.
 A --no-wait run of a program with a service record does so with no holder too,
 because the service's own holder takes the lock back.
@@ -97,7 +99,7 @@ with no service changes nothing.`
 
 const checkMs = 5000
 
-const tailnetChecks = 12
+const tailscaleCheckMs = 60_000
 
 const serviceStartMs = 15_000
 
@@ -173,9 +175,7 @@ export async function run(argv: string[]): Promise<number> {
     if (process.ppid !== parent) end()
   }, checkMs)
   for (const signal of signals) process.on(signal, end)
-  const watcher = watch(dirname(file), (_event, name) => {
-    if (name?.endsWith('.tmp') !== true) wake()
-  })
+  let instance: Observer | undefined
   try {
     let printed: string | undefined
     while (!ending.signal.aborted) {
@@ -185,12 +185,17 @@ export async function run(argv: string[]): Promise<number> {
           return await hold(mod, file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, { isWebApp: values['web-app'], provides: values.provides }, ending.signal)
         } finally {
           await lock[Symbol.asyncDispose]()
+          await tellPrograms({ mod, program: basename(executable) })
         }
       }
       if (isNoWait) {
         await touchHolders(lockPath)
         process.stdout.write('held\n')
         return 0
+      }
+      if (instance === undefined) {
+        instance = followInstance(file, [dirname(file)], () => wake())
+        await instance.look()
       }
       const address = ((await readJson(file)) as ProgramInstance | undefined)?.address
       if (address !== undefined && address !== printed) {
@@ -208,16 +213,19 @@ export async function run(argv: string[]): Promise<number> {
     }
     return 0
   } finally {
-    watcher.close()
+    instance?.close()
     clearInterval(parentCheck)
     for (const signal of signals) process.off(signal, end)
   }
 }
 
 async function hold(mod: string, file: string, log: string, executable: string, args: readonly string[], { isWebApp, provides }: { readonly isWebApp: boolean; readonly provides: readonly string[] }, ending: AbortSignal): Promise<number> {
+  const change: ProgramsChange = { mod, program: basename(executable) }
   const left = (await readJson(file)) as ProgramInstance | undefined
-  if (left !== undefined) await stopCopy(left.pid, left.started)
-  await rm(file, { force: true })
+  if (left !== undefined) {
+    await stopCopy(left.pid, left.started)
+    await forget(file, change)
+  }
   await trimLog(log)
   const tailnet = isWebApp ? await readTailnet().catch((error: unknown) => ({ reason: messageOf(error) })) : undefined
   const linked = join(programsFolder(), executable)
@@ -229,23 +237,25 @@ async function hold(mod: string, file: string, log: string, executable: string, 
   }
   ending.addEventListener('abort', stopping)
   if (ending.aborted) stopping()
-  let ticks = 0
-  const ticking = setInterval(() => {
-    ticks += 1
-    void touchHolders(`${file}.lock`)
-    if (tailnet !== undefined) {
-      hasTailnetChanged(tailnet, ticks % tailnetChecks === 0).then(
-        (isChanged) => isChanged && stopping(),
-        (error: unknown) => void process.stderr.write(`cmod program: could not check whether ${executable} belongs on your tailnet: ${messageOf(error)}\n`),
-      )
-    }
-  }, checkMs)
+  const touching = setInterval(() => void touchHolders(`${file}.lock`), checkMs)
+  const checkTailnet = (isDueForTailscale: boolean) => {
+    if (tailnet === undefined) return
+    hasTailnetChanged(tailnet, isDueForTailscale).then(
+      (isChanged) => isChanged && stopping(),
+      (error: unknown) => void process.stderr.write(`cmod program: could not check whether ${executable} belongs on your tailnet: ${messageOf(error)}\n`),
+    )
+  }
+  const tailscale = tailnet === undefined ? undefined : setInterval(() => checkTailnet(true), tailscaleCheckMs)
+  const preferences = tailnet === undefined ? undefined : hearServe([listeningOf(storeInterface, 'on', 'Change', [], { part: 'preferences' })], () => checkTailnet(false), (error) => void process.stderr.write(`cmod program: hears no change of your preferences from cmod serve: ${messageOf(error)}\n`))
   const asking = new AbortController()
   let provided: Promise<void> = Promise.resolve()
   try {
     const started = await startTime(child.pid)
     let recorded: Promise<void> = Promise.resolve()
-    const record = (instance: ProgramInstance) => (recorded = recorded.then(() => writeAtomically(file, `${JSON.stringify(instance)}\n`)))
+    const record = (instance: ProgramInstance) => (recorded = recorded.then(async () => {
+      await writeAtomically(file, `${JSON.stringify(instance)}\n`)
+      await tellPrograms(change)
+    }))
     provided = isProvidedOnServe(mod, basename(executable), asking.signal)
       .catch((error: unknown) => {
         process.stderr.write(`cmod program: cmod serve did not tell whether ${executable} provides an interface: ${messageOf(error)}\n`)
@@ -278,22 +288,54 @@ async function hold(mod: string, file: string, log: string, executable: string, 
   } finally {
     asking.abort()
     await Promise.allSettled([provided])
-    clearInterval(ticking)
+    clearInterval(touching)
+    clearInterval(tailscale)
+    await preferences?.close()
     ending.removeEventListener('abort', stopping)
     await rm(file, { force: true })
     if (tailnet !== undefined) await stopServing(mod, executable)
   }
 }
 
+async function forget(file: string, change: ProgramsChange): Promise<void> {
+  await rm(file, { force: true })
+  await tellPrograms(change)
+}
+
+async function tellPrograms({ mod, program }: ProgramsChange): Promise<void> {
+  await tellServe(methodName(programsInterface, 'changed'), [mod, program]).catch((error: unknown) => void process.stderr.write(`cmod program: cmod serve did not hear that ${program}'s instance file changed: ${messageOf(error)}\n`))
+}
+
+function followInstance(file: string, hinted: readonly string[], changed: () => void): Observer {
+  return observe({ folders: () => hinted, isRecursive: false, list: async () => [file], onChange: changed, report: (error) => void process.stderr.write(`cmod program: missed a change of ${file}: ${messageOf(error)}\n`) })
+}
+
 async function isStartedWithin(file: string, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms
-  do {
-    const instance = (await readJson(file)) as ProgramInstance | undefined
-    if (instance !== undefined && (await isHolding(instance.pid, instance.started))) return true
-    await Bun.sleep(100)
-  } while (Date.now() < deadline)
-  for (const holder of await readdir(`${file}.lock`).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(`${file}.lock`, holder)))) return true
-  return false
+  const deadline = AbortSignal.timeout(ms)
+  let isDue = true
+  let wake = () => undefined as void
+  const instance = followInstance(file, [], () => {
+    isDue = true
+    wake()
+  })
+  await instance.look()
+  const isRecorded = async () => {
+    const recorded = (await readJson(file)) as ProgramInstance | undefined
+    return recorded !== undefined && (await isHolding(recorded.pid, recorded.started))
+  }
+  try {
+    while (!deadline.aborted) {
+      if (!isDue) await new Promise<void>((resolve) => {
+        wake = resolve
+        deadline.addEventListener('abort', () => resolve(), { once: true })
+      })
+      isDue = false
+      if (await isRecorded()) return true
+    }
+    return (await isRecorded()) || (await isLockHeld(`${file}.lock`))
+  } finally {
+    instance.close()
+  }
 }
 
 async function isProvidedOnServe(mod: string, program: string, signal: AbortSignal): Promise<boolean> {

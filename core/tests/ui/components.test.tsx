@@ -175,8 +175,37 @@ test('Progress draws a section given a Claude Code color in it, and splits both 
   ])
 })
 
-test('a terminal has Nerd Font half circles in Herdr, Ghostty, and WezTerm, also inside tmux, which keeps Ghostty and WezTerm variables', () => {
-  expect([{ program: 'herdr' }, { program: 'ghostty' }, { program: 'WezTerm' }, { program: 'tmux', ghostty: '/Applications/Ghostty.app/Contents/Resources/ghostty' }, { program: 'tmux', wezterm: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' }, { program: 'tmux' }, { program: 'Apple_Terminal' }, {}].map(isNerdFontTerminal)).toEqual([true, true, true, true, true, false, false, false])
+test('a terminal has Nerd Font half circles in Herdr, Ghostty, WezTerm, and kitty, also inside tmux, which keeps the Ghostty, WezTerm, and kitty variables', () => {
+  expect([{ program: 'herdr' }, { program: 'ghostty' }, { program: 'WezTerm' }, { kitty: '1' }, { program: 'tmux', ghostty: '/Applications/Ghostty.app/Contents/Resources/ghostty' }, { program: 'tmux', wezterm: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui' }, { program: 'tmux', kitty: '3' }, { program: 'tmux' }, { program: 'Apple_Terminal' }, {}].map(isNerdFontTerminal)).toEqual([true, true, true, true, true, true, true, false, false, false])
+})
+
+test('Progress in an ANSI theme spreads its fill, buffer, and track over the three grays of 16 colors, which Claude Code draws as one', () => {
+  const inTheme = (theme: string) => forClaudeCode(table, 'terminal', () => undefined, { hasNerdFont: true, theme })
+  const underPace = () => Progress({ sections: [{ value: 33, tone: 'neutral' }], buffer: 50, width: 22 })
+
+  expect(cells(drawWith(inTheme('dark-ansi'), underPace))).toEqual([
+    ['\u{E0B6}', 'ansi:whiteBright'],
+    ['██████', 'ansi:whiteBright'],
+    ['▋', 'ansi:whiteBright', 'ansi:white'],
+    ['███', 'ansi:white'],
+    ['██████████', 'ansi:blackBright'],
+    ['\u{E0B4}', 'ansi:blackBright'],
+  ])
+  expect(cells(drawWith(inTheme('light-ansi'), underPace))).toEqual([
+    ['\u{E0B6}', 'ansi:black'],
+    ['██████', 'ansi:black'],
+    ['▋', 'ansi:black', 'ansi:blackBright'],
+    ['███', 'ansi:blackBright'],
+    ['██████████', 'ansi:white'],
+    ['\u{E0B4}', 'ansi:white'],
+  ])
+  expect(cells(drawWith(inTheme('dark'), underPace))).toEqual(cells(drawWith(inTheme('auto'), underPace)))
+  expect(cells(drawWith(inTheme('dark-ansi'), () => Progress({ sections: [{ value: 50, tone: 'critical' }, { value: 25, color: 'diffRemoved' }], width: 4 })))).toEqual([
+    ['\u{E0B6}', 'error'],
+    ['█', 'error'],
+    ['▌', 'diffRemoved', 'ansi:blackBright'],
+    ['\u{E0B4}', 'ansi:blackBright'],
+  ])
 })
 
 test('Progress splits a cell at an eighth where two parts meet, draws its buffer as raised track, and rounds its ends in a terminal whose font has the half circles', () => {

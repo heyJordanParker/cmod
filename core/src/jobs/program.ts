@@ -2,7 +2,7 @@ import type { InterfaceName, InterfaceProvider, Job } from '../mod.js'
 import { instancePath, processTypes, type ProcessType } from '../records.js'
 import { cmodPluginName, isUnanswered } from '../runtime/dependencies.js'
 import { engineOf } from '../runtime/engine.js'
-import { interfaceMethods, type ProviderIdentity } from '../runtime/interfaces.js'
+import { interfaceMethods, programsInterface, type ProviderIdentity } from '../runtime/interfaces.js'
 import { cmodStore, isHeld } from '../runtime/programs.js'
 import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
@@ -34,7 +34,7 @@ export function program(options: {
 }): Job<Program> {
   const { command, environment, singleInstance = false, isService = false, isWebApp = false, processType } = options
   return ({ mod, announce, reserveName }) => {
-    const { claude, report, spawnCmod, isInstalledCopy, watches, interfaces } = engineOf(mod)
+    const { claude, report, spawnCmod, isInstalledCopy, interfaces } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     if (isService) for (const type of ['program', 'service']) reserveName(type, basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
@@ -147,8 +147,9 @@ export function program(options: {
       isFollowing = true
       if (!isWatching) {
         isWatching = true
-        watches.add([file], () => following(track(file)))
-        claude.clock.every(leaseCheckMs, () => following(checkLease(file)))
+        const programs = interfaces.serveProvider(programsInterface) as InterfaceProvider<typeof programsInterface>
+        programs.onChange({ mod: mod.name, program: basename(executable) }, () => following(track(file)))
+        claude.clock.every(leaseCheckMs, () => following(checkLease(file).then(() => (isFollowing && state === 'starting' ? track(file) : undefined))))
       }
       await track(file)
     }

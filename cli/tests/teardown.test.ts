@@ -1,12 +1,13 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile, rename, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readText } from '../src/files.js'
-import { cmod, createMod, createProgramMod, deleteTemporaryHomes, helloBuild, isGone, serveRelease, sha256Sums, startCmod, temporaryHome, waitFor, writeFiles } from './cmod.js'
+import { cmod, createMod, createProgramMod, deleteTemporaryHomes, helloBuild, isGone, serveRelease, sha256Sums, spawningTestLimitMs, startCmod, temporaryHome, waitFor, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 test('teardown runs the saved uninstall step after the plugin folder is deleted, then deletes the record and the saved step', async () => {

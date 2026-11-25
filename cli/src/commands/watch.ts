@@ -1,11 +1,14 @@
-import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { rm, utimes } from 'node:fs/promises'
-import { join, relative, resolve, sep } from 'node:path'
+import { existsSync } from 'node:fs'
+import { readdir, rm, utimes } from 'node:fs/promises'
+import { join, relative, resolve } from 'node:path'
 import { buildFailuresPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
+import { hearServe } from '@cmodjs/core/src/runtime/bun.js'
+import { listeningOf, storeInterface } from '@cmodjs/core/src/runtime/interfaces.js'
 import { relinkPluginFolders } from '../claude.js'
 import { readJson, writeAtomically } from '../files.js'
+import { observe, type Observed, type Observer } from '../observer.js'
 import { readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
 import { buildReadsAny, installProgram, readProgram } from '../program.js'
@@ -20,8 +23,13 @@ export const help = `Usage: cmod watch
 
 ${summary}
 
-Watches each folder cmod link linked. Once a folder has had no change for 2
-seconds, it bundles its hooks module. When a changed file is one the program's
+Watches each folder cmod link linked: each file git lists in it, or each file
+outside node_modules and .git when it is no git repository. It compares each
+file's modification time and size with its last look whenever a file event
+hints at a change, and every 400 ms for a minute after a change, then every 30
+seconds, because macOS drops file events under load. Once the folder has been
+quiet for 2 seconds, it bundles the hooks module of a folder whose file
+changed. When a changed file is one the program's
 build reads, a file in cli/ or one its JavaScript or TypeScript entry imports,
 it also builds the program cli/ declares, as cmod link does, into cmod's
 programs folder, then stops the program's running copy, so the next one starts
@@ -40,9 +48,11 @@ left failing, so a failure an older cmod wrote goes once the mod builds. One cmo
 watch watches per device: another one exits at once while it runs. It touches
 its file in watch.lock every 5 seconds, and the cmod plugin of each session
 with a linked mod starts cmod watch again once that file is gone or 15 seconds
-old. Before each touch it reads the newest cmod installed in the cmod store,
-and a cmod watch older than that exits and lets go of watch.lock, so the newer
-cmod watches with its own rules. It also exits once the process that started
+old. At its start, each time it connects to cmod serve, and each time
+cmod/Store tells that the linked mods or the plugins changed, it reads the
+linked folders and the newest cmod installed in the cmod store, and a cmod
+watch older than that exits and lets go of watch.lock, so the newer cmod
+watches with its own rules. It also exits once the process that started
 it ends, so a session that crashed leaves no watcher behind. At its start it links each folder still in
 CLAUDE_CODE_PLUGIN_DIRS, which a cmod before 4.1.0 linked, as cmod link does
 now, and takes it out of that list.`
@@ -55,6 +65,32 @@ const pollMs = 5000
 
 const skipped = new Set(['node_modules', '.git'])
 
+async function filesIn(folder: string, under = ''): Promise<string[]> {
+  const entries = await readdir(join(folder, under), { withFileTypes: true })
+  const found = await Promise.all(
+    entries.map((entry) => {
+      const path = under === '' ? entry.name : `${under}/${entry.name}`
+      if (entry.isDirectory()) return skipped.has(entry.name) ? [] : filesIn(folder, path)
+      return entry.isFile() ? [path] : []
+    }),
+  )
+  return found.flat()
+}
+
+async function gitFiles(folder: string, ...listed: readonly string[]): Promise<string[] | undefined> {
+  const found = await capture(['git', '-C', folder, 'ls-files', '-z', ...listed])
+  if (found.exitCode !== 0) return undefined
+  return found.stdout.split('\0').filter((file) => file !== '' && !file.split('/').some((part) => skipped.has(part)))
+}
+
+export async function checkoutFiles(folder: string): Promise<string[]> {
+  return (await gitFiles(folder, '--cached', '--others', '--exclude-standard')) ?? filesIn(folder)
+}
+
+export function changesOf(folder: string, observed: Observed): Map<string, number> {
+  return new Map([...observed].map(([path, stamp]) => [relative(folder, path), stamp?.modifiedMs ?? Date.now()]))
+}
+
 export async function withoutIgnored(folder: string, files: readonly string[]): Promise<string[]> {
   if (files.length === 0) return []
   const checked = await capture(['git', '-C', folder, 'check-ignore', '--stdin'], { stdin: { text: `${files.join('\n')}\n` } })
@@ -63,67 +99,51 @@ export async function withoutIgnored(folder: string, files: readonly string[]): 
   return files.filter((file) => !ignored.has(file))
 }
 
-async function sourcesAmong(folder: string, files: readonly string[]): Promise<string[]> {
-  const listed = await capture(['git', '--literal-pathspecs', '-C', folder, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...files])
-  if (listed.exitCode !== 0) return files.filter((file) => existsSync(join(folder, file)))
-  return listed.stdout.split('\0').filter((file) => file !== '')
+const nameOf = async (folder: string) => ((await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }).name
+
+async function writeFailures(failures: ReadonlyMap<string, string>): Promise<void> {
+  const path = buildFailuresPath(storeFolder(process.env))
+  if (failures.size === 0) await rm(path, { force: true })
+  else await writeAtomically(path, `${JSON.stringify(Object.fromEntries(failures), null, 2)}\n`)
+  await markStoreChanged('buildFailures')
 }
 
-async function changedSources(folder: string, files: readonly string[], output: string | undefined): Promise<readonly string[] | undefined> {
-  if (files.includes('')) return undefined
-  const outside = files.filter((file) => output === undefined || relativePath(output, file) === undefined)
-  if (outside.length === 0) return []
-  return sourcesAmong(folder, outside).catch((error: unknown) => {
-    process.stderr.write(`cmod watch: reloads for every change in ${folder}, because git could not say which files it tracks: ${messageOf(error)}\n`)
-    return outside
-  })
-}
+export type LinkedChanges = { changed(folder: string, files: ReadonlyMap<string, number>): void; retry(folder: string): void; settled(): Promise<void>; close(): void }
 
-export async function run(argv: string[]): Promise<number> {
-  if (argv.length > 0) throw new Error(`cmod watch takes no arguments.\n\n${help}`)
-  const parent = process.ppid
-  const lock = storePath('watch.lock')
-  await using held = await takeLock(lock, AbortSignal.abort())
-  if (held === undefined) return 0
-  const heartbeat = join(lock, String(process.pid))
-  await relinkPluginFolders()
-  const watchers = new Map<string, FSWatcher>()
+export function linkedChanges(
+  failures: Map<string, string>,
+  written: { failures(failures: ReadonlyMap<string, string>): Promise<void>; changed(linked: { readonly mod: string; readonly at: number }): Promise<void> },
+): LinkedChanges {
   const timers = new Map<string, Timer>()
   const failing = new Set<Timer>()
   const attempts = new Map<string, number>()
   const programsDue = new Set<string>()
-  const changedFiles = new Map<string, Map<string, number>>()
+  const pending = new Map<string, Map<string, number>>()
+  const retriedAt = new Map<string, number>()
   const settling = new Map<string, Promise<void>>()
-  const failures = new Map(Object.entries(((await readJson(buildFailuresPath(storeFolder(process.env)))) ?? {}) as Record<string, string>))
   const progress = { ...startProgress(process.stderr), note: () => {} }
 
-  const writeFailures = async () => {
-    const path = buildFailuresPath(storeFolder(process.env))
-    if (failures.size === 0) await rm(path, { force: true })
-    else await writeAtomically(path, `${JSON.stringify(Object.fromEntries(failures), null, 2)}\n`)
-    await markStoreChanged()
-  }
-
-  const nameOf = async (folder: string) => ((await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }).name
-
   const settle = async (folder: string) => {
-    const changes = changedFiles.get(folder) ?? new Map<string, number>()
-    const files = [...changes.keys()]
-    changedFiles.delete(folder)
-    if (files.length === 0) return
+    const retried = retriedAt.get(folder)
+    retriedAt.delete(folder)
+    const changed = pending.get(folder) ?? new Map<string, number>()
+    pending.delete(folder)
+    const tracked = changed.size === 0 ? undefined : await gitFiles(folder, '--cached')
+    const changes = [...changed].filter(([file]) => existsSync(join(folder, file)) || tracked === undefined || tracked.includes(file))
+    if (changes.length === 0 && retried === undefined) return
     const name = await nameOf(folder)
     let attempt = attempts.get(folder) ?? 0
     let at = 0
     try {
       const plugin = await readPlugin(folder)
       const program = await readProgram(plugin)
-      const sources = await changedSources(folder, files, program === undefined ? undefined : relative(plugin.root, resolve(program.folder, program.output)))
-      if (sources?.length === 0) return
-      const sourceTimes = (sources ?? files).flatMap((file) => changes.get(file) ?? [])
-      at = Math.max(...(sourceTimes.length > 0 ? sourceTimes : changes.values()))
+      const output = program === undefined ? undefined : relative(plugin.root, resolve(program.folder, program.output))
+      const sources = changes.filter(([file]) => output === undefined || relativePath(output, file) === undefined)
+      if (sources.length === 0 && retried === undefined) return
+      at = Math.max(...sources.map(([, changedAt]) => changedAt), ...(retried === undefined ? [] : [retried]))
       attempt += 1
       attempts.set(folder, attempt)
-      if (program !== undefined && (sources === undefined || (await buildReadsAny(program, sources.map((file) => join(plugin.root, file)))))) programsDue.add(folder)
+      if (program !== undefined && (retried !== undefined || (await buildReadsAny(program, sources.map(([file]) => join(plugin.root, file)))))) programsDue.add(folder)
       await bundledHooks(folder)
       if (program !== undefined && programsDue.has(folder)) {
         await installProgram(program, plugin.version, progress)
@@ -134,18 +154,16 @@ export async function run(argv: string[]): Promise<number> {
         failing.delete(timer)
         if (attempts.get(folder) !== attempt) return
         failures.set(name, messageOf(error))
-        void writeFailures()
+        void written.failures(failures)
       }, failMs - settleMs)
       failing.add(timer)
       return
     }
-    if (failures.delete(name)) await writeFailures()
-    await markPluginsChanged({ mod: name, at })
+    if (failures.delete(name)) await written.failures(failures)
+    await written.changed({ mod: name, at })
   }
 
-  const changed = (folder: string, file: string | null) => {
-    if (file !== null && file.split(sep).some((part) => skipped.has(part))) return
-    changedFiles.set(folder, (changedFiles.get(folder) ?? new Map<string, number>()).set(file ?? '', Date.now()))
+  const settleSoon = (folder: string) => {
     clearTimeout(timers.get(folder))
     timers.set(
       folder,
@@ -156,35 +174,94 @@ export async function run(argv: string[]): Promise<number> {
     )
   }
 
+  return {
+    changed: (folder, files) => {
+      const known = pending.get(folder) ?? new Map<string, number>()
+      for (const [file, at] of files) known.set(file, at)
+      pending.set(folder, known)
+      settleSoon(folder)
+    },
+    retry: (folder) => {
+      retriedAt.set(folder, Date.now())
+      settleSoon(folder)
+    },
+    settled: async () => {
+      await Promise.all(settling.values())
+    },
+    close: () => {
+      for (const timer of [...timers.values(), ...failing]) clearTimeout(timer)
+    },
+  }
+}
+
+export async function pollWhile(isCurrent: () => Promise<boolean>, poll: () => Promise<void>): Promise<void> {
+  while (await isCurrent()) {
+    await poll()
+    await Bun.sleep(pollMs)
+  }
+}
+
+export async function run(argv: string[]): Promise<number> {
+  if (argv.length > 0) throw new Error(`cmod watch takes no arguments.\n\n${help}`)
+  const parent = process.ppid
+  const lock = storePath('watch.lock')
+  await using held = await takeLock(lock, AbortSignal.abort())
+  if (held === undefined) return 0
+  const heartbeat = join(lock, String(process.pid))
+  await relinkPluginFolders()
+  const observers = new Map<string, Observer>()
+  const failures = new Map(Object.entries(((await readJson(buildFailuresPath(storeFolder(process.env)))) ?? {}) as Record<string, string>))
+  const changes = linkedChanges(failures, { failures: writeFailures, changed: markPluginsChanged })
+  let watched: string | undefined
+
   const follow = async () => {
     const folders = await linkedFolders()
-    for (const [folder, watcher] of watchers) {
+    for (const [folder, observer] of observers) {
       if (folders.includes(folder)) continue
-      watcher.close()
-      watchers.delete(folder)
+      observer.close()
+      observers.delete(folder)
     }
     for (const folder of folders) {
-      if (watchers.has(folder)) continue
-      try {
-        watchers.set(folder, watch(folder, { recursive: true }, (_event, file) => changed(folder, file)))
-      } catch (error) {
-        process.stderr.write(`cmod watch: ${folder} is not watched: ${messageOf(error)}\n`)
-        continue
+      if (observers.has(folder)) continue
+      let listed: { readonly at: number; readonly files: Promise<string[]> } | undefined
+      const list = async () => {
+        if (listed === undefined || Date.now() - listed.at >= settleMs) listed = { at: Date.now(), files: checkoutFiles(folder) }
+        return (await listed.files).map((file) => join(folder, file))
       }
-      if (failures.has(await nameOf(folder))) changed(folder, null)
+      const observer = observe({ folders: () => [folder], isRecursive: true, list, onChange: (observed) => changes.changed(folder, changesOf(folder, observed)), report: (error) => void process.stderr.write(`cmod watch: missed a change in ${folder}: ${messageOf(error)}\n`) })
+      observers.set(folder, observer)
+      await observer.look()
+      if (failures.has(await nameOf(folder))) changes.retry(folder)
     }
+    const now = folders.toSorted().join(', ')
+    if (now !== watched) process.stderr.write(`cmod watch: watching ${now === '' ? 'no linked checkout' : now}\n`)
+    watched = now
   }
 
+  let isNewer = false
+  let checking = Promise.resolve()
+  const check = () =>
+    void (checking = checking
+      .then(async () => {
+        if (await isNewerCmodInstalled()) isNewer = true
+        else await follow()
+      })
+      .catch((error: unknown) => void process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`)))
+  check()
+  await checking
+  const serve = hearServe([listeningOf(storeInterface, 'on', 'Change', [], { part: ['links', 'plugins'] })], check, (error) => void process.stderr.write(`cmod watch: hears no change of the linked mods from cmod serve: ${messageOf(error)}\n`))
   try {
-    while (process.ppid === parent && !(await isNewerCmodInstalled())) {
-      await follow().catch((error: unknown) => process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`))
-      const now = new Date()
-      await utimes(heartbeat, now, now)
-      await Bun.sleep(pollMs)
-    }
+    await pollWhile(
+      async () => process.ppid === parent && !isNewer,
+      async () => {
+        const now = new Date()
+        await utimes(heartbeat, now, now)
+      },
+    )
     return 0
   } finally {
-    for (const watcher of watchers.values()) watcher.close()
-    for (const timer of [...timers.values(), ...failing]) clearTimeout(timer)
+    await serve.close()
+    for (const observer of observers.values()) observer.close()
+    changes.close()
   }
 }

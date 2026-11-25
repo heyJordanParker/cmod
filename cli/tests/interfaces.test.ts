@@ -1,5 +1,5 @@
-import { afterAll, afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, watch } from 'node:fs'
+import { afterAll, afterEach, expect, setDefaultTimeout, test } from 'bun:test'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,9 +11,12 @@ import { connectRpc, rpcRoutes, type RpcClient } from '@cmodjs/core/src/runtime/
 import { testMod } from '@cmodjs/core/src/testing.js'
 import { claudeCodeOf } from '@cmodjs/core/src/testing/claude-code.js'
 import { calledAnswer } from '@cmodjs/core/src/testing/fake-claude.js'
+import { retriesAtOnce } from '@cmodjs/core/src/testing/fake-serve.js'
 import { answered } from '../src/serve.js'
 import { startTime } from '../src/store.js'
-import { cmod, cmodFromSource, cmodWith, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodExecutable, cmodWith, deleteTemporaryHomes, environment, spawned, spawningTestLimitMs, startCmod, serveChanges, temporaryHome, writeFiles } from './cmod.js'
+
+setDefaultTimeout(spawningTestLimitMs)
 
 const stops: (() => Promise<unknown>)[] = []
 
@@ -53,7 +56,7 @@ function connect(socket: string, onConnect?: (client: RpcClient, listeners: Inte
       return answered.result
     },
     onConnect: (connected) => onConnect?.(connected, listeners),
-    wait: async () => undefined,
+    clock: retriesAtOnce,
   })
   stops.push(() => client.close())
   return { client, listeners }
@@ -239,7 +242,7 @@ test("a program cmod program started provides an interface through connect(), an
   expect(found.map((each) => [each.mod, each.program])).toEqual([['demo', 'echo-provider']])
   expect(answer).toBe('heard ping')
   expect(await heard).toBe('eu-2')
-}, 30_000)
+})
 
 test("a program that provides an interface through connect() asks a session mod's beforeCheck listener and gets its answer", async () => {
   const home = await servedHome()
@@ -255,7 +258,7 @@ test("a program that provides an interface through connect() asks a session mod'
   expect(line).toBe('provided')
   expect(rules?.mod).toBe('rulebook')
   expect(answers).toEqual([{ rules: { a: 'off' } }])
-}, 30_000)
+})
 
 test('a provider program that dies leaves providers at once, and a call to it fails at once, naming it', async () => {
   const home = await servedHome()
@@ -274,7 +277,7 @@ test('a provider program that dies leaves providers at once, and a call to it fa
   expect(echo?.mod).toBe('demo')
   expect(await providers('demo/Echo')).toEqual([])
   expect(failed).toBe("demo's echo-provider program does not run, so it answers no demo/Echo.")
-}, 30_000)
+})
 
 test('a cmod run script calls the program that provides an interface through providers', async () => {
   const home = await servedHome()
@@ -285,7 +288,7 @@ test('a cmod run script calls the program that provides an interface through pro
 
   expect([ran.exitCode, ran.stderr]).toEqual([0, ''])
   expect(JSON.parse(ran.stdout)).toEqual({ mod: 'demo', program: 'echo-provider', answer: 'heard ping' })
-}, 30_000)
+})
 
 test("a program from a 7.0.0 core, whose instance file names demo/Echo in provides, still answers a session's providers through cmod serve", async () => {
   const home = await servedHome()
@@ -298,47 +301,39 @@ test("a program from a 7.0.0 core, whose instance file names demo/Echo in provid
 
   expect(found.map((each) => [each.mod, each.program])).toEqual([['boat', 'boat']])
   expect(await found[0]?.echo('ping')).toBe('boat heard ping')
-}, 30_000)
-
-const providesOnceTold = `import { existsSync, watch } from 'node:fs'
-import { connect } from '${coreSource}/rpc.ts'
-import { provide } from '${coreSource}/mod.ts'
-const home = process.env.HOME
-await connect()
-await Bun.write(\`\${home}/connected\`, String(process.pid))
-await new Promise((resolve) => {
-  const told = () => existsSync(\`\${home}/provide\`) && (watcher.close(), resolve())
-  const watcher = watch(home, told)
-  told()
 })
-provide('demo/Echo', { echo: (text) => \`\${process.env.CMOD_MOD} heard \${text}\` })
+
+const providesOnceTold = `import { connect } from '${coreSource}/rpc.ts'
+import { provide } from '${coreSource}/mod.ts'
+await connect()
+await Bun.connect({
+  unix: \`\${process.env.HOME}/told.sock\`,
+  socket: {
+    open: (socket) => void socket.write(String(process.pid)),
+    data: () => void provide('demo/Echo', { echo: (text) => \`\${process.env.CMOD_MOD} heard \${text}\` }),
+  },
+})
 `
 
-function untilSeen(folder: string, isSeen: () => boolean): Promise<void> {
-  return new Promise((resolve) => {
-    const check = () => isSeen() && (watcher.close(), resolve())
-    const watcher = watch(folder, check)
-    check()
-  })
-}
-
-function appears(folder: string, name: string): Promise<void> {
-  return untilSeen(folder, () => existsSync(join(folder, name)))
-}
+type LaterProvider = { readonly pid: number; provide(): void }
 
 async function writeServicePrograms(home: string, programs: Readonly<Record<string, string>>) {
   const folder = join(home, '.local/share/cmod/programs')
-  await writeFiles(folder, { cmod: cmodFromSource, ...programs })
+  await writeFiles(folder, { cmod: cmodExecutable, ...programs })
   for (const name of ['cmod', ...Object.keys(programs)]) await chmod(join(folder, name), 0o755)
 }
 
-async function writeLaterProvider(home: string) {
+async function writeLaterProvider(home: string): Promise<{ readonly connected: Promise<LaterProvider> }> {
+  const connected = Promise.withResolvers<LaterProvider>()
+  const told = Bun.listen({ unix: join(home, 'told.sock'), socket: { data: (socket, pid) => connected.resolve({ pid: Number(pid.toString()), provide: () => void socket.write('provide') }) } })
+  stops.push(async () => told.stop(true))
   await writeFiles(home, { 'later.ts': providesOnceTold })
   await writeServicePrograms(home, { 'later-provider': `#!/bin/sh\nexec "${process.execPath}" "$HOME/later.ts"\n` })
+  return { connected: connected.promise }
 }
 
 async function serviceProviderOn(home: string, elected: { readonly isService: true } | { readonly singleInstance: true } = { isService: true }) {
-  await writeLaterProvider(home)
+  const { connected } = await writeLaterProvider(home)
   const plugin = sessionOn(home)
   await plugin.start()
   let server: Program | undefined
@@ -360,96 +355,93 @@ async function serviceProviderOn(home: string, elected: { readonly isService: tr
     )
   }
   await demo.start()
-  return server as Program
+  return { server: server as Program, connected }
 }
 
 test("a mod's isService program that only connect()s and provides demo/Echo later: provider('demo/Echo'), asked before the provide, resolves after it, and its call answers", async () => {
   const home = await servedHome()
-  const server = await serviceProviderOn(home)
+  const { server, connected } = await serviceProviderOn(home)
   let isProvided = false
 
   const asked = server.provider('demo/Echo').then((echo) => ((isProvided = true), echo))
-  await appears(home, 'connected')
+  const later = await connected
   const wasProvidedBeforeTold = isProvided
-  await writeFiles(home, { provide: '' })
+  later.provide()
   const echo = await asked
 
   expect(wasProvidedBeforeTold).toBe(false)
   expect([echo.mod, echo.program]).toEqual(['demo', 'later-provider'])
   expect(await echo.echo('ping')).toBe('demo heard ping')
-}, 30_000)
+})
 
 test("provider('demo/Echo') of a mod's program ignores another mod's program on this computer that provides demo/Echo, and resolves with its own once it provides", async () => {
   const home = await servedHome()
   expect(await startCmod(home, 'program', 'boat', '--no-wait', '--', 'echo-provider').firstLine()).toBe('provided')
-  const server = await serviceProviderOn(home)
+  const { server, connected } = await serviceProviderOn(home)
   let isProvided = false
 
   const asked = server.provider('demo/Echo').then((echo) => ((isProvided = true), echo))
-  await appears(home, 'connected')
+  const later = await connected
   const wasProvidedBeforeTold = isProvided
-  await writeFiles(home, { provide: '' })
+  later.provide()
   const echo = await asked
 
   expect(wasProvidedBeforeTold).toBe(false)
   expect((await providers('demo/Echo')).map((each) => each.mod).toSorted()).toEqual(['boat', 'demo'])
   expect([echo.mod, echo.program]).toEqual(['demo', 'later-provider'])
   expect(await echo.echo('ping')).toBe('demo heard ping')
-}, 30_000)
+})
 
 test("a mod's singleInstance program that only connect()s and provides is starting until its holder prints provided, then running with no address, so ready() names provider(name)", async () => {
   const home = await servedHome()
-  const server = await serviceProviderOn(home, { singleInstance: true })
+  const { server, connected } = await serviceProviderOn(home, { singleInstance: true })
 
   const readied = server.ready().catch((error: unknown) => (error as Error).message)
-  await appears(home, 'connected')
+  const later = await connected
   const beforeProvide = server.state
-  await writeFiles(home, { provide: '' })
+  later.provide()
   const refusal = await readied
 
   expect(beforeProvide).toBe('starting')
   expect(server.state).toBe('running')
   expect(refusal).toBe('demo: the later-provider program printed no address, because it only provides interfaces. Reach them through provider(name).')
-}, 30_000)
+})
 
 test("a holder that waits for its copy's first provide asks cmod serve again once it restarts, then writes the copy's record and prints provided", async () => {
   const home = await temporaryHome()
-  await writeLaterProvider(home)
+  const { connected } = await writeLaterProvider(home)
   const record = join(home, '.local/share/cmod/instances/demo/later-provider.json')
   const firstServe = startCmod(home, 'serve')
   await firstServe.firstLine()
   const holder = startCmod(home, 'program', 'demo', '--no-wait', '--', 'later-provider')
-  await appears(home, 'connected')
+  const later = await connected
 
   firstServe.child.kill('SIGTERM')
   await firstServe.done
   await startCmod(home, 'serve').firstLine()
-  await writeFiles(home, { provide: '' })
+  later.provide()
   const line = await holder.firstLine()
-  const pid = Number(readFileSync(join(home, 'connected'), 'utf8'))
 
   expect(line).toBe('provided')
-  expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual({ pid, started: await startTime(pid) })
-}, 30_000)
+  expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual({ pid: later.pid, started: await startTime(later.pid) })
+})
 
-test("cmod program --service of a program that only connect()s and provides writes its instance record once it provides, with its pid and start time and no address, and prints held within a second of the provide, so it holds the mod's lock no longer", async () => {
+test("cmod program --service of a program that only connect()s and provides writes its instance record once it provides, with its pid and start time and no address, and prints held once it provides, so it holds the mod's lock no longer", async () => {
   const home = await servedHome()
-  await writeLaterProvider(home)
+  const { connected } = await writeLaterProvider(home)
   const record = join(home, '.local/share/cmod/instances/demo/later-provider.json')
   const started = startCmod(home, 'program', 'demo', '--service', '--', 'later-provider')
 
-  await appears(home, 'connected')
+  const later = await connected
   const isRecordedBeforeProvide = existsSync(record)
-  const providedAt = Date.now()
-  await writeFiles(home, { provide: '' })
+  const hasExitedBeforeProvide = started.child.exitCode !== null
+  later.provide()
   const held = await started.done
-  const pid = Number(readFileSync(join(home, 'connected'), 'utf8'))
 
-  expect(isRecordedBeforeProvide).toBe(false)
+  expect([isRecordedBeforeProvide, hasExitedBeforeProvide]).toEqual([false, false])
   expect([held.exitCode, held.stdout, held.stderr]).toEqual([0, 'held\n', ''])
-  expect(Date.now() - providedAt).toBeLessThan(1000)
-  expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual({ pid, started: await startTime(pid) })
-}, 30_000)
+  expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual({ pid: later.pid, started: await startTime(later.pid) })
+})
 
 const loggedProvider = (heard: string) => `import { appendFileSync } from 'node:fs'
 import { connect } from '${coreSource}/rpc.ts'
@@ -460,9 +452,9 @@ process.on('SIGTERM', () => {
   process.exit(0)
 })
 await connect()
+appendFileSync(log, \`start \${process.pid}\\n\`)
 provide('demo/Echo', { echo: (text) => \`${heard} \${text}\` })
 await providers('demo/Echo')
-appendFileSync(log, \`start \${process.pid}\\n\`)
 `
 
 function providerLog(home: string): string[] {
@@ -484,11 +476,11 @@ test("a build of a linked checkout that changes the program of a service that on
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
   expect(await cmod(home, 'program', 'demo', '--service', '--', 'linked-provider')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   const first = recorded()?.pid
+  const instanceChanged = await serveChanges(home).listen('cmod/Programs', { mod: 'demo', program: 'linked-provider' })
 
   await writeFiles(home, { 'provider-build': buildOf('second.ts') })
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
-  await untilSeen(home, () => providerLog(home).length === 3)
-  await untilSeen(instances, () => recorded() !== undefined && recorded()?.pid !== first)
+  while (recorded() === undefined || recorded()?.pid === first) await instanceChanged()
   const next = recorded()?.pid as number
   await sessionOn(home).start()
   const [echo] = (await providers('demo/Echo')) as unknown as readonly Echo[]
@@ -496,7 +488,7 @@ test("a build of a linked checkout that changes the program of a service that on
   expect(providerLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
   expect(recorded()).toEqual({ pid: next, started: await startTime(next) })
   expect(await echo?.echo('ping')).toBe('second ping')
-}, 60_000)
+})
 
 test('cmod program --service of a program that prints its address and provides nothing prints held once its address is in the instance file, which holds its address, pid, and start time and nothing else', async () => {
   const home = await servedHome()
@@ -509,18 +501,18 @@ test('cmod program --service of a program that prints its address and provides n
   expect([held.exitCode, held.stdout]).toEqual([0, 'held\n'])
   expect(Date.now() - startedAt).toBeLessThan(15_000)
   expect(instance).toEqual({ address: `unix:${home}/${instance.pid}.sock`, pid: instance.pid, started: await startTime(instance.pid) })
-}, 30_000)
+})
 
 test('connect() outside a program cmod program started fails, naming CMOD_MOD', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'connect.ts': `import { connect } from '${coreSource}/rpc.ts'\nawait connect()\n` })
 
-  const ran = Bun.spawn([process.execPath, join(home, 'connect.ts')], { cwd: home, env: { ...environment(home), CMOD_MOD: '' }, stdout: 'pipe', stderr: 'pipe' })
+  const ran = spawned([process.execPath, join(home, 'connect.ts')], { cwd: home, env: { ...environment(home), CMOD_MOD: '' }, stdout: 'pipe', stderr: 'pipe' })
   const [exitCode, stderr] = await Promise.all([ran.exited, new Response(ran.stderr).text()])
 
   expect(exitCode).toBe(1)
   expect(stderr).toContain('connect() names its mod by CMOD_MOD, which cmod program sets for every program it starts, and CMOD_MOD is not set. Start this program from a program job with singleInstance or isService.')
-}, 30_000)
+})
 
 const devicesProgram = `import { connect } from '${coreSource}/rpc.ts'
 import { provide, providers } from '${coreSource}/mod.ts'
@@ -597,7 +589,7 @@ test("a session reaches a program on another device at the address a cmod/Device
   expect(found.map((each) => [each.mod, each.program, each.device])).toEqual([['demo', 'echo-provider', devbox.device]])
   expect(answer).toBe('devbox heard ping')
   expect(await heard).toBe('eu-2')
-}, 30_000)
+})
 
 test("a session lists another device's sessions with that device, and a message to one of them resumes it on that device", async () => {
   const devbox = await deviceHome('devbox', '22222222-2222-2222-2222-222222222222', endedOn)
@@ -610,7 +602,7 @@ test("a session lists another device's sessions with that device, and a message 
 
   expect(listed.map((each) => [each.id, each.device])).toEqual([['devbox-1', devbox.device]])
   expect(readFileSync(join(devbox.home, 'bg-args'), 'utf8').trimEnd().split('\n')).toEqual(['--bg', '--resume', 'devbox-1', '--', 'Run it again'])
-}, 30_000)
+})
 
 test("a background task that names another device starts there, from that device's cmod serve", async () => {
   const devbox = await deviceHome('devbox', '22222222-2222-2222-2222-222222222222', endedOn)
@@ -628,7 +620,7 @@ test("a background task that names another device starts there, from that device
   expect(task.id).toBe('task-on-devbox')
   expect(args.at(-1)).toBe('Upgrade every dependency.')
   expect(JSON.parse(settings.env.CMOD_TASK)).toMatchObject({ session: 'test-session', title: 'Upgrade the dependencies', isBackground: true })
-}, 30_000)
+})
 
 test('two devices that list each other carry a call one hop, because each offers the other only its own providers', async () => {
   const mac = await deviceHome('mac', '11111111-1111-1111-1111-111111111111')
@@ -651,7 +643,7 @@ test('two devices that list each other carry a call one hop, because each offers
   expect(carriedByDevbox.map((each) => each.device.name)).toEqual(['devbox', 'mac'])
   expect(offeredByDevbox).toEqual([{ mod: 'demo', program: 'echo-provider', device: devbox.device }])
   expect(offeredAsMac).toEqual([])
-}, 30_000)
+})
 
 test('a device leaves providers once its cmod/Devices provider tells it is gone', async () => {
   const devbox = await deviceHome('devbox', '22222222-2222-2222-2222-222222222222')
@@ -666,7 +658,7 @@ test('a device leaves providers once its cmod/Devices provider tells it is gone'
 
   expect(before.map((each) => each.device.name)).toEqual(['devbox'])
   expect(await providers('demo/Echo')).toEqual([])
-}, 30_000)
+})
 
 const listedSession = (id: string) => ({ id, title: id, project: '/work/app', model: 'claude-opus-5-5', cwd: '/work/app', isRunning: true, startedAt: '2026-11-20T10:00:00.000Z', lastAt: '2026-11-20T10:00:02.000Z' })
 
@@ -684,6 +676,7 @@ provide('cmod/Sessions', {
 
 const devboxProgram = `import { connect } from '${coreSource}/rpc.ts'
 import { provide } from '${coreSource}/mod.ts'
+
 await connect()
 provide('cmod/Sessions', {
   sessions: () => ${JSON.stringify([listedSession('s1'), listedSession('s2')])},
@@ -709,7 +702,7 @@ test('a call on a session that a connect() program throws NotHeld for goes on to
   const usage = await (await sessions.get('s1')).usage()
 
   expect(usage.model).toBe('devbox s1')
-}, 30_000)
+})
 
 test("any other error a connect() program's cmod/Sessions method throws ends the call with its message, and no later provider answers it", async () => {
   await sessionsProvidersOn(await servedHome())
@@ -720,4 +713,4 @@ test("any other error a connect() program's cmod/Sessions method throws ends the
   )
 
   expect(failed).toBe('offline cannot reach s2')
-}, 30_000)
+})

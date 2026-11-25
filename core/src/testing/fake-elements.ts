@@ -1,12 +1,11 @@
 import type { ElementTable, RenderElement, RenderNode } from 'claude-code'
+import { refusal } from '../runtime/drawing-rules.js'
 
 type Drawn = { readonly type: string; readonly props: Record<string, unknown>; readonly children?: readonly RenderNode[] }
 
 const boxInsides = new WeakMap<object, Drawn>()
 
 const measuredProps = ['width', 'height', 'minWidth', 'minHeight'] as const
-
-const oncePerKey: ReadonlySet<string> = new Set(['Input', 'Select', 'Markdown', 'Client', 'Raster', 'Image'])
 
 function element(type: string) {
   return (props: Record<string, unknown>): RenderElement => {
@@ -59,27 +58,12 @@ export function focusableKey(node: RenderNode, isTarget: (props: Drawn['props'])
 }
 
 export function checkKeys(tree: RenderNode, plugin: string, component: string): void {
-  const seen = new Set<string>()
-  for (const { type, props } of drawnIn(tree)) {
-    const key = props['key']
-    if (!oncePerKey.has(type) || typeof key !== 'string') continue
-    const drawn = `${type}\u0000${key}`
-    if (seen.has(drawn)) throw new Error(`${plugin}: returned a tree ${component} refuses: ${type} "${key}" is drawn twice; each takes its own key`)
-    seen.add(drawn)
-  }
-  for (const { type, props } of hoversOutsideKeys(tree, false)) {
-    const key = typeof props['key'] === 'string' ? ` "${props['key']}"` : ''
-    throw new Error(`${plugin}: returned a tree ${component} refuses: ${type}${key} hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`)
-  }
-}
-
-function* hoversOutsideKeys(node: RenderNode, isInKeyedBox: boolean): Generator<Drawn> {
-  if (typeof node === 'string') return
-  const drawn = insideOf(node)
-  const isKeyed = isInKeyedBox || (drawn.type === 'Box' && typeof drawn.props['key'] === 'string')
-  const hover = drawn.props['hover']
-  if (typeof hover === 'object' && hover !== null && !('scope' in hover) && !isKeyed) yield drawn
-  for (const child of drawn.children ?? []) yield* hoversOutsideKeys(child, isKeyed)
+  const rule = refusal(tree, (node) => {
+    if (typeof node === 'string') return undefined
+    const { type, props, children = [] } = insideOf(node as RenderElement)
+    return { type, key: props['key'], hover: props['hover'], children }
+  })
+  if (rule !== undefined) throw new Error(`${plugin}: returned a tree ${component} refuses: ${rule}`)
 }
 
 function* drawnIn(node: RenderNode): Generator<Drawn> {

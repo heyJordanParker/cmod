@@ -9,7 +9,7 @@ import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { isLinked } from './settings.js'
-import { deleteSecrets, isHolding, storePath, takeLock } from './store.js'
+import { deleteSecrets, isHolding, isLockHeld, storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
 
@@ -314,6 +314,13 @@ export async function stopCopy(pid: number, started: string): Promise<void> {
     if (Date.now() >= killAt) send(pid, 'SIGKILL')
     await Bun.sleep(100)
   }
+}
+
+export async function hasExited(mod: string, name: string): Promise<boolean> {
+  const file = instancePath(storeFolder(process.env), mod, name)
+  const copy = (await readJson(file)) as ProgramInstance | undefined
+  if (copy !== undefined) return !(await isHolding(copy.pid, copy.started))
+  return existsSync(dirname(file)) && !(await isLockHeld(`${file}.lock`))
 }
 
 function send(pid: number, signal: NodeJS.Signals): void {

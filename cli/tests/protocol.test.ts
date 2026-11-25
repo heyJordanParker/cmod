@@ -1,9 +1,12 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { formatEvent, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { spawningTestLimitMs } from './cmod.js'
+
+setDefaultTimeout(spawningTestLimitMs)
 
 const oldestCore = '4.0.0'
 
@@ -28,4 +31,4 @@ test.skipIf(coreVersion === oldestCore)(`each event line this cmod prints reads 
   const oldest = (await import(join(folder, 'node_modules/@cmodjs/core/records.js'))) as { parseEvent(line: string): RunnerEvent }
 
   for (const event of events) expect(oldest.parseEvent(formatEvent(event))).toEqual(event)
-}, 60000)
+})

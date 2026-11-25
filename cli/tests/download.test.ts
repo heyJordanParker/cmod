@@ -1,10 +1,11 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
-import { cmod, cmodFromSource, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodExecutable, cmodWith, deleteTemporaryHomes, spawned, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const machine = `${process.platform}-${process.arch}`
@@ -49,7 +50,7 @@ async function archives(home: string): Promise<{ tarGz: Uint8Array; zip: Uint8Ar
 
 async function setUp(home: string, install: string) {
   const root = join(home, 'demo')
-  await writeFiles(home, { 'bin/cmod': cmodFromSource })
+  await writeFiles(home, { 'bin/cmod': cmodExecutable })
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
     'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh' } }),
@@ -60,8 +61,8 @@ async function setUp(home: string, install: string) {
 
 const data = (home: string, ...path: string[]) => join(home, '.local/share/cmod/data/demo', ...path)
 const cache = (home: string, ...path: string[]) => join(home, '.cache/cmod/demo', ...path)
-const output = (path: string) => new Response(Bun.spawn([path], { stdout: 'pipe' }).stdout).text()
-const byName = (home: string, program: string) => new Response(Bun.spawn(['sh', '-c', program], { env: { PATH: `${join(home, '.local/share/cmod/programs')}:/usr/bin:/bin` }, stdout: 'pipe' }).stdout).text()
+const output = (path: string) => new Response(spawned([path], { stdout: 'pipe' }).stdout).text()
+const byName = (home: string, program: string) => new Response(spawned(['sh', '-c', program], { env: { PATH: `${join(home, '.local/share/cmod/programs')}:/usr/bin:/bin` }, stdout: 'pipe' }).stdout).text()
 
 test("download installs the program for this machine into CMOD_CACHE/bin, and links cmod's programs folder and CMOD_DATA/bin to it", async () => {
   const home = await temporaryHome()

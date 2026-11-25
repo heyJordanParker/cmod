@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { cacheFolder, dataFolder, finishStepsMethod, isAtLeast, isNerdFontTerminal, parsePreferences, preferencesPath, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { cacheFolder, dataFolder, finishStepsMethod, isAtLeast, isNerdFontTerminal, parsePreferences, preferencesPath, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, isObject, scriptsSha256, serviceFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -36,7 +36,7 @@ import { createWatches } from './watches.js'
 import { createUi, openLink, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownParts, type UiArea } from './ui.js'
 import type { Widgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
-import { Box, forClaudeCode, Text } from '../ui/elements.js'
+import { Box, forClaudeCode, Text, type DrawnIn } from '../ui/elements.js'
 
 export type Plugin = {
   readonly name: string
@@ -141,22 +141,54 @@ const settingsLoadMs = 500
 
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
 
+const factsMs = 2000
+
 async function roundsBarEnds(claude: Claude): Promise<boolean> {
   const path = preferencesPath(await cmodStore(claude))
   const text = await claude.fs.read(path).catch(ifMissing(undefined))
   return parsePreferences(text === undefined ? undefined : (JSON.parse(text) as unknown), path).roundsBarEnds
 }
 
+function followDrawnIn(claude: Claude, name: string): { readonly facts: () => DrawnIn; read(): Promise<void>; drawn(): void } {
+  let facts: DrawnIn = { hasNerdFont: false, theme: 'dark' }
+  let isNerdFont: Promise<boolean> | undefined
+  let readAt = Number.NEGATIVE_INFINITY
+  let isReading = false
+  const read = async (now: number) => {
+    readAt = now
+    isNerdFont ??= claude.env.terminal().then(isNerdFontTerminal)
+    const [rounds, rows, isKnown] = await Promise.all([
+      roundsBarEnds(claude).catch((error: unknown) => (claude.ui.warn('preferences:read', `${name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false)),
+      claude.config.list().catch((error: unknown) => (claude.ui.warn('config:read', `${name} draws for a theme with full color: ${messageOf(error)}`), [])),
+      isNerdFont,
+    ])
+    const theme = rows.find((row) => row.key === 'theme')?.value
+    const next: DrawnIn = { hasNerdFont: rounds || isKnown, theme: typeof theme === 'string' ? theme : 'dark' }
+    const isChanged = next.hasNerdFont !== facts.hasNerdFont || next.theme !== facts.theme
+    facts = next
+    return isChanged
+  }
+  return {
+    facts: () => facts,
+    read: async () => void (await read(await claude.clock.now())),
+    drawn: () => {
+      if (isReading) return
+      isReading = true
+      void claude.clock
+        .now()
+        .then((now) => now - readAt >= factsMs && read(now))
+        .then((isChanged) => isChanged && claude.ui.invalidate('ui.render'))
+        .finally(() => void (isReading = false))
+    },
+  }
+}
+
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
-  const read: ReadFile = async (path) => {
-    const stat = await claude.fs.stat(path).catch(ifMissing(undefined))
-    return stat?.kind === 'file' ? claude.fs.read(path) : undefined
-  }
-  const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
-  const version = typeof manifest?.version === 'string' ? manifest.version : undefined
-  const store = await cmodStore(claude)
-  const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
+  const read: ReadFile = (path) => claude.fs.read(path).catch(ifMissing(undefined))
+  const [manifest, packageJson, store] = await Promise.all([readJson(read, `${root}/.claude-plugin/plugin.json`), readJson(read, `${root}/package.json`), cmodStore(claude)])
+  const version = isObject(manifest) && typeof manifest['version'] === 'string' ? manifest['version'] : undefined
+  const steps = readSteps(packageJson) ?? {}
   if (name === cmodPluginName) {
     const installed = await newestCmodVersion(claude)
     return { name, root, version, store, steps, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false }
@@ -164,8 +196,9 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   const plugin = { name, root, version, store, steps }
   const record = await readRecord(read, store, name)
   if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }
+  const readStepFile: ReadFile = async (path) => ((await claude.fs.stat(path).catch(ifMissing(undefined)))?.kind === 'file' ? claude.fs.read(path) : undefined)
   const scripts = await scriptsSha256(steps, {
-    read: (path) => read(`${root}/${path}`),
+    read: (path) => readStepFile(`${root}/${path}`),
     list: (folder) => filesBelow(claude, `${root}/${folder}`),
   })
   if (version === undefined || record?.scriptsSha256 !== scripts) return { ...plugin, isInstalled: false, shouldRecord: false }
@@ -443,20 +476,18 @@ export function createLifecycle<State extends object, Declared extends Options =
       void activeRouter.dispatch('cmod.call', call, async () => ({ deny: `${definition.name} has no method ${call.method}.` })).then((answer) => ('deny' in answer ? failed(new Error(answer.deny)) : undefined), failed)
     }
     runtime.claude.ui.invalidate('ui.render')
-    if (definition.name === cmodPluginName) runtime.claude.ui.invalidate('command.describe')
     void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error, isCritical: true }))
     const missed = missedSessionStart
     missedSessionStart = undefined
-    if (missed !== undefined) await replaySessionStart(missed)
-    if ((await runtime.claude.store.get(announcedKey)) !== undefined) {
-      runtime.toaster.toast.dismiss(installId)
-      return
-    }
-    await runtime.claude.store.set(announcedKey, { version: plugin.version ?? '' })
-    const { toaster } = runtime
-    void announcementOf(runtime.claude, plugin, added, openSettings)
-      .then(({ message, ...options }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options }))
-      .catch((error: unknown) => toastFailure({ id: installId, message: 'Could not say what it installed', error }))
+    if (missed !== undefined) void replaySessionStart(missed)
+    void announce(runtime, plugin, added).catch((error: unknown) => toastFailure({ id: installId, message: 'Could not say what it installed', error }))
+  }
+
+  const announce = async ({ claude: engine, toaster }: Pick<ModRuntime, 'claude' | 'toaster'>, installed: Plugin, added: readonly string[]) => {
+    if ((await engine.store.get(announcedKey)) !== undefined) return toaster.toast.dismiss(installId)
+    await engine.store.set(announcedKey, { version: installed.version ?? '' })
+    const { message, ...options } = await announcementOf(engine, installed, added, openSettings)
+    toaster.toast.success(message, { id: installId, duration: announcementMs, ...options })
   }
 
   const replaySessionStart = async (e: Frozen<Args<'classic.SessionStart'>>) => {
@@ -738,13 +769,16 @@ export function createLifecycle<State extends object, Declared extends Options =
           (done) => done === 'copied' && runtime?.toaster.toast.success('Copied the link', { description: 'Paste it in your browser.' }),
           (error: unknown) => toastFailure({ id: 'open-link', message: 'Could not open the link', error, isCritical: true }),
         )
-      let hasNerdFont = false
+      const drawnFacts = followDrawnIn(claudeCalls, definition.name)
       const naming: Claude = {
         ...claudeCalls,
         ui: {
           ...claudeCalls.ui,
           warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)),
-          resolve: (e) => forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, { hasNerdFont }),
+          resolve: (e) => {
+            drawnFacts.drawn()
+            return forClaudeCode(claudeCalls.ui.resolve(e), e.surface, open, drawnFacts.facts())
+          },
         },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() },
       }
@@ -762,9 +796,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       readStarted = read
       try {
         drawCount = (await claudeCalls.clock.now()) * drawsPerMs
-        hasNerdFont = (await roundsBarEnds(claudeCalls).catch((error: unknown) => (claudeCalls.ui.warn('preferences:read', `${definition.name} rounds its bars only in a terminal it knows: ${messageOf(error)}`), false))) || isNerdFontTerminal(await claudeCalls.env.terminal())
-        await programs.refresh()
-        await begin().catch(report)
+        await Promise.all([drawnFacts.read(), programs.refresh().then(() => begin().catch(report))])
       } finally {
         settleStart()
       }
@@ -816,11 +848,11 @@ async function createMod<State extends object, Declared extends Options>(definit
   const borrowed: BorrowedMarkdown = (styler, cached, input, scope) => {
     const name = `The markdown style of ${styler}`
     void parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate('ui.render'))
-    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`)
+    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`) ?? undefined
   }
   const provided = createProviders({
     name: definition.name,
-    call: (to, method, input) => claude.cmod.call({ to, method, input }),
+    call: (to, method, input) => new Promise((resolve) => claude.clock.after(0, () => resolve(claude.cmod.call({ to, method, input })))),
     changed: () => area.relisted(),
     after: (ms, run) => claude.clock.after(ms, run),
     report: (error) => report({ id: 'interfaces', message: 'A provider listener failed', error }),
@@ -1213,6 +1245,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     interfaces: provided,
     ...(widgets === undefined ? {} : { widgets }),
     onServeUnreached: (listener) => conversations?.onUnreached(listener),
+    onStoreChange: (listener) => conversations?.onStoreChange(listener),
+    storeChanged: (part) => conversations?.tellStore(part),
     ...(servedParts === undefined ? {} : { parts: servedParts }),
   })
   const names = new Set<string>()

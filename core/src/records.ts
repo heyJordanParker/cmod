@@ -381,6 +381,10 @@ export function preferencesPath(store: string): string {
   return `${store}/preferences.json`
 }
 
+export function devicePath(store: string): string {
+  return `${store}/device.json`
+}
+
 export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean; readonly roundsBarEnds: boolean }
 
 const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet', 'roundsBarEnds'] as const satisfies readonly (keyof Preferences)[]
@@ -422,12 +426,12 @@ export function parseWebUi(value: unknown, path: string): WebUi | undefined {
 
 export type BrowserEnv = { readonly os: string; readonly browser?: string | undefined; readonly sshConnection?: string | undefined; readonly display?: string | undefined; readonly waylandDisplay?: string | undefined }
 
-export type TerminalVariables = { readonly program?: string | undefined; readonly ghostty?: string | undefined; readonly wezterm?: string | undefined }
+export type TerminalVariables = { readonly program?: string | undefined; readonly ghostty?: string | undefined; readonly wezterm?: string | undefined; readonly kitty?: string | undefined }
 
 const nerdFontTerminals: readonly string[] = ['herdr', 'ghostty', 'WezTerm']
 
-export function isNerdFontTerminal({ program, ghostty, wezterm }: TerminalVariables): boolean {
-  return nerdFontTerminals.includes(program ?? '') || (ghostty ?? '') !== '' || (wezterm ?? '') !== ''
+export function isNerdFontTerminal({ program, ...set }: TerminalVariables): boolean {
+  return nerdFontTerminals.includes(program ?? '') || Object.values(set).some((value) => (value ?? '') !== '')
 }
 
 export function browserCommand(env: BrowserEnv, href: string): readonly string[] | undefined {

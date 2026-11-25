@@ -2,7 +2,7 @@ import { parseEvent, type RunnerEvent } from '@cmodjs/core/src/records.js'
 
 type Line = { stream: 'stdout' | 'stderr'; text: string }
 
-export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: 'inherit' | 'ignore' | { readonly text: string } }
+export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: 'inherit' | 'ignore' | { readonly text: string }; signal?: AbortSignal }
 
 export async function runStep(argv: string[], cwd: string, env: Record<string, string | undefined>, emit: (event: Extract<RunnerEvent, { type: 'progress' | 'log' }>) => void): Promise<{ exitCode: number; lastError: string }> {
   let lastError = ''
@@ -49,6 +49,7 @@ export function spawn<Out extends 'pipe' | 'inherit' | 'ignore', Err extends 'pi
   try {
     return Bun.spawn(argv, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
       env: options.env ?? process.env,
       stdin: typeof options.stdin === 'object' ? new TextEncoder().encode(options.stdin.text) : (options.stdin ?? 'ignore'),
       stdout: options.stdout,

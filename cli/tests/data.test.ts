@@ -1,7 +1,8 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { join } from 'node:path'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 const record = (name: string) => JSON.stringify({ name, version: '0.1.0', root: `/cache/${name}`, installedAt: '2026-11-19T10:00:00.000Z', scriptsSha256: '', uninstall: null, program: null, keys: {} })

@@ -12,6 +12,8 @@ core/ui/
 core/utils/
 *.tgz
 cli/dist/
+herdr/cmod/gpui-kit.d.ts
+herdr/cmod/jsconfig.json
 
 /.claude/*
 !/.claude/rules/

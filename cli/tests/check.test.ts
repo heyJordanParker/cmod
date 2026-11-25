@@ -1,11 +1,11 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
-import { capture } from '../src/process.js'
-import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { captured, claudeAnswering, cmod, cmodOnPath, cmodPluginListed, deleteTemporaryHomes, spawningTestLimitMs, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(spawningTestLimitMs)
 afterAll(deleteTemporaryHomes)
 
 test('cmod check refuses an install command that names no script', async () => {
@@ -626,7 +626,7 @@ test('cmod check skips a file git ignores, which no release holds, and checks th
     'cli/src/main.ts': 'export const main = () => 0\n',
     'docs/agents/x.ts': "import { main } from '../../cli/src/main.ts'\nexport const run = main\n",
   })
-  expect((await capture(['git', 'init', '-q', root])).exitCode).toBe(0)
+  expect((await captured(['git', 'init', '-q', root])).exitCode).toBe(0)
 
   const ignored = await cmod(home, 'check', root)
 

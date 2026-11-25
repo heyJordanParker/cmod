@@ -235,7 +235,7 @@ export default class Cmod extends View {
     if (effect.type === "connect") return cx.spawn((cx) => this.connect(cx));
     if (effect.type === "connectAfter") return cx.timer.after(effect.ms, (cx) => this.dispatch({ type: "connect" }, cx));
     if (effect.type === "call") return this.call(effect, cx);
-    if (effect.type === "openPage") return this.openPage(effect.session, effect.page);
+    if (effect.type === "openPage") return this.openPage(effect.session, effect.page, effect.isAsked);
     if (effect.type === "closePage") return this.closePage(effect.key);
     if (effect.type === "reveal") return this.revealSelf();
     throw new Error(`The cmod panel performs no ${effect.type}.`);
@@ -444,12 +444,12 @@ export default class Cmod extends View {
     });
   }
 
-  openPage(session, page) {
+  openPage(session, page, isAsked) {
     const key = keyOf(page);
     const tab = this.pageTabs.get(key);
-    if (tab !== undefined && cmodTabs().has(tab)) return run("tab.select", { id: tab });
+    if (tab !== undefined && cmodTabs().has(tab)) return isAsked ? run("tab.select", { id: tab }) : null;
     this.openingTabs.push({ key, before: cmodTabs() });
-    run("tab.new", { name: page.title, mod: "cmod", props: { show: "page", session, mod: page.mod, id: page.id, title: page.title } });
+    run("tab.new", { name: page.title, mod: "cmod", props: { show: "page", session, mod: page.mod, id: page.id, title: page.title }, ...(isAsked ? {} : { focus: false }) });
   }
 
   closePage(key) {
@@ -583,7 +583,7 @@ export default class Cmod extends View {
     const session = this.model.target;
     const pageTabs = now.pages.map((page) =>
       this.choice(Button.new(`cmod-page-${keyOf(page)}`).role("link").accessibility_label(`${titled(page.title)}, opens in its own tab`).tooltip(`Opens ${titled(page.title)} in its own tab`), false, t)
-        .on_click(() => this.openPage(session, page))
+        .on_click(() => this.openPage(session, page, true))
         .child(titled(page.title)),
     );
     return h_flex().id("cmod-header").flex_none().h(UI.height.header).px(UI.space.sm).items_center().border_b(1).border_color(t.border).child(
@@ -597,7 +597,13 @@ export default class Cmod extends View {
     const drawn = this.drawnParts.get(`${this.model.target}\n${part.key}`);
     const tree = part.drawn?.tree ?? null;
     const error = part.drawn?.error ?? null;
-    if (tree === null) return error === null ? div().id(`part-${part.key}`) : this.alert(error, t);
+    if (tree === null && error !== null) return this.alert(error, t);
+    if (tree === null && this.model.show === "widgets") return div().id(`part-${part.key}`);
+    if (tree === null) {
+      return h_flex().id(`part-${part.key}`).gap(UI.space.xs).role("status").accessibility_label(`${titled(part.title)}: Drawing…`)
+        .child(div().font_medium().child(titled(part.title)))
+        .child(div().text_color(t.muted).child("Drawing…"));
+    }
     if (drawn === undefined) return div().id(`part-${part.key}`);
     if (this.isLoneNote(part)) return div().text_color(t.muted).role("label").accessibility_label(textOf(tree.props?.children)).child(textOf(tree.props?.children));
     return v_flex().id(`part-${part.key}`).min_w(0).gap(UI.space.sm)
