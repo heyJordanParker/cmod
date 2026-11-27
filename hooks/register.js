@@ -53,6 +53,15 @@ function firstLine(text) {
   return text.split(`
 `).find((line) => line.trim() !== "")?.trim() ?? "";
 }
+var summaryChars = 200;
+function questionOf(input) {
+  const question = input["questions"]?.[0]?.question;
+  return typeof question === "string" ? question : undefined;
+}
+function callSummary(input) {
+  const named = [input["command"], input["file_path"], input["path"], input["pattern"], input["url"], input["query"], questionOf(input), input["description"], input["prompt"]].find((value) => typeof value === "string");
+  return firstLine(typeof named === "string" ? named : JSON.stringify(input)).slice(0, summaryChars);
+}
 function messageOf(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -426,7 +435,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.10.4";
+var coreVersion = "8.11.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -3735,11 +3744,12 @@ function isHeardAt(listening, args, payload) {
   return listening.matcher === undefined || matches(payload, receivedMatcher(listening.matcher));
 }
 var keptEvents = 500;
-function interfaceServer({ implementations, onListen, extraMethod }) {
+function interfaceServer({ implementations, onListen, extraMethod, hears = () => true }) {
   const held = new Map;
   const recent = new Map;
   const keyOf = (name, event) => `${name}
 ${event}`;
+  const isHeard = (listening, args, payload) => listening.kind === "on" && isHeardAt(listening, args, payload) && hears(listening, payload);
   const listeningOf = (params) => {
     if (!isObject(params) || typeof params["id"] !== "string" || typeof params["interface"] !== "string" || typeof params["event"] !== "string" || params["kind"] !== "on" && params["kind"] !== "before")
       throw new RpcError(rpcCodes.invalidParams, `${listenMethod} takes { id, interface, event, kind }.`);
@@ -3752,7 +3762,7 @@ ${event}`;
       return;
     const after = Number(listening.after);
     for (const each of recent.get(keyOf(listening.interface, listening.event))?.kept ?? []) {
-      if (each.cursor > after && isHeardAt(listening, each.args, each.payload))
+      if (each.cursor > after && isHeard(listening, each.args, each.payload))
         connection.notify(onMethod, { id: listening.id, payload: each.payload, cursor: String(each.cursor) });
     }
   };
@@ -3792,7 +3802,7 @@ ${event}`;
         log.kept.shift();
       recent.set(key, log);
       for (const listening of server.listeners(name, event)) {
-        if (listening.kind === "on" && isHeardAt(listening, args, payload))
+        if (isHeard(listening, args, payload))
           listening.connection.notify(onMethod, { id: listening.id, payload, cursor: String(log.cursor) });
       }
     },
@@ -3805,7 +3815,9 @@ ${event}`;
 }
 function interfaceListeners({ report: reportAll }) {
   const registered = new Map;
+  const shared = new Map;
   let next = 0;
+  const sharedKey = ({ interface: name, event, args, matcher, provider }) => JSON.stringify([name, event, args ?? [], matcher ?? null, provider ?? null], (_key, value) => isObject(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : 1)) : value);
   const report = (error) => {
     if (!isConnectionGone(error))
       reportAll(error);
@@ -3817,15 +3829,24 @@ function interfaceListeners({ report: reportAll }) {
   });
   const listeners = {
     listen(request, listening, listener) {
-      const id = `${next += 1}`;
-      const each = { listening: { ...listening, id }, listener, cursor: undefined, isPending: false };
-      registered.set(id, each);
-      send(request, each);
+      const key = listening.kind === "on" ? sharedKey(listening) : undefined;
+      const each = (key === undefined ? undefined : shared.get(key)) ?? { listening: { ...listening, id: `${next += 1}` }, joined: new Set, cursor: undefined, isPending: false };
+      const mine = { listener };
+      each.joined.add(mine);
+      if (!registered.has(each.listening.id)) {
+        registered.set(each.listening.id, each);
+        if (key !== undefined)
+          shared.set(key, each);
+        send(request, each);
+      }
       return {
         remove() {
-          if (!registered.delete(id))
+          if (!each.joined.delete(mine) || each.joined.size > 0)
             return;
-          request.request(unlistenMethod, { id }).catch(report);
+          registered.delete(each.listening.id);
+          if (key !== undefined)
+            shared.delete(key);
+          request.request(unlistenMethod, { id: each.listening.id }).catch(report);
         }
       };
     },
@@ -3838,11 +3859,13 @@ function interfaceListeners({ report: reportAll }) {
         return method === beforeMethod ? Promise.resolve({ result: null }) : undefined;
       if (heard.cursor !== undefined)
         each.cursor = heard.cursor;
+      const answers = [...each.joined].map(({ listener }) => (async () => listener(heard.payload, signal))());
       if (method === onMethod) {
-        (async () => each.listener(heard.payload, signal))().catch(report);
+        for (const answer of answers)
+          answer.catch(report);
         return;
       }
-      return (async () => ({ result: await each.listener(heard.payload, signal) ?? null }))();
+      return Promise.all(answers).then(([result]) => ({ result: result ?? null }));
     },
     async replay(request) {
       await Promise.all([...registered.values()].map((each) => send(request, each)));
@@ -3882,6 +3905,18 @@ function providerClient(name, identity, call, listen) {
       };
     }
   });
+}
+async function findSession(ask, id, scope = {}) {
+  const isAnswer = (error, code) => error instanceof RpcError && error.code === code;
+  try {
+    return await ask("session", [id]);
+  } catch (error) {
+    if (isAnswer(error, rpcCodes.notHeld))
+      return;
+    if (!isAnswer(error, rpcCodes.methodNotFound))
+      throw error;
+  }
+  return (await ask("sessions", [{ everyProject: true, ...scope }])).find((each) => each.id === id);
 }
 function providerPeer(serve, identity) {
   return {
@@ -5485,7 +5520,7 @@ var resetColors = ["default", "reset", "none", "gray", "grey"];
 function subagentTranscript(sessionTranscript, task) {
   return sessionTranscript?.endsWith(".jsonl") === true ? `${sessionTranscript.slice(0, -".jsonl".length)}/subagents/agent-${task}.jsonl` : undefined;
 }
-var sessionFields = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true };
+var sessionFields = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true, openCall: true };
 function pickedColor(args) {
   const picked = args.trim().toLowerCase();
   return resetColors.includes(picked) ? undefined : picked;
@@ -6222,18 +6257,21 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   let contextPercent;
   let endedTurn;
   let failedWith;
+  let repliedWith;
   const openCalls = new Map;
   const tellStatus = () => {
     if (session === "")
       return;
-    local.client.notify(sessionActs.status, { session, status: waitingFor !== undefined ? "waiting" : isWorking ? "busy" : "idle", ...waitingFor === undefined ? {} : { waitingFor }, ...contextPercent === undefined ? {} : { contextPercent }, ...endedTurn === undefined ? {} : { lastTurn: endedTurn } });
+    const open = [...openCalls.values()].at(-1);
+    const openCall = open === undefined ? undefined : { tool: open.name, summary: callSummary(open.input) };
+    local.client.notify(sessionActs.status, { session, status: waitingFor !== undefined ? "waiting" : isWorking ? "busy" : "idle", ...waitingFor === undefined ? {} : { waitingFor }, ...contextPercent === undefined ? {} : { contextPercent }, ...endedTurn === undefined ? {} : { lastTurn: endedTurn }, ...openCall === undefined ? {} : { openCall } });
   };
   const waitFor = (callId) => {
     const call = openCalls.get(callId);
     if (call === undefined)
       return;
-    const question = call.name === questionTool ? call.input["questions"]?.[0]?.question : undefined;
-    waitingFor = typeof question === "string" ? { dialog: permissionPrompt, question } : { dialog: permissionPrompt, tool: call.name, input: call.input };
+    const question = call.name === questionTool ? questionOf(call.input) : undefined;
+    waitingFor = question !== undefined ? { dialog: permissionPrompt, question } : { dialog: permissionPrompt, tool: call.name, input: call.input };
     waitingOn = callId;
     tellStatus();
   };
@@ -6242,6 +6280,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
     if (isStarted) {
       endedTurn = undefined;
       failedWith = undefined;
+      repliedWith = undefined;
     }
     waitingFor = undefined;
     waitingOn = undefined;
@@ -6261,7 +6300,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
       return completed;
     const reason = e.reason === "answer" ? "answered" : e.reason === "aborted" ? "stopped" : "failed";
     const failure = e.reason === "refusal" ? e.refusal.explanation ?? e.refusal.category ?? "Claude refused to answer." : failedWith;
-    endedTurn = { reason, at: new Date().toISOString(), ...reason === "failed" && failure !== undefined ? { failure } : {} };
+    endedTurn = { reason, at: new Date().toISOString(), ...reason === "failed" && failure !== undefined ? { failure } : {}, ...reason === "answered" && repliedWith !== undefined ? { reply: repliedWith } : {} };
     turnMoved(false);
     return completed;
   });
@@ -6271,6 +6310,8 @@ function serveConversations({ claude, router, store, project, report, clear, kee
     openCalls.set(e.tool_use_id, { name: e.tool, input: toolInputOf(e) });
     if (e.tool === questionTool)
       waitFor(e.tool_use_id);
+    else
+      tellStatus();
     try {
       return await next(e);
     } finally {
@@ -6278,8 +6319,8 @@ function serveConversations({ claude, router, store, project, report, clear, kee
       if (waitingOn === e.tool_use_id) {
         waitingFor = undefined;
         waitingOn = undefined;
-        tellStatus();
       }
+      tellStatus();
     }
   });
   router.add("classic.Notification", async (e, next) => {
@@ -6325,8 +6366,10 @@ function serveConversations({ claude, router, store, project, report, clear, kee
   router.add("classic.SubagentStop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } }, e.agent_id)(await next(e), next.signal.aborted));
   router.add("classic.Stop", async (e, next) => {
     const below = await next(e);
-    if (below.block === undefined && !next.signal.aborted)
+    if (below.block === undefined && !next.signal.aborted) {
+      repliedWith = firstLine(e.last_assistant_message ?? "") || undefined;
       answerTask().catch((error) => report("task", "Could not record that this session answered its task", error));
+    }
     return below;
   });
   const ended = (id) => new Error(`session ${id} has ended`);
@@ -6393,7 +6436,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
         await served.replay();
         await held.replay(client);
         storeChanged(undefined);
-        await reconcileTasks();
+        await reconcileTasks({ atConnect: true });
       },
       onError: (error) => {
         if (!isUnreached)
@@ -6425,48 +6468,36 @@ function serveConversations({ claude, router, store, project, report, clear, kee
     report: (error) => report("providers", "A provider listener failed", error),
     changed: () => void saveListeners().catch((error) => report("listeners", "Could not keep the provider listeners of this session", error))
   });
-  const others = new Map;
-  const keyOf = ({ mod, program, device }) => `${device?.id ?? ""}
-${mod}
-${program ?? ""}`;
-  const otherProviders = async () => {
-    const found = await local.client.request(providerActs.providers, { interface: sessionsInterface });
-    const keys = new Set(found.map(keyOf));
-    for (const [key, other] of others) {
-      if (keys.has(key))
-        continue;
-      others.delete(key);
-      other.change.remove();
-    }
-    for (const identity of found)
-      if (!others.has(keyOf(identity)))
-        others.set(keyOf(identity), followProvider(identity));
-    return [...others.values()];
+  const otherProviders = async () => (await local.client.request(providerActs.providers, { interface: sessionsInterface })).map((identity) => ({ identity, peer: providerPeer(local.client, identity) }));
+  const taskWatches = new Map;
+  const watchTask = (task, runner) => {
+    if (taskWatches.has(task))
+      return;
+    const listening = { ...listeningOf(sessionsInterface, "on", "Change", [task], { part: "running" }), provider: runner.identity };
+    taskWatches.set(task, { runner, watch: held.listen(local.client, listening, () => followTask(runner, task)) });
+    followTask(runner, task);
   };
-  const followProvider = (identity) => {
-    const peer = providerPeer(local.client, identity);
-    const change = held.listen(local.client, { interface: sessionsInterface, event: "Change", kind: "on", provider: identity }, (told) => {
-      if (told.part === "running")
-        closeEndedOn(peer, [told.session]).catch((error) => report("tasks", `Could not read whether a task ${identity.mod} runs ended`, error));
-    });
-    return { identity, peer, change };
+  const unwatchTask = (task) => {
+    taskWatches.get(task)?.watch.remove();
+    taskWatches.delete(task);
   };
   const providers = async () => [local.client, ...(await otherProviders()).map((other) => other.peer)];
   const isNotHeld = (error) => error instanceof RpcError && error.code === rpcCodes.notHeld;
-  const firstHolding = async (ask, clients) => {
-    let last;
-    for (const client of clients ?? await providers()) {
+  const sessionsAsk = (client) => (method, args) => client.request(`${sessionsInterface}.${method}`, args);
+  const firstHolding = async (items, ask) => {
+    let last = new RpcError(rpcCodes.notHeld, "No sessions provider answers.");
+    for (const item of items) {
       try {
-        return await ask(client);
+        return await ask(item);
       } catch (error) {
         if (!isNotHeld(error))
           throw error;
         last = error;
       }
     }
-    throw last instanceof Error ? last : new Error(String(last));
+    throw last;
   };
-  const read = (id, part, options = {}) => firstHolding((client) => client.request(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error) => {
+  const read = async (id, part, options = {}) => firstHolding(await providers(), (client) => client.request(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error) => {
     throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
   });
   const listAll = async (scope) => {
@@ -6474,7 +6505,7 @@ ${program ?? ""}`;
     const seen = new Set;
     return lists.flat().filter((each) => !seen.has(each.id) && Boolean(seen.add(each.id)));
   };
-  const actOn = (target, action, input, context) => firstHolding((client) => client.request(`${sessionsInterface}.${action}`, [target, input, { project: project(), ...context }]));
+  const actOn = async (target, action, input, context) => firstHolding(await providers(), (client) => client.request(`${sessionsInterface}.${action}`, [target, input, { project: project(), ...context }]));
   let color = { session: "" };
   let onColor = () => {
     return;
@@ -6511,6 +6542,8 @@ ${program ?? ""}`;
     if (session !== "" && changes.some((change) => change.type === TaskStart || change.type === TaskEnd))
       local.client.notify(sessionActs.changed, { session, part: "tasks" });
     for (const change of changes) {
+      if (change.type === TaskEnd)
+        unwatchTask(change.task.id);
       if ((change.type === TurnStart || change.type === TurnEnd2) && change.turn.prompt.task === undefined)
         lastTurn = change.turn;
       if (change.type === Message && !liveIds.has(change.message.id)) {
@@ -6658,7 +6691,7 @@ ${target}`;
   });
   const listenToServe = () => {
     serveChanges?.remove();
-    serveChanges = held.listen(local.client, { interface: sessionsInterface, event: "Change", kind: "on", args: [session] }, (change) => {
+    serveChanges = held.listen(local.client, listeningOf(sessionsInterface, "on", "Change", [session], { part: ["tasks", "goal"] }), (change) => {
       if (change.part === "tasks")
         reconcileTasks();
       if (change.part === "goal")
@@ -6670,6 +6703,8 @@ ${target}`;
       return;
     const previous = session;
     session = id;
+    for (const task of taskWatches.keys())
+      unwatchTask(task);
     live = [];
     liveIds.clear();
     waitingRows.clear();
@@ -6701,43 +6736,61 @@ ${target}`;
       return;
     });
     listenToServe();
-    starting.then(reconcileTasks);
+    starting.then(() => reconcileTasks());
     if (heard.size === 0 && watched.size === 0 && served.listened().length === 0)
       return;
     Promise.all([previous === "" ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify(noneKept))), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
   };
-  const reconcileTasks = async () => {
+  const openTasks = () => liveTasks().filter((task) => task.isBackground === true && task.closedAt === undefined);
+  const openTask = (id) => openTasks().find((task) => task.id === id);
+  const reconcileTasks = async ({ atConnect = false } = {}) => {
     if (session === "")
       return;
     await starting;
-    const open = Object.values(conversation.state.tasks).filter((task) => task.isBackground === true && task.closedAt === undefined);
-    if (open.length === 0)
+    if (openTasks().length === 0)
       return;
     const saved = await read(session, "tasks").catch((error) => (report("tasks", "Could not read whether its background tasks ended", error), []));
-    for (const task of saved) {
-      const running = conversation.state.tasks[task.id];
-      if (running !== undefined && running.closedAt === undefined && task.closedAt !== undefined)
+    for (const task of saved)
+      if (task.closedAt !== undefined && openTask(task.id) !== undefined)
         dispatch(conversation.endTask(task, task.closedAt));
+    const open = openTasks().filter((task) => atConnect || !taskWatches.has(task.id));
+    const others = open.every((task) => taskWatches.has(task.id)) ? [] : await otherProviders();
+    for (const task of open) {
+      const watched = taskWatches.get(task.id);
+      if (watched !== undefined)
+        await followTask(watched.runner, task.id);
+      else
+        await findTask(task.id, others).catch((error) => report("tasks", "Could not read whether its tasks on another device ended", error));
     }
-    for (const { peer } of await otherProviders())
-      await closeEndedOn(peer, open.map((task) => task.id)).catch((error) => report("tasks", "Could not read whether its tasks on another device ended", error));
   };
-  const closeEndedOn = async (client, ids) => {
-    await starting;
-    const open = new Set(ids.filter((id) => {
-      const task = conversation.state.tasks[id];
-      return task?.isBackground === true && task.closedAt === undefined;
-    }));
-    if (open.size === 0)
+  const findTask = async (id, others) => {
+    if (await findSession(sessionsAsk(local.client), id) !== undefined)
       return;
-    const listed = await client.request(`${sessionsInterface}.sessions`, [{ everyProject: true }]);
-    for (const ended of listed.filter((each) => open.has(each.id) && !each.isRunning)) {
-      const task = liveTasks().find((each) => each.id === ended.id && each.closedAt === undefined);
-      if (task === undefined)
-        continue;
+    for (const runner of others) {
+      const found = await findSession(sessionsAsk(runner.peer), id).catch((error) => {
+        report("tasks", `Could not ask ${runner.identity.mod} whether it runs task ${id}`, error);
+        return;
+      });
+      if (found !== undefined)
+        return watchTask(id, runner);
+    }
+  };
+  const followTask = async (runner, id) => {
+    try {
+      await starting;
+      if (openTask(id) === undefined)
+        return;
+      const found = await findSession(sessionsAsk(runner.peer), id);
+      if (found === undefined)
+        return unwatchTask(id);
+      const task = openTask(id);
+      if (task === undefined || found.isRunning)
+        return;
       const closedAt = new Date().toISOString();
       await claude.fs.write(`${backgroundTasks}/${session}/${task.id}.json`, JSON.stringify({ ...task, closedAt }));
       dispatch(conversation.endTask(task, closedAt));
+    } catch (error) {
+      report("tasks", `Could not read whether a task ${runner.identity.mod} runs ended`, error);
     }
   };
   const rereadGoal = async () => {
@@ -6958,12 +7011,14 @@ ${target}`;
         const elsewhere = { ...task, ...owner, title: answer?.title ?? task.title, prompt: answer?.prompt ?? task.prompt };
         const others = await otherProviders();
         const onDevice = others.filter(({ identity }) => identity.device !== undefined && (identity.device.name === task.device || identity.device.id === task.device));
-        const opened = await firstHolding((client) => client.request(`${sessionsInterface}.startTask`, [session, elsewhere, { project: project() }]), (onDevice.length > 0 ? onDevice : others).map((other) => other.peer)).catch((error) => {
-          throw others.length === 0 || isNotHeld(error) ? new Error(`no mod starts sessions on ${task.device}, so the task did not start. Leave device out to start it on ${here.name}.`) : error;
+        const candidates = onDevice.length > 0 ? onDevice : others;
+        const { opened, runner } = await firstHolding(candidates, async (runner) => ({ opened: await runner.peer.request(`${sessionsInterface}.startTask`, [session, elsewhere, { project: project() }]), runner })).catch((error) => {
+          throw isNotHeld(error) ? new Error(`no mod starts sessions on ${task.device}, so the task did not start. Leave device out to start it on ${here.name}.`) : error;
         });
         const started = { ...asked, id: opened.id, title: elsewhere.title };
         await claude.fs.write(`${backgroundTasks}/${session}/${started.id}.json`, JSON.stringify(started));
         dispatch(conversation.startTask(started));
+        watchTask(started.id, runner);
         return started;
       }
     }
@@ -7035,18 +7090,12 @@ ${target}`;
   const isHeld = (kept, last) => typeof last === "number" && kept.length >= last;
   const fields = (request, keys) => Object.fromEntries(keys.flatMap((key) => request[key] === undefined ? [] : [[key, request[key]]]));
   const sessionNamed = async (id) => {
-    const lookedUp = (client) => client.request(`${sessionsInterface}.session`, [id]).catch(async (error) => {
-      if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound))
-        throw error;
-      const listed = (await client.request(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id);
-      if (listed === undefined)
-        throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`);
-      return listed;
-    });
-    const found = await firstHolding(lookedUp).catch((error) => {
-      throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error;
-    });
-    return found.id === session ? { ...found, isRunning: true } : found;
+    for (const client of await providers()) {
+      const found = await findSession(sessionsAsk(client), id);
+      if (found !== undefined)
+        return found.id === session ? { ...found, isRunning: true } : found;
+    }
+    throw new Error(`no session ${id} on any of your devices.`);
   };
   const methods = {
     async[conversationMethods.sessions](request) {
@@ -12114,7 +12163,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12539,7 +12588,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null };
@@ -12728,7 +12777,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13014,7 +13063,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13044,7 +13093,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13551,7 +13600,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-uXYpHf/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
