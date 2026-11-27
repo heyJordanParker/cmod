@@ -1,12 +1,13 @@
-import { Database } from 'bun:sqlite'
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, type Stats } from 'node:fs'
+import { Database, SQLiteError } from 'bun:sqlite'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, type Stats } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
-import { SHARE_ENV, threadId } from 'node:worker_threads'
+import { SHARE_ENV } from 'node:worker_threads'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
 import type { Device } from '@cmodjs/core/src/session/context/turn/device.js'
 import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage, type Unplaced } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
+import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
@@ -66,25 +67,47 @@ const tailBytes = 65_536
 
 const sortedMatches = 20_000
 
+const busyTimeoutMs = 120_000
+
 const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"type":"agent-color"', '"type":"agent-setting"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
 
 export function openHistory({ isInMemory = false }: { readonly isInMemory?: boolean } = {}): Database {
-  if (isInMemory) {
-    const db = new Database(':memory:')
-    db.exec(schema)
-    return db
-  }
-  const path = storePath(indexFile)
-  if (!existsSync(path)) {
+  const path = isInMemory ? ':memory:' : storePath(indexFile)
+  if (!isInMemory && !existsSync(path)) {
     mkdirSync(storePath(), { recursive: true })
     for (const older of olderIndexes) for (const suffix of ['', '-wal', '-shm']) rmSync(storePath(`${older}${suffix}`), { force: true })
-    createIndex(path)
   }
   const db = new Database(path)
-  db.exec('pragma busy_timeout = 120000')
-  db.exec('pragma synchronous = normal')
-  db.exec(orderIndexes)
-  return db
+  try {
+    db.exec(`pragma busy_timeout = ${busyTimeoutMs}`)
+    const version = db.query<{ version: string }, []>('select sqlite_version() as version').get()?.version ?? ''
+    if (!isAtLeast(version, '3.43.0')) throw new Error(`cmod sessions needs SQLite 3.43 or later, and this system has ${version}.`)
+    switchToWal(db)
+    db.exec('pragma synchronous = normal')
+    const isBuilt = () => db.query<{ isBuilt: number }, []>('select exists (select 1 from sqlite_schema) as isBuilt').get()?.isBuilt === 1
+    if (!isBuilt())
+      db.transaction(() => {
+        if (!isBuilt()) db.exec(schema)
+      }).immediate()
+    db.exec(orderIndexes)
+    return db
+  } catch (error) {
+    db.close()
+    throw error
+  }
+}
+
+function switchToWal(db: Database): void {
+  const giveUpAt = Date.now() + busyTimeoutMs
+  for (;;) {
+    try {
+      db.exec('pragma journal_mode = wal')
+      return
+    } catch (error) {
+      if (!(error instanceof SQLiteError && error.code === 'SQLITE_BUSY') || Date.now() > giveUpAt) throw error
+      Bun.sleepSync(10)
+    }
+  }
 }
 
 export type IndexCall = { readonly id: number; readonly method: string; readonly args: readonly unknown[] }
@@ -142,28 +165,6 @@ export function openIndex(): HistoryIndex {
     async close() {
       await Promise.all([reads.close(), scans.close()])
     },
-  }
-}
-
-function createIndex(path: string): void {
-  const made = `${path}.${process.pid}-${threadId}.tmp`
-  const fresh = new Database(made, { create: true })
-  try {
-    const asked = fresh.prepare<{ version: string }, []>('select sqlite_version() as version')
-    const version = asked.get()?.version ?? ''
-    asked.finalize()
-    if (!isAtLeast(version, '3.43.0')) throw new Error(`cmod sessions needs SQLite 3.43 or later, and this system has ${version}.`)
-    fresh.exec('pragma journal_mode = wal')
-    fresh.exec(schema)
-  } finally {
-    fresh.close(true)
-  }
-  try {
-    linkSync(made, path)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-  } finally {
-    for (const suffix of ['', '-wal', '-shm']) rmSync(`${made}${suffix}`, { force: true })
   }
 }
 
@@ -326,12 +327,12 @@ export function sessionTranscripts(session: string, project: string): Transcript
   return [main, ...taskTranscripts(main)]
 }
 
-export function readFolders(db: Database, folders: readonly string[], fully: boolean, only?: ReadonlySet<string>): void {
+export function readFolders(db: Database, folders: readonly string[], fully: boolean, fullSessions: ReadonlySet<string> = new Set(), only?: ReadonlySet<string>): void {
   if (only === undefined) forgetDeleted(db)
   const offsets = offsetsOf(db)
   const mains = folders.flatMap((folder) => mainTranscripts(folder, only))
   for (const { main, stat } of mains.sort((first, second) => first.stat.mtimeMs - second.stat.mtimeMs)) {
-    if (fully || offsets.has(main.path)) readSession(db, [main, ...taskTranscripts(main)], offsets)
+    if (fully || offsets.has(main.path) || fullSessions.has(main.session)) readSession(db, [main, ...taskTranscripts(main)], offsets)
     else summarize(db, main, stat.size)
   }
   if (fully && folders.length > 0) checkForks(db, folders)
@@ -681,27 +682,58 @@ type SessionRow = { id: string; folder: string; project: string; cwd: string; mo
 const sessionColumns = `id, folder, project, cwd, model, title, custom_title, nullif(color, 'default') as color, agent_type, started_at, last_at, forked_from, is_fork_checked,
   case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed`
 
-function sessionDataOf(db: Database, row: SessionRow, running: ReadonlySet<string>): SessionData {
+function sessionDataOf(db: Database, row: SessionRow, running: ReadonlySet<string>, lastTurn: SessionData['lastTurn']): SessionData {
   const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
-  return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, transcriptPath: join(row.folder, `${row.id}.jsonl`), model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(row.agent_type === null ? {} : { agentType: row.agent_type }), isRunning: running.has(row.id) }
+  return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, transcriptPath: join(row.folder, `${row.id}.jsonl`), model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(row.agent_type === null ? {} : { agentType: row.agent_type }), isRunning: running.has(row.id), ...(lastTurn === undefined ? {} : { lastTurn }) }
 }
 
 export function listSessions(db: Database, scope: Scope): SessionData[] {
   const folders = foldersIn(scope)
-  const running = new Set([...runningSessions(), ...(scope.held ?? [])])
-  readFolders(db, folders, false, scope.running === true ? running : undefined)
+  const held = scope.held ?? []
+  const unheld = new Set([...runningSessions()].filter((session) => !held.includes(session)))
+  const running = new Set([...unheld, ...held])
+  readFolders(db, folders, false, unheld, scope.running === true ? running : undefined)
   const rows = db
     .query<SessionRow, string[]>(`select ${sessionColumns} from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`)
     .all(...folders, scope.since ?? '')
-  return rows.filter((row) => scope.running !== true || running.has(row.id)).map((row) => sessionDataOf(db, row, running))
+    .filter((row) => scope.running !== true || running.has(row.id))
+  const lastTurns = answeredTurnsOf(db, rows.flatMap((row) => (unheld.has(row.id) ? [row.id] : [])))
+  return rows.map((row) => sessionDataOf(db, row, running, lastTurns.get(row.id)))
 }
 
 export function getSession(db: Database, request: { readonly session: string; readonly project: string; readonly held: readonly string[] }): SessionData | undefined {
   const folder = sessionFolder(request.session, request.project)
   if (folder === undefined) return undefined
-  readFolders(db, [folder], false, new Set([request.session]))
+  const unheld = new Set([...runningSessions()].filter((session) => !request.held.includes(session)))
+  const running = new Set([...unheld, ...request.held])
+  readFolders(db, [folder], false, unheld, new Set([request.session]))
   const row = db.query<SessionRow, [string]>(`select ${sessionColumns} from sessions where id = ?`).get(request.session)
-  return row === null ? undefined : sessionDataOf(db, row, new Set([...runningSessions(), ...request.held]))
+  return row === null ? undefined : sessionDataOf(db, row, running, answeredTurnsOf(db, unheld.has(row.id) ? [row.id] : []).get(row.id))
+}
+
+function answeredTurnsOf(db: Database, sessions: readonly string[]): ReadonlyMap<string, NonNullable<SessionData['lastTurn']>> {
+  if (sessions.length === 0) return new Map()
+  return readTwice('The transcripts changed while cmod read their last turns. Run the command again.', () => {
+    const turns = db
+      .query<{ session: string; closed_at: string; reply: number | null }, string[]>(
+        `select session, closed_at, (select row from messages where messages.session = turns.session and messages.task = '' and messages.turn = turns.prompt and messages.type = ? order by seq desc limit 1) as reply
+         from turns
+         where task = '' and closed_at is not null and session in (${foldersMarks(sessions.length)})
+           and opened_at = (select max(opened_at) from turns newest where newest.session = turns.session and newest.task = '')`,
+      )
+      .all(Reply, ...sessions)
+    const replyRows = turns.flatMap((turn) => (turn.reply === null ? [] : [turn.reply]))
+    const places = replyRows.length === 0 ? [] : db.query<Place, number[]>(`select ${placeColumns} from messages where row in (${foldersMarks(replyRows.length)})`).all(...replyRows)
+    const replies = messagesAt(db, places)
+    if (replies === undefined) return undefined
+    const replyOf = new Map(replies.flatMap((message) => (message.type === Reply ? [[message.session, firstLine(message.text)] as const] : [])))
+    return new Map(
+      turns.map((turn) => {
+        const reply = replyOf.get(turn.session)
+        return [turn.session, { reason: 'answered', at: turn.closed_at, ...(reply === undefined ? {} : { reply }) }]
+      }),
+    )
+  })
 }
 
 function foundParent(db: Database, session: string, startedAt: string): string | undefined {

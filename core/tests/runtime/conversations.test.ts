@@ -5,7 +5,7 @@ import { coreVersion } from '../../src/records.js'
 import { serveCmodPlugin } from '../../src/register.js'
 import type { Claude } from '../../src/runtime/claude.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
-import { interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, sessionsInterface, uiInterface } from '../../src/runtime/interfaces.js'
+import { interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, onMethod, sessionsInterface, uiInterface, type SessionComputer } from '../../src/runtime/interfaces.js'
 import { createLifecycle, type Lifecycle } from '../../src/runtime/lifecycle.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes } from '../../src/runtime/rpc.js'
@@ -13,7 +13,7 @@ import { partMethods } from '../../src/runtime/ui.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
-import type { SessionData } from '../../src/session/conversation.js'
+import type { ConversationState, SessionData } from '../../src/session/conversation.js'
 import { calledAnswer, fakeAgent, fakeClaude, testDevice, type FakeClaude } from '../../src/testing/fake-claude.js'
 import { BelowPrompt, Dashboard, TurnEnd, Working } from '../../src/ui/areas.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
@@ -583,7 +583,12 @@ async function servedHere() {
     const answer = (await served.answer({ to: 'cmod', method: conversationMethods.sessions, input: {}, caller: 'demo' })) as { readonly value: readonly SessionData[] }
     return answer.value.map(({ lastTurn: ended }) => (ended === undefined ? undefined : { ...ended, at: typeof ended.at }))
   }
-  return { fake, router, listed, lastTurn }
+  const row = async () => {
+    await fake.settle()
+    const answer = (await served.answer({ to: 'cmod', method: conversationMethods.sessions, input: {}, caller: 'demo' })) as { readonly value: readonly SessionData[] }
+    return answer.value.map(({ status, openCall, lastTurn: ended }): unknown => ({ status, openCall, lastTurn: ended === undefined ? undefined : { ...ended, at: typeof ended.at } }))
+  }
+  return { fake, router, listed, lastTurn, row }
 }
 
 test("the cmod plugin's turn start and end move its session between busy and idle in cmod/Sessions", async () => {
@@ -636,6 +641,38 @@ test('a session whose permission prompt waits on a tool call lists as waiting on
 
   expect(waiting).toEqual([{ status: 'waiting', waitingFor: { dialog: 'permission prompt', tool: 'Bash', input: { command: 'rm -rf build' } } }])
   expect(ran).toEqual([{ status: 'busy' }])
+})
+
+test('a session lists the tool call its main agent runs, as its tool and the first line of its command, until the call returns, and the first line of the answer its last turn ended with', async () => {
+  const { router, row } = await servedHere()
+  let finish: (answer: never) => void = () => undefined
+  await router.dispatch('turn.start', { text: 'Run the tests', turnId: 'turn-1' }, async () => ({}) as never)
+
+  const called = router.dispatch('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'bun test\nbun run check' } as never, () => new Promise((resolve) => void (finish = resolve)))
+  const running = await row()
+  finish({} as never)
+  await called
+  const returned = await row()
+  await router.dispatch('classic.Stop', { last_assistant_message: '\nAll 42 tests pass.\nNothing else changed.' } as never, async () => ({}))
+  await router.dispatch('turn.complete', { turnId: 'turn-1', reason: 'answer', isAborted: false } as never, async () => ({}) as never)
+  const answered = await row()
+
+  expect(running).toEqual([{ status: 'busy', openCall: { tool: 'Bash', summary: 'bun test' }, lastTurn: undefined }])
+  expect(returned).toEqual([{ status: 'busy', openCall: undefined, lastTurn: undefined }])
+  expect(answered).toEqual([{ status: 'idle', openCall: undefined, lastTurn: { reason: 'answered', at: 'string', reply: 'All 42 tests pass.' } }])
+})
+
+test('a tool call whose 10,000-character input names no summary key lists a summary of its first 200 characters', async () => {
+  const { router, row } = await servedHere()
+  let finish: (answer: never) => void = () => undefined
+  await router.dispatch('turn.start', { text: 'Write the notes', turnId: 'turn-1' }, async () => ({}) as never)
+
+  const called = router.dispatch('tool.call', { tool: 'Write', tool_use_id: 'toolu_1', content: 'x'.repeat(10_000) } as never, () => new Promise((resolve) => void (finish = resolve)))
+  const running = await row()
+  finish({} as never)
+  await called
+
+  expect(running).toEqual([{ status: 'busy', openCall: { tool: 'Write', summary: `{"content":"${'x'.repeat(188)}` }, lastTurn: undefined }])
 })
 
 test("a session lists the context fill its usage() reads at each measure", async () => {
@@ -1189,11 +1226,12 @@ const settled = async (...plugins: readonly { readonly fake: FakeClaude }[]) => 
 
 const typedPrompt = (text: string) => ({ uuid: `prompt:${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } })
 
-async function servedThroughRestarts() {
-  let serve: FakeServe | undefined = fakeServe(() => ({}), { device: async () => testDevice })
+async function servedThroughRestarts(first: FakeServe = fakeServe(() => ({}), { device: async () => testDevice }), configure: (fake: FakeClaude) => void = () => undefined) {
+  let serve: FakeServe | undefined = first
   const retries: (() => void)[] = []
   const plugin = await connected(serve, 'here', {
     configure: (fake) => {
+      configure(fake)
       fake.fakes.http.fetch = (url, init) => (serve === undefined ? Promise.reject(new Error('connect ECONNREFUSED serve.sock')) : serve.fetch(url, init))
       fake.fakes.clock.after = (ms, run) => {
         let isCancelled = false
@@ -1286,18 +1324,42 @@ test("a mod hears only the session it runs in: its listener on another session h
   expect(told).toEqual(['every listener'])
 })
 
-function devboxProvider() {
+type SessionsProvider = ReturnType<typeof sessionsProvider>
+
+const devboxProvider = () => sessionsProvider('devbox')
+
+function sessionsProvider(name: string, { isBroken = false, stopsAtStart = false } = {}) {
   const started: unknown[] = []
+  const listened: unknown[] = []
+  const held = new Map<unknown, Set<string>>()
+  const read: string[] = []
   let isRunning = true
-  const notHere = (session: string) => new RpcError(rpcCodes.notHeld, `No session ${session} on devbox.`)
+  const runs = `bg-${name}`
+  const socket = `/store/${name}.sock`
+  const notHere = (session: string) => new RpcError(rpcCodes.notHeld, `No session ${session} on ${name}.`)
+  const upgrade = () => ({ id: runs, title: 'Upgrade the dependencies', project: '/work/app', cwd: '/work/app', model: 'opus', startedAt: '', lastAt: '', isRunning, device: { id: `${name}-id`, name } })
   const server = interfaceServer({
+    onListen: (connection, { interface: name, args, matcher, id }) => {
+      const ids = held.get(connection) ?? new Set<string>()
+      held.set(connection, ids)
+      if (name !== sessionsInterface || ids.has(id)) return
+      ids.add(id)
+      listened.push({ args, matcher })
+    },
     implementations: {
       [sessionsInterface]: {
-        sessions: () => [{ id: 'bg-devbox', title: 'Upgrade the dependencies', project: '/work/app', cwd: '/work/app', model: 'opus', startedAt: '', lastAt: '', isRunning, device: { id: 'devbox-id', name: 'devbox' } }],
+        sessions: () => (read.push('sessions'), [upgrade()]),
+        session: (session: string) => {
+          read.push(`session ${session}`)
+          if (isBroken) throw new RpcError(rpcCodes.internal, `The conversation index on ${name} is locked.`)
+          if (session !== runs) throw notHere(session)
+          return upgrade()
+        },
         startTask: (session: string, task: { readonly title: string; readonly device?: string }) => {
-          if (task.device !== 'devbox') throw notHere(session)
+          if (task.device !== name) throw notHere(session)
           started.push({ session, task })
-          return { id: 'bg-devbox', title: task.title, openedBy: '', openedAt: '2026-11-19T10:00:00.000Z', isBackground: true }
+          if (stopsAtStart) provider.end()
+          return { id: runs, title: task.title, openedBy: '', openedAt: '2026-11-19T10:00:00.000Z', isBackground: true }
         },
         surfaces: (session: string) => {
           throw notHere(session)
@@ -1306,20 +1368,33 @@ function devboxProvider() {
     },
   })
   const routes = rpcRoutes({ handle: (connection) => server.handler(connection), onClose: (connection) => server.closed(connection), now: () => Date.now() })
-  const fetch = async (url: string, init: { readonly method?: string; readonly body?: unknown } = {}) => {
-    const answered = await routes.route({ method: init.method ?? 'GET', path: `${new URL(url).pathname}${new URL(url).search}`, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown })
-    return { status: answered?.status ?? 404, ok: answered !== undefined && answered.status < 300, headers: {}, text: answered?.json === undefined ? '' : JSON.stringify(answered.json) }
-  }
-  const files = fakeFiles({ '/store/instances/demo/sessions-server.json': JSON.stringify({ address: 'unix:/store/devbox.sock', pid: 1, started: '', provides: [sessionsInterface] }) })
-  return {
+  const provider = {
+    socket,
+    instance: { [`/store/instances/demo/${name}.json`]: JSON.stringify({ address: `unix:${socket}`, pid: 1, started: '', provides: [sessionsInterface] }) },
+    route: (url: string, init: { readonly method?: string; readonly body?: unknown }) => routes.route({ method: init.method ?? 'GET', path: `${new URL(url).pathname}${new URL(url).search}`, signal: new AbortController().signal, json: async () => JSON.parse(String(init.body)) as unknown }),
     started,
+    listened,
+    read,
+    listening: () => server.listeners(sessionsInterface, 'Change').map(({ args, matcher }) => ({ args, matcher })),
     end: () => {
       isRunning = false
-      server.emit(sessionsInterface, 'Change', { session: 'bg-devbox', part: 'running' }, ['bg-devbox'])
+      server.emit(sessionsInterface, 'Change', { session: runs, part: 'running' }, [runs])
     },
-    serve: () => fakeServe(() => ({}), { device: async () => testDevice, programs: { store: '/store', files: { list: (path) => files.list(path).catch(ifMissing([])), read: (path) => files.read(path).catch(ifMissing(undefined)) }, fetch, clock: retriesAtOnce } }),
+    endQuietly: () => void (isRunning = false),
+    tell: (session: string, part: string) => server.emit(sessionsInterface, 'Change', { session, part }, [session]),
+    serve: (here: readonly SessionData[] = []): FakeServe => servingProviders([provider], here),
     close: () => routes.close(),
   }
+  return provider
+}
+
+function servingProviders(providers: readonly Pick<SessionsProvider, 'socket' | 'instance' | 'route'>[], here: readonly SessionData[] = [], computer: Partial<SessionComputer> = {}): FakeServe {
+  const files = fakeFiles(Object.assign({}, ...providers.map((each) => each.instance)) as Record<string, string>)
+  const fetch = async (url: string, init: { readonly method?: string; readonly body?: unknown; readonly socketPath?: string } = {}) => {
+    const answered = await providers.find((each) => each.socket === init.socketPath)?.route(url, init)
+    return { status: answered?.status ?? 404, ok: answered !== undefined && answered.status < 300, headers: {}, text: answered?.json === undefined ? '' : JSON.stringify(answered.json) }
+  }
+  return fakeServe(() => ({ sessions: () => [...here], ...computer }), { device: async () => testDevice, programs: { store: '/store', files: { list: (path) => files.list(path).catch(ifMissing([])), read: (path) => files.read(path).catch(ifMissing(undefined)) }, fetch, clock: retriesAtOnce } })
 }
 
 test("a task started on another device starts through the sessions provider that serves it, and its end there reaches the session that started it", async () => {
@@ -1344,6 +1419,195 @@ test("a task started on another device starts through the sessions provider that
   expect(answer).toMatchObject({ value: { id: 'bg-devbox', title: 'Upgrade the dependencies', isBackground: true } })
   expect(devbox.started).toEqual([{ session: 'test-session', task: { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', device: 'devbox' } }])
   expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  devbox.close()
+})
+
+test("a session tells cmod serve its status at each main-agent tool call that opens and returns, and cmod serve tells no status Change for a status that did not change", async () => {
+  const serve = fakeServe(() => ({}), { device: async () => testDevice })
+  const here = await connected(serve, 'here')
+  const changes: unknown[] = []
+  const emit = serve.routing.interfaces.emit.bind(serve.routing.interfaces)
+  serve.routing.interfaces.emit = (name, event, payload, args) => {
+    if (name === sessionsInterface && (payload as { part?: unknown }).part === 'status') changes.push(payload)
+    emit(name, event, payload, args)
+  }
+  const returns: ((answer: never) => void)[] = []
+  const call = (id: string, command: string) => here.router.dispatch('tool.call', { tool: 'Bash', tool_use_id: id, command } as never, () => new Promise((resolve) => void returns.push(resolve)))
+
+  await here.router.dispatch('turn.start', { text: 'Run the tests', turnId: 'turn-1' }, async () => ({}) as never)
+  await settled(here)
+  const first = call('toolu_1', 'bun test')
+  await settled(here)
+  const second = call('toolu_2', 'bun run check')
+  await settled(here)
+  returns[0]?.({} as never)
+  await first
+  await settled(here)
+  returns[1]?.({} as never)
+  await second
+  await settled(here)
+
+  expect(changes).toEqual(Array.from({ length: 4 }, () => ({ session: 'here', part: 'status' })))
+  expect(here.reported).toEqual([])
+})
+
+test("a main-agent tool call sends the session's own cmod plugin no $/on, because it hears only the tasks and goal Changes of its session", async () => {
+  const serve = fakeServe(() => ({}), { device: async () => testDevice })
+  const polled: string[] = []
+  const here = await connected(serve, 'here', {
+    configure: (fake) =>
+      void (fake.fakes.http.fetch = async (url, init) => {
+        const answer = await serve.fetch(url, init)
+        polled.push(answer.text)
+        return answer
+      }),
+  })
+  await here.router.dispatch('turn.start', { text: 'Run the tests', turnId: 'turn-1' }, async () => ({}) as never)
+  await settled(here)
+  const before = polled.length
+
+  await here.router.dispatch('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'bun test' } as never, async () => ({}) as never)
+  await settled(here)
+
+  expect(polled.slice(before).filter((text) => text.includes(`"${onMethod}"`))).toEqual([])
+  expect(here.reported).toEqual([])
+})
+
+const taskEnds = (told: unknown[]) => (fake: FakeClaude) => void (fake.fakes.cmod.call = async ({ method, input }) => (method === conversationMethods.changed && told.push((input as { change: unknown }).change), null))
+
+const devboxTask = { title: 'Upgrade the dependencies', prompt: 'Upgrade every dependency.', device: 'devbox' }
+
+const runningTask = { args: ['bg-devbox'], matcher: { part: 'running' } }
+
+test('a session with no background task on another device listens to no Change there, so a change there reaches no listener of it and reads nothing', async () => {
+  const devbox = devboxProvider()
+  const opener = await connected(devbox.serve(), 'test-session')
+  await opener.served.answer({ to: 'cmod', method: conversationMethods.sessions, input: { everyProject: true }, caller: 'demo' })
+  await settled(opener)
+  const readByTheList = [...devbox.read]
+
+  devbox.tell('bg-devbox', 'running')
+  devbox.tell('bg-devbox', 'status')
+  await settled(opener)
+
+  expect(devbox.listened).toEqual([])
+  expect(devbox.listening()).toEqual([])
+  expect(devbox.read).toEqual(readByTheList)
+  expect(opener.reported).toEqual([])
+  devbox.close()
+})
+
+test('a session that starts a background task on the devbox listens there for that task once, and on no other sessions provider, closes the task when its session stops running, and then holds no listener there', async () => {
+  const devbox = devboxProvider()
+  const pi = sessionsProvider('pi')
+  const told: unknown[] = []
+  const opener = await connected(servingProviders([pi, devbox]), 'test-session', { configure: taskEnds(told) })
+  const call = (method: string, input: unknown) => opener.served.answer({ to: 'cmod', method, input, caller: 'demo' })
+  await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [{ event: 'taskEnd' }] })
+
+  await call(conversationMethods.act, { session: 'test-session', action: 'startBackgroundTask', input: devboxTask })
+  await settled(opener)
+  const whileRunning = devbox.listening()
+  devbox.end()
+  await settled(opener)
+
+  expect(whileRunning).toEqual([runningTask])
+  expect(devbox.listened).toEqual([runningTask])
+  expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  expect(devbox.listening()).toEqual([])
+  expect(devbox.read).toEqual(['session bg-devbox', 'session bg-devbox'])
+  expect(pi.read).toEqual([])
+  expect(pi.listened).toEqual([])
+  expect(opener.reported).toEqual([])
+  devbox.close()
+  pi.close()
+})
+
+test('a background task whose devbox session stops running between the start and the watch closes in the session that started it, with no reconnect', async () => {
+  const devbox = sessionsProvider('devbox', { stopsAtStart: true })
+  const told: unknown[] = []
+  const opener = await connected(devbox.serve(), 'test-session', { configure: taskEnds(told) })
+  const call = (method: string, input: unknown) => opener.served.answer({ to: 'cmod', method, input, caller: 'demo' })
+  await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [{ event: 'taskEnd' }] })
+
+  await call(conversationMethods.act, { session: 'test-session', action: 'startBackgroundTask', input: devboxTask })
+  await settled(opener)
+
+  expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  expect(devbox.listening()).toEqual([])
+  expect(opener.reported).toEqual([])
+  devbox.close()
+})
+
+test('a background task started on this computer gets no listener on the devbox and no read there, even after the cmod plugin reconnects to cmod serve', async () => {
+  const devbox = devboxProvider()
+  const local = { id: 'bg-local', title: 'Upgrade the dependencies', openedBy: '', openedAt: '2026-11-19T10:00:00.000Z', isBackground: true }
+  const indexed: SessionData = { id: local.id, title: local.title, project: '/work/app', cwd: '/work/app', model: 'opus', startedAt: local.openedAt, lastAt: local.openedAt, isRunning: true, device: { id: testDevice.id, name: testDevice.name } }
+  const served = await servedThroughRestarts(devbox.serve([indexed]), (fake) => void (fake.fakes.process.spawn = () => printed(JSON.stringify(local))))
+  const answer = await served.plugin.served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'here', action: 'startBackgroundTask', input: { title: local.title, prompt: 'Upgrade every dependency.' } }, caller: 'demo' })
+  await settled(served.plugin)
+
+  await served.stop()
+  served.start(devbox.serve([indexed]))
+  await served.retry()
+  await settled(served.plugin)
+
+  expect(answer).toMatchObject({ value: { id: 'bg-local' } })
+  expect(devbox.read).not.toContain('session bg-local')
+  expect(devbox.listened).toEqual([])
+  expect(served.plugin.reported).toEqual([])
+  devbox.close()
+})
+
+test('a cmod plugin that reconnects to cmod serve with a devbox task open listens for that task again, and closes a task whose session ended while it was away', async () => {
+  const devbox = devboxProvider()
+  const told: unknown[] = []
+  const served = await servedThroughRestarts(devbox.serve(), taskEnds(told))
+  const call = (method: string, input: unknown) => served.plugin.served.answer({ to: 'cmod', method, input, caller: 'demo' })
+  await call(conversationMethods.subscribe, { session: 'here', subscriptions: [{ event: 'taskEnd' }] })
+  await call(conversationMethods.act, { session: 'here', action: 'startBackgroundTask', input: devboxTask })
+  await settled(served.plugin)
+
+  await served.stop()
+  served.start(devbox.serve())
+  await served.retry()
+  await settled(served.plugin)
+  const listenedAgain = [...devbox.listened]
+  const toldWhileOpen = [...told]
+  await served.stop()
+  devbox.endQuietly()
+  served.start(devbox.serve())
+  await served.retry()
+  await settled(served.plugin)
+
+  expect(listenedAgain).toEqual([runningTask, runningTask])
+  expect(toldWhileOpen).toEqual([])
+  expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  expect(served.plugin.reported).toEqual([])
+  devbox.close()
+})
+
+test('a resumed session finds its open background task on the devbox past a sessions provider that fails, watches it there, and closes it when its session stops running', async () => {
+  const atlas = sessionsProvider('atlas', { isBroken: true })
+  const devbox = devboxProvider()
+  const resumed: ConversationState = { session: 'test-session', context: 1, contextOpenedAt: '2026-11-19T10:00:00.000Z', agentCalls: [], endedCalls: {}, taskTurns: {}, tasks: { 'bg-devbox': { id: 'bg-devbox', title: 'Upgrade the dependencies', openedBy: '', openedAt: '2026-11-19T10:00:00.000Z', isBackground: true, context: 1 } } }
+  const serve = servingProviders([atlas, devbox], [], { read: async (_session, part) => (part === 'state' ? resumed : part === 'goal' ? { text: '' } : []) })
+  const told: unknown[] = []
+  const opener = await connected(serve, 'other', { configure: taskEnds(told) })
+  await opener.served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'taskEnd' }] }, caller: 'demo' })
+
+  await opener.router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'resume' } as never, async () => ({}))
+  await settled(opener)
+  const whileRunning = devbox.listening()
+  devbox.end()
+  await settled(opener)
+
+  expect(atlas.read).toContain('session bg-devbox')
+  expect(whileRunning).toEqual([runningTask])
+  expect(told).toMatchObject([{ type: 'taskEnd', task: { id: 'bg-devbox', closedAt: expect.any(String) } }])
+  expect(devbox.listening()).toEqual([])
+  expect(opener.reported).toEqual(['Could not ask demo whether it runs task bg-devbox: The conversation index on atlas is locked.'])
+  atlas.close()
   devbox.close()
 })
 

@@ -6,7 +6,7 @@ import { dirname, join, sep } from 'node:path'
 import { dataFolder, devicePath, isObject, storeFolder, type ServeApps } from '@cmodjs/core/src/records.js'
 import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { measureDevice, MissingMachineId } from '@cmodjs/core/src/runtime/device.js'
-import { routeSessions, sessionsInterface, storeInterface, type HoldingOf, type Listening, type Mail, type SessionComputer, type SessionContext, type SessionRouting, type StoreChange, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
+import { routeSessions, sessionsInterface, storeInterface, wantsMessages, type HoldingOf, type Mail, type SessionComputer, type SessionContext, type SessionRouting, type StoreChange, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
 import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
@@ -104,6 +104,12 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
     return startTask(session, { title: task.title, prompt: task.prompt, cwd, ...(task.agentType === undefined ? {} : { agentType: task.agentType }), ...(task.model === undefined ? {} : { model: task.model }) })
   }
 
+  const stopped = (session: string) =>
+    stopBackground(session).catch((error: unknown) => {
+      report(`did not stop background session ${session}`, error)
+      throw error
+    })
+
   let lookAtTranscripts = () => undefined as void
   const routing = routeSessions({
     onListen: (listening) => (listening.interface === sessionsInterface && wantsMessages(listening) ? lookAtTranscripts() : undefined),
@@ -175,6 +181,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
       async unheld(session, action, input, context, holding) {
         const named = action === 'startTask' ? await deviceNamedBy(input) : undefined
         if (named !== undefined) return startTaskOn(named, session, input as TaskStartArgs, projectOf(session, context, holding))
+        if (action === 'end' && (await stopped(session))) return { ends: 'now' }
         if (runningEntries().some((entry) => entry.session === session)) throw runsUnreached(session, action)
         const project = projectOf(session, context, holding)
         if (!hasTranscript(session, project)) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
@@ -190,12 +197,7 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
           visits[session] = at
         })
       },
-      async stop(session) {
-        return stopBackground(session).catch((error: unknown) => {
-          report(`did not stop background session ${session}`, error)
-          throw error
-        })
-      },
+      stop: stopped,
       async remove(session, context, holding) {
         if (runningEntries().some((entry) => entry.session === session)) throw new Error(`session ${session} runs, so it stays. End it first.`)
         if (!hasTranscript(session, projectOf(session, context, holding))) throw new RpcError(rpcCodes.notHeld, `No session ${session} on this computer.`)
@@ -215,15 +217,19 @@ export function serveSessions({ index, report }: { readonly index: HistoryIndex;
     },
   })
 
-  const statuses = () => new Map(runningEntries().map((entry) => [entry.session, JSON.stringify(recordedStatus(entry))]))
+  const statuses = () => new Map(runningEntries().map((entry) => [entry.session, { status: JSON.stringify(recordedStatus(entry)), name: entry.name }]))
   let told = statuses()
   const tellStatuses = () => {
     const read = statuses()
     for (const session of new Set([...told.keys(), ...read.keys()])) {
-      if (told.has(session) !== read.has(session)) {
+      const [before, after] = [told.get(session), read.get(session)]
+      if (before === undefined || after === undefined) {
         routing.changed({ session, part: 'running' })
         lookAtTranscripts()
-      } else if (told.get(session) !== read.get(session)) routing.changed({ session, part: 'status' })
+        continue
+      }
+      if (before.status !== after.status) routing.changed({ session, part: 'status' })
+      if (before.name !== after.name) routing.changed({ session, part: 'title' })
     }
     told = read
   }
@@ -328,11 +334,6 @@ function openMail(path: string): { readonly computer: Pick<SessionComputer, 'que
     },
     close: () => db.close(),
   }
-}
-
-function wantsMessages({ matcher }: Pick<Listening, 'matcher'>): boolean {
-  const part = isObject(matcher) ? (matcher as Readonly<Record<string, unknown>>)['part'] : undefined
-  return part === 'messages' || (Array.isArray(part) && part.includes('messages'))
 }
 
 function runsUnreached(session: string, action: string): Error {

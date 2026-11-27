@@ -585,6 +585,18 @@ test('two reads started together on a new transcript save each message once', as
   expect(await json(home, 'read', 'turns', 's1', '--project', project)).toHaveLength(2)
 })
 
+test('several processes that open the conversation index at once, while its file is as empty as its first opener leaves it, each read the same state, with no error', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await writeFiles(home, { '.local/share/cmod/history-14.sqlite': '' })
+
+  const read = await Promise.all(Array.from({ length: 6 }, () => startCmod(home, 'sessions', 'read', 'state', 's1', '--project', project, '--json').done))
+
+  expect(read.map(({ exitCode, stderr }) => ({ exitCode, stderr }))).toEqual(read.map(() => ({ exitCode: 0, stderr: '' })))
+  expect(new Set(read.map(({ stdout }) => stdout)).size).toBe(1)
+  expect(JSON.parse(read[0]?.stdout ?? '')).toMatchObject({ session: 's1', context: 1, turn: { prompt: { id: 'p1' } } })
+})
+
 test('search returns the newest messages up to --limit, and --before pages through a forked copy without repeats or gaps', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)

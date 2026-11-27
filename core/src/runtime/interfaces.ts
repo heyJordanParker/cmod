@@ -1,10 +1,10 @@
-import { interfaceName, isObject, type ProgramInstance } from '../records.js'
+import { instanceFolder, interfaceName, isObject } from '../records.js'
 import type { Device } from '../session/context/turn/device.js'
 import type { SessionData } from '../session/conversation.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
 import { Person } from '../session/context/turn/message/sender.js'
-import type { SendReceipt } from '../session/session.js'
+import type { SendReceipt, SessionScope } from '../session/session.js'
 import { matches, receivedMatcher, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
@@ -71,11 +71,11 @@ export type SessionTerminals = {
 
 export type HeldSession = { readonly session: string; readonly project: string; readonly cwd: string }
 
-export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPercent' | 'lastTurn'>
+export type HeldStatus = Pick<SessionData, 'status' | 'waitingFor' | 'contextPercent' | 'lastTurn' | 'openCall'>
 
 export type VisitedAt = Readonly<Record<string, string>>
 
-export type SessionsChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'deleted' | 'messages' | 'mail' }
+export type SessionsChange = { readonly session: string; readonly part: 'visit' | 'running' | 'tasks' | 'goal' | 'status' | 'title' | 'deleted' | 'messages' | 'mail' }
 
 export const storeInterface = 'cmod/Store'
 
@@ -131,19 +131,27 @@ export async function readProviders(files: InstanceFiles, store: string, name: s
       Promise.all(
         (await files.list(`${folder}/${mod.name}`))
           .filter((file) => file.name.endsWith('.json'))
-          .map(async (file) => ({ mod: mod.name, program: file.name.slice(0, -'.json'.length), instance: JSON.parse((await files.read(`${folder}/${mod.name}/${file.name}`)) ?? 'null') as unknown })),
+          .map(async (file) => ({ mod: mod.name, program: file.name.slice(0, -'.json'.length), instance: await instanceAt(files, `${folder}/${mod.name}/${file.name}`) })),
       ),
     ),
   )
   return providersIn(records.flat(), name)
 }
 
+async function instanceAt(files: InstanceFiles, path: string): Promise<unknown> {
+  return JSON.parse((await files.read(path)) ?? 'null') as unknown
+}
+
 export function providersIn(records: readonly { readonly mod: string; readonly program: string; readonly instance: unknown }[], name: string): Provider[] {
   return records.flatMap(({ mod, program, instance }) => {
-    if (!isObject(instance) || typeof instance['address'] !== 'string' || !Array.isArray(instance['provides'])) return []
-    const provides = (instance as ProgramInstance).provides ?? []
-    return provides.includes(name) ? [{ mod, program, address: instance['address'], provides }] : []
+    const provided = providesOf(instance)
+    return provided.provides.includes(name) ? [{ mod, program, ...provided }] : []
   })
+}
+
+function providesOf(instance: unknown): Pick<Provider, 'address' | 'provides'> {
+  if (!isObject(instance) || typeof instance['address'] !== 'string' || !Array.isArray(instance['provides'])) return { address: '', provides: [] }
+  return { address: instance['address'], provides: instance['provides'].filter((each): each is string => typeof each === 'string') }
 }
 
 export function checkInterfaceName(name: string): void {
@@ -158,6 +166,11 @@ export function isHeardAt(listening: Pick<Listening, 'args' | 'matcher'>, args: 
   const wanted = listening.args ?? []
   if (wanted.some((each, index) => each !== undefined && each !== '*' && each !== args[index])) return false
   return listening.matcher === undefined || matches(payload, receivedMatcher(listening.matcher))
+}
+
+export function wantsMessages({ matcher }: Pick<Listening, 'matcher'>): boolean {
+  const part = isObject(matcher) && 'part' in matcher ? matcher['part'] : undefined
+  return part === 'messages' || (Array.isArray(part) && part.includes('messages'))
 }
 
 export type Implementation = Readonly<Record<string, (...args: never[]) => unknown>>
@@ -175,15 +188,19 @@ export function interfaceServer({
   implementations,
   onListen,
   extraMethod,
+  hears = () => true,
 }: {
   readonly implementations: Readonly<Record<string, Implementation>>
   readonly onListen?: (connection: Pick<Peer, 'request' | 'notify'>, listening: Listening) => void | Promise<void>
   readonly extraMethod?: (connection: Pick<Peer, 'request' | 'notify'>, method: string, params: unknown, signal: AbortSignal) => { readonly result: unknown } | undefined | Promise<{ readonly result: unknown } | undefined>
+  readonly hears?: (listening: Listening, payload: unknown) => boolean
 }): InterfaceServer {
   const held = new Map<Pick<Peer, 'request' | 'notify'>, Map<string, Listening>>()
   const recent = new Map<string, { cursor: number; readonly kept: { readonly cursor: number; readonly args: readonly unknown[]; readonly payload: unknown }[] }>()
 
   const keyOf = (name: string, event: string) => `${name}\n${event}`
+
+  const isHeard = (listening: Listening, args: readonly unknown[], payload: unknown) => listening.kind === 'on' && isHeardAt(listening, args, payload) && hears(listening, payload)
 
   const listeningOf = (params: unknown): Listening => {
     if (!isObject(params) || typeof params['id'] !== 'string' || typeof params['interface'] !== 'string' || typeof params['event'] !== 'string' || (params['kind'] !== 'on' && params['kind'] !== 'before')) throw new RpcError(rpcCodes.invalidParams, `${listenMethod} takes { id, interface, event, kind }.`)
@@ -195,7 +212,7 @@ export function interfaceServer({
     if (listening.kind !== 'on' || listening.after === undefined) return
     const after = Number(listening.after)
     for (const each of recent.get(keyOf(listening.interface, listening.event))?.kept ?? []) {
-      if (each.cursor > after && isHeardAt(listening, each.args, each.payload)) connection.notify(onMethod, { id: listening.id, payload: each.payload, cursor: String(each.cursor) } satisfies Heard)
+      if (each.cursor > after && isHeard(listening, each.args, each.payload)) connection.notify(onMethod, { id: listening.id, payload: each.payload, cursor: String(each.cursor) } satisfies Heard)
     }
   }
 
@@ -231,7 +248,7 @@ export function interfaceServer({
       if (log.kept.length > keptEvents) log.kept.shift()
       recent.set(key, log)
       for (const listening of server.listeners(name, event)) {
-        if (listening.kind === 'on' && isHeardAt(listening, args, payload)) listening.connection.notify(onMethod, { id: listening.id, payload, cursor: String(log.cursor) } satisfies Heard)
+        if (isHeard(listening, args, payload)) listening.connection.notify(onMethod, { id: listening.id, payload, cursor: String(log.cursor) } satisfies Heard)
       }
     },
     listeners: (name, event) => [...held].flatMap(([connection, list]) => [...list.values()].filter((each) => each.interface === name && (event === undefined || each.event === event)).map((each) => ({ ...each, connection }))),
@@ -244,7 +261,7 @@ export function interfaceServer({
 
 export type Listener = (payload: never, signal: AbortSignal) => unknown
 
-type Registered = { readonly listening: Listening; readonly listener: Listener; cursor: string | undefined; isPending: boolean }
+type Registered = { readonly listening: Listening; readonly joined: Set<{ readonly listener: Listener }>; cursor: string | undefined; isPending: boolean }
 
 export type InterfaceListeners = {
   listen(request: Pick<Peer, 'request'>, listening: Omit<Listening, 'id'>, listener: Listener): Subscription
@@ -255,7 +272,9 @@ export type InterfaceListeners = {
 
 export function interfaceListeners({ report: reportAll }: { readonly report: (error: unknown) => void }): InterfaceListeners {
   const registered = new Map<string, Registered>()
+  const shared = new Map<string, Registered>()
   let next = 0
+  const sharedKey = ({ interface: name, event, args, matcher, provider }: Omit<Listening, 'id'>) => JSON.stringify([name, event, args ?? [], matcher ?? null, provider ?? null],(_key, value: unknown) => (isObject(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1))) : value))
   const report = (error: unknown) => {
     if (!isConnectionGone(error)) reportAll(error)
   }
@@ -271,14 +290,21 @@ export function interfaceListeners({ report: reportAll }: { readonly report: (er
 
   const listeners: InterfaceListeners = {
     listen(request, listening, listener) {
-      const id = `${(next += 1)}`
-      const each: Registered = { listening: { ...listening, id }, listener, cursor: undefined, isPending: false }
-      registered.set(id, each)
-      void send(request, each)
+      const key = listening.kind === 'on' ? sharedKey(listening) : undefined
+      const each: Registered = (key === undefined ? undefined : shared.get(key)) ?? { listening: { ...listening, id: `${(next += 1)}` }, joined: new Set(), cursor: undefined, isPending: false }
+      const mine = { listener }
+      each.joined.add(mine)
+      if (!registered.has(each.listening.id)) {
+        registered.set(each.listening.id, each)
+        if (key !== undefined) shared.set(key, each)
+        void send(request, each)
+      }
       return {
         remove() {
-          if (!registered.delete(id)) return
-          void request.request(unlistenMethod, { id }).catch(report)
+          if (!each.joined.delete(mine) || each.joined.size > 0) return
+          registered.delete(each.listening.id)
+          if (key !== undefined) shared.delete(key)
+          void request.request(unlistenMethod, { id: each.listening.id }).catch(report)
         },
       }
     },
@@ -288,11 +314,12 @@ export function interfaceListeners({ report: reportAll }: { readonly report: (er
       const each = registered.get(heard.id)
       if (each === undefined) return method === beforeMethod ? Promise.resolve({ result: null }) : undefined
       if (heard.cursor !== undefined) each.cursor = heard.cursor
+      const answers = [...each.joined].map(({ listener }) => (async () => listener(heard.payload as never, signal))())
       if (method === onMethod) {
-        void (async () => each.listener(heard.payload as never, signal))().catch(report)
+        for (const answer of answers) void answer.catch(report)
         return undefined
       }
-      return (async () => ({ result: (await each.listener(heard.payload as never, signal)) ?? null }))()
+      return Promise.all(answers).then(([result]) => ({ result: result ?? null }))
     },
     async replay(request) {
       await Promise.all([...registered.values()].map((each) => send(request, each)))
@@ -386,6 +413,17 @@ export const sessionActions = ['send', 'abort', 'end', 'fork', 'startTask', 'cal
 
 export const showLeaseMs = 16_000
 
+export async function findSession(ask: (method: string, args: readonly unknown[]) => Promise<unknown>, id: string, scope: SessionScope = {}): Promise<SessionData | undefined> {
+  const isAnswer = (error: unknown, code: number) => error instanceof RpcError && error.code === code
+  try {
+    return (await ask('session', [id])) as SessionData
+  } catch (error) {
+    if (isAnswer(error, rpcCodes.notHeld)) return undefined
+    if (!isAnswer(error, rpcCodes.methodNotFound)) throw error
+  }
+  return ((await ask('sessions', [{ everyProject: true, ...scope }])) as readonly SessionData[]).find((each) => each.id === id)
+}
+
 export function routeSessions({
   computer,
   device,
@@ -463,14 +501,10 @@ export function routeSessions({
 
   const runnerElsewhere = async (session: string): Promise<string | undefined> => {
     for (const other of await providers.list(sessionsInterface)) {
-      const ask = (method: string, args: readonly unknown[]) => providers.call({ interface: sessionsInterface, method, args, ...other })
-      const isAnswer = (error: unknown, code: number) => error instanceof RpcError && error.code === code
-      const found = await ask('session', [session]).catch(async (error: unknown) => {
-        if (isAnswer(error, rpcCodes.notHeld)) return undefined
-        if (isAnswer(error, rpcCodes.methodNotFound)) return ((await ask('sessions', [{ everyProject: true, running: true }])) as readonly SessionData[]).find((each) => each.id === session)
+      const found = await findSession((method, args) => providers.call({ interface: sessionsInterface, method, args, ...other }), session, { running: true }).catch((error: unknown) => {
         throw new Error(`cmod could not ask ${other.device?.name ?? other.mod} whether it runs session ${session}, so it starts no copy of it here: ${messageOf(error)}`)
       })
-      if (isObject(found) && found['isRunning'] === true) return other.device?.name ?? other.mod
+      if (found?.isRunning === true) return other.device?.name ?? other.mod
     }
     return undefined
   }
@@ -536,7 +570,7 @@ export function routeSessions({
     const status = listed.status ?? told.status
     const recorded = listed.waitingFor
     const waitingFor = status !== 'waiting' || told.waitingFor === undefined ? recorded : { ...told.waitingFor, ...(recorded === undefined ? {} : { dialog: recorded.dialog }) }
-    return { ...listed, ...(status === undefined ? {} : { status }), ...(waitingFor === undefined ? {} : { waitingFor }), ...(told.contextPercent === undefined ? {} : { contextPercent: told.contextPercent }), ...(told.lastTurn === undefined ? {} : { lastTurn: told.lastTurn }) }
+    return { ...listed, ...(status === undefined ? {} : { status }), ...(waitingFor === undefined ? {} : { waitingFor }), ...(told.contextPercent === undefined ? {} : { contextPercent: told.contextPercent }), ...(told.lastTurn === undefined ? {} : { lastTurn: told.lastTurn }), ...(told.openCall === undefined || status === 'idle' ? {} : { openCall: told.openCall }) }
   }
 
   const implementation: Implementation = {
@@ -637,6 +671,7 @@ export function routeSessions({
         }
 
   const interfaces = interfaceServer({
+    hears: (listening, payload) => !isObject(payload) || payload['part'] !== 'messages' || wantsMessages(listening),
     implementations: { ...Object.fromEntries(names.map((name) => [name, implementation])), [uiInterface]: ui, [providersInterface]: {}, [storeInterface]: store, [programsInterface]: programChanges, ...(terminal === undefined ? {} : { [terminalInterface]: terminal }) },
     onListen: (_connection, listening) => {
       if (listening.interface === uiInterface) {
@@ -824,6 +859,7 @@ export function routeProviders({
   const forwarded = new Map<RpcConnection, Map<string, Subscription>>()
   const devices = new Map<string, DeviceServe>()
   const deviceListeners = new Map<string, InterfaceListeners>()
+  const deviceProviders = new Map<string, Map<string, Promise<ProviderIdentity[]>>>()
   const followed = new WeakSet<ProviderEnd>()
   let following: Promise<void> = Promise.resolve()
   const keyOf = ({ mod, program }: ProviderIdentity) => `${mod}\n${program ?? ''}`
@@ -864,6 +900,12 @@ export function routeProviders({
     throw new RpcError(rpcCodes.methodNotFound, `cmod serve answers ${who} no ${method}.`)
   }
 
+  const instanceNames = new Map<string, readonly string[]>()
+  const instanceNamesOf = async (mod: string, program: string): Promise<readonly string[]> => {
+    if (programs === undefined || mod === cmodPluginName) return []
+    return providesOf(await instanceAt(programs.files, `${instanceFolder(programs.store, mod)}/${program}.json`)).provides
+  }
+
   const instances = async (name: string): Promise<Provider[]> => (programs === undefined ? [] : (await readProviders(programs.files, programs.store, name)).filter((each) => each.mod !== cmodPluginName))
 
   const ownOf = async (name: string): Promise<ProviderIdentity[]> => {
@@ -883,7 +925,7 @@ export function routeProviders({
       [...devices.entries()]
         .filter(([, each]) => isReached(each))
         .map(([id, each]) =>
-          peerOf(each).request<ProviderIdentity[]>(providerActs.providers, { interface: name, device: id }).catch((error: unknown) => {
+          providersOn(id, each, name).catch((error: unknown) => {
             report(new Error(`cmod serve lists no ${name} of ${each.name}: ${messageOf(error)}`))
             return []
           }),
@@ -908,6 +950,17 @@ export function routeProviders({
       ? { request: <Result>(method: string, params?: unknown, signal?: AbortSignal) => (each.theirs === undefined ? Promise.reject(new RpcUnreached(`The cmod serve of ${each.name} has not linked yet.`)) : each.link.request<Result>(method, params, signal)) }
       : each.client
 
+  const providersOn = (id: string, each: DeviceServe, name: string): Promise<ProviderIdentity[]> => {
+    const known = deviceProviders.get(id) ?? new Map<string, Promise<ProviderIdentity[]>>()
+    deviceProviders.set(id, known)
+    const kept = known.get(name)
+    if (kept !== undefined) return kept
+    const asked = peerOf(each).request<ProviderIdentity[]>(providerActs.providers, { interface: name, device: id })
+    known.set(name, asked)
+    void asked.catch(() => known.get(name) === asked && known.delete(name))
+    return asked
+  }
+
   const listenersOf = (id: string) => {
     const listeners = deviceListeners.get(id) ?? interfaceListeners({ report })
     deviceListeners.set(id, listeners)
@@ -919,13 +972,16 @@ export function routeProviders({
   const forward = (id: string, peer: Pick<Peer, 'request'>) => {
     if (followedDevices.has(id)) return
     followedDevices.add(id)
-    listenersOf(id).listen(peer, listeningOf(providersInterface, 'on', 'Change', [], undefined), (told: unknown) => {
-      if (isObject(told) && typeof told['interface'] === 'string' && isObject(told['device']) && told['device']['id'] === id) changed(told['interface'], { id, name: String(told['device']['name']) })
+    listenersOf(id).listen(peer, listeningOf(providersInterface, 'on', 'Change', [], { device: { id } }), (told: unknown) => {
+      if (!isObject(told) || typeof told['interface'] !== 'string' || !isObject(told['device'])) return
+      deviceProviders.get(id)?.delete(told['interface'])
+      changed(told['interface'], { id, name: String(told['device']['name']) })
     })
   }
 
   const drop = (id: string, each: DeviceServe) => {
     devices.delete(id)
+    deviceProviders.delete(id)
     changed(undefined, { id, name: each.name })
     if (!isLinked(each)) return each.client.close()
     each.link.close(new Error(`cmod serve dropped ${each.name}`))
@@ -944,6 +1000,7 @@ export function routeProviders({
     })
     const each: MessageServe = { name, listeners: listenersOf(id), carrier, link, theirs }
     devices.set(id, each)
+    deviceProviders.delete(id)
     forward(id, peerOf(each))
     link.notify(providerActs.link, { link: link.id, ...(theirs === undefined ? {} : { answers: theirs }) } satisfies Hello)
     if (theirs === undefined) return
@@ -989,6 +1046,7 @@ export function routeProviders({
       handle: heardBy(listeners, `the cmod serve of ${name}`),
       onConnect: async (connected) => {
         reached()
+        deviceProviders.delete(id)
         changed(undefined, { id, name })
         await listeners.replay(connected)
       },
@@ -1177,6 +1235,12 @@ export function routeProviders({
       if (end !== undefined) void closeIfExited(end, connection).catch(report)
     },
     async programChanged(mod, program) {
+      const key = keyOf({ mod, program })
+      await instanceNamesOf(mod, program).then((named) => {
+        for (const name of new Set([...(instanceNames.get(key) ?? []), ...named])) changed(name, undefined)
+        if (named.length === 0) instanceNames.delete(key)
+        else instanceNames.set(key, named)
+      }, report)
       await Promise.all([...ends.values()].flatMap((end) => (end.connection !== undefined && end.identity.mod === mod && (end.identity.program ?? mod) === program ? [closeIfExited(end, end.connection)] : [])))
     },
     closed(connection) {

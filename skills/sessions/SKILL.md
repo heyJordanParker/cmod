@@ -1,6 +1,6 @@
 ---
 name: sessions
-description: Talk to and drive other Claude Code sessions on any of the person's devices with the cmod command. Find one, message it, start or fork a background session on a task, stop its turn, end it, compact it, delete it, or answer a dialog in its terminal. TRIGGER when work needs another session, such as handing off a task, asking a running session something, checking on a worker, or answering a session that waits on a permission dialog. DO NOT TRIGGER to search or read what past sessions did; use /cmod:history.
+description: Talk to and drive other Claude Code sessions on any of the person's devices with the cmod command. Find one, message it, start or fork a background session on a task, stop its turn, end it, compact it, delete it, or answer a dialog in its terminal. TRIGGER when work needs another session, such as handing off a task, asking a running session something, checking on a worker, or answering a session that waits on a permission dialog. DO NOT TRIGGER to search or read what past sessions did; use /cmod:search-history.
 allowed-tools: Bash(cmod sessions:*), Bash(cmod terminal:*), Bash(cmod run:*)
 ---
 

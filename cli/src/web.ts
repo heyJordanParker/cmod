@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { basename } from 'node:path'
 import type { Server } from 'bun'
 import { isObject } from '@cmodjs/core/src/records.js'
-import { listeningOf, listenMethod, methodName, onMethod, providersInterface, sessionsInterface, showLeaseMs, uiInterface, type Heard, type Listening, type ProviderIdentity, type SessionsChange } from '@cmodjs/core/src/runtime/interfaces.js'
+import { findSession, listeningOf, listenMethod, methodName, onMethod, providersInterface, sessionsInterface, showLeaseMs, uiInterface, unlistenMethod, type Heard, type Listening, type ProviderIdentity, type SessionsChange } from '@cmodjs/core/src/runtime/interfaces.js'
 import type { Peer } from '@cmodjs/core/src/runtime/rpc.js'
 import { htmlOf, type ElementData, type HandlerData } from '@cmodjs/core/src/runtime/web.js'
 import type { Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
@@ -10,16 +10,14 @@ import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
-import type { ConversationState, SessionData, TurnData } from '@cmodjs/core/src/session/conversation.js'
-import { firstLine, messageOf } from '@cmodjs/core/src/utils/text.js'
+import type { SessionData } from '@cmodjs/core/src/session/conversation.js'
+import { callSummary, messageOf } from '@cmodjs/core/src/utils/text.js'
 import type { Subscription } from '@cmodjs/core/src/utils/subscription.js'
-import { hasTranscript, runningEntries, type RunningEntry } from './history.js'
+import { runningEntries, type RunningEntry } from './history.js'
 import type { SessionServer } from './serve.js'
 import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type On, type PressInput, type Screen, type ScreenActions, type UiUnit, type UnitTab } from './web-page.js'
 
 const idleSeconds = 30
-
-const summaryQuietMs = 1000
 
 const redrawMs = 30
 
@@ -31,8 +29,6 @@ const feedMessages = 80
 
 const fewestColumns = 40
 
-const questionTool = 'AskUserQuestion'
-
 const sdkEntrypoint = 'sdk-cli'
 
 const browserSurface = 'browser'
@@ -41,23 +37,18 @@ const stoppedRunning = 'Stopped, and a command still runs in its terminal'
 
 const inputKinds: ReadonlySet<unknown> = new Set(['press', 'change', 'submit', 'select', 'link'])
 
-type Call = { readonly name: string; readonly input: Readonly<Record<string, unknown>> }
-
 type Units = { readonly views: readonly UiUnit[]; readonly pages: readonly UiUnit[] }
 
 type Agent = {
   entry: RunningEntry
   summary: SessionData | undefined
-  isTurnOpen: boolean
-  closedAt: string | undefined
-  readonly openCalls: Map<string, Call>
   messages: SessionMessage[]
-  readonly openPages: Set<string>
   readonly store?: ProviderIdentity
-  feed?: Promise<void> | undefined
-  isFeedDue?: boolean
-  readAt?: string
+  readFeedSoon?: () => void
+  readSessionSoon?: () => void
 }
+
+type Watched = { readonly agent: Agent; readonly subscription: Subscription }
 
 type PressHandler = (input: PressInput) => void
 
@@ -100,25 +91,51 @@ class Refusal extends Error {
   }
 }
 
-const sessionsChanges = { part: ['status', 'running', 'messages'] }
+const listChanges = { part: ['status', 'running', 'title'] }
+
+const feedChanges = { part: 'messages' }
 
 const unitKey = ({ mod, id }: Pick<UiUnit, 'mod' | 'id'>) => `${mod}/${id}`
 
-export function webApp({ sessions }: { readonly sessions: SessionServer }): WebApp {
+export function webApp({ sessions }: { readonly sessions: Pick<SessionServer, 'interfaces' | 'providers' | 'call' | 'visits'> }): WebApp {
   const agents = new Map<string, Agent>()
   const streams = new Map<string, Stream>()
   const fetched = new Map<string, Fetched>()
   const heardBy = new Map<string, (payload: unknown) => void>()
   const encoder = new TextEncoder()
+  const stores = new Map<string, Subscription>()
+  const feeds = new Map<string, Watched>()
+  const openPages = new Map<string, Set<string>>()
   let visits = new Map<string, string>()
-  let summaryTimer: ReturnType<typeof setTimeout> | undefined
   let registryTimer: ReturnType<typeof setTimeout> | undefined
   let lastNumber = 0
+  let lastListener = 0
+  let watched: readonly Subscription[] | undefined
+  let isHearingUi = false
   const following = new AbortController()
-  let isReadingStores = false
-  let isStoresDue = false
 
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod web serve: ${doing}: ${messageOf(error)}\n`)
+
+  const oneAtATime = (doing: string, run: () => Promise<void>) => {
+    let isRunning = false
+    let isDue = false
+    const soon = (): void => {
+      if (isRunning) {
+        isDue = true
+        return
+      }
+      isRunning = true
+      void run()
+        .catch((error: unknown) => report(doing, error))
+        .finally(() => {
+          isRunning = false
+          if (!isDue) return
+          isDue = false
+          soon()
+        })
+    }
+    return soon
+  }
 
   const isOwnTailnet = (request: Request, host: string) => {
     const { CMOD_TAILNET_NAME: tailnetName = '', CMOD_TAILNET_LOGIN: tailnetLogin = '' } = process.env
@@ -136,11 +153,29 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
   const serve = sessions.interfaces.handler(app)
   const callOwn = async <Result>(name: string, method: string, args: readonly unknown[]): Promise<Result> => (await serve(methodName(name, method), args, following.signal)) as Result
   const callUi = <Result>(method: string, args: readonly unknown[]) => callOwn<Result>(uiInterface, method, args)
-  const listen = <Payload>(name: string, event: string, heard: (payload: Payload) => void, matcher?: Listening['matcher']) => {
-    const id = `${name} ${event}`
+  const listen = <Payload>(name: string, event: string, heard: (payload: Payload) => void, matcher?: Listening['matcher'], args: readonly unknown[] = []): Subscription => {
+    lastListener += 1
+    const id = `${name} ${event} ${lastListener}`
     heardBy.set(id, (payload) => heard(payload as Payload))
-    void Promise.resolve(serve(listenMethod, { id, interface: name, event, kind: 'on', ...(matcher === undefined ? {} : { matcher }) } satisfies Listening, following.signal)).catch((error: unknown) => report(`hears no ${event} of ${name}`, error))
+    void Promise.resolve(serve(listenMethod, { id, ...listeningOf(name, 'on', event, args, matcher) } satisfies Listening, following.signal)).catch((error: unknown) => report(`hears no ${event} of ${name}`, error))
+    return {
+      remove() {
+        if (!heardBy.delete(id)) return
+        void Promise.resolve(serve(unlistenMethod, { id }, following.signal)).catch((error: unknown) => report(`kept hearing ${event} of ${name}`, error))
+      },
+    }
   }
+  const hearSessions = (store: ProviderIdentity | undefined, args: readonly unknown[], matcher: Listening['matcher'], heard: (change: SessionsChange) => void, failed: () => void = () => undefined): Subscription => {
+    if (store === undefined) return listen(sessionsInterface, 'Change', heard, matcher, args)
+    const subscription = sessions.providers.hear(listeningOf(sessionsInterface, 'on', 'Change', args, matcher), store, (payload) => heard(payload as SessionsChange)).catch((error: unknown) => {
+      report(`hears no change of ${store.device?.name ?? store.mod}'s sessions`, error)
+      failed()
+      return undefined
+    })
+    return { remove: () => void subscription.then((each) => each?.remove()) }
+  }
+  const callSessions = async <Result>(store: ProviderIdentity | undefined, method: string, args: readonly unknown[]): Promise<Result> =>
+    (store === undefined ? await callOwn(sessionsInterface, method, args) : await sessions.providers.call({ interface: sessionsInterface, method, args, ...store })) as Result
 
   const fetchedOf = (key: string, read: () => Promise<unknown>): Fetched => {
     const known = fetched.get(key) ?? { value: undefined, failure: undefined, heldFor: -1, wanted: 0, isFetching: false }
@@ -168,7 +203,13 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     redrawAll()
   }
   const forget = (session: string) => {
+    agents.delete(session)
     for (const key of fetched.keys()) if (key.startsWith(`${session}\n`)) fetched.delete(key)
+  }
+  const openPagesOf = (session: string) => {
+    const open = openPages.get(session) ?? new Set<string>()
+    openPages.set(session, open)
+    return open
   }
 
   const unitsOf = (agent: Agent): Units | undefined => {
@@ -199,31 +240,17 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
   const statusOf = (agent: Agent) => agent.entry.status ?? agent.summary?.status
   const isWorking = (agent: Agent) => {
     const status = statusOf(agent)
-    return status === undefined ? agent.isTurnOpen : status === 'busy' || (status === 'waiting' && agent.isTurnOpen)
+    return status === 'busy' || (status === 'waiting' && agent.summary?.openCall !== undefined)
   }
-  const lastTurnOf = (agent: Agent): SessionData['lastTurn'] => {
-    if (isWorking(agent)) return undefined
-    return agent.summary?.lastTurn ?? (agent.isTurnOpen || agent.closedAt === undefined ? undefined : { reason: 'answered', at: agent.closedAt })
-  }
-  const askedOf = (agent: Agent): string | undefined => {
-    const asked = [...agent.openCalls.values()].findLast((call) => call.name === questionTool)
-    const question = (asked?.input['questions'] as readonly { readonly question?: unknown }[] | undefined)?.[0]?.question
-    return typeof question === 'string' ? question : undefined
-  }
+  const lastTurnOf = (agent: Agent): SessionData['lastTurn'] => (isWorking(agent) ? undefined : agent.summary?.lastTurn)
   const waitOf = (agent: Agent): string | undefined => {
-    const status = statusOf(agent)
-    if (status !== undefined && status !== 'waiting') return undefined
+    if (statusOf(agent) !== 'waiting') return undefined
     const waiting = agent.summary?.waitingFor
     if (waiting?.question !== undefined) return `Asks: ${waiting.question}`
     if (waiting?.tool !== undefined) return `Wants to run ${waiting.tool}: ${callSummary(waiting.input ?? {})}`
-    if (status === undefined) {
-      const question = askedOf(agent)
-      return question === undefined ? undefined : `Asks: ${question}`
-    }
     const dialog = agent.entry.waitingFor ?? waiting?.dialog
     return dialog === 'permission prompt' ? 'Wants permission to run a tool' : dialog === 'input needed' ? 'Asks you a question' : `Waits on ${dialog ?? 'you'} in its terminal`
   }
-  const lastReply = (agent: Agent) => agent.messages.findLast((message) => message.type === Reply)
 
   const rowOf = (agent: Agent): AgentRow => {
     const { entry, summary } = agent
@@ -231,9 +258,8 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     const ended = lastTurnOf(agent)
     const visitedAt = visits.get(entry.session)
     const isUnread = ended !== undefined && (visitedAt === undefined || visitedAt < ended.at)
-    const reply = lastReply(agent)
-    const replyLine = reply === undefined ? '' : firstLine(reply.text)
-    const current = [...agent.openCalls.values()].at(-1)
+    const replyLine = summary?.lastTurn?.reply ?? ''
+    const current = summary?.openCall
     const isStillRunning = ended?.reason === 'stopped' && statusOf(agent) === 'shell'
     const [group, reason]: readonly [Group, string] =
       wait !== undefined
@@ -241,11 +267,11 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
         : ended !== undefined && ended.reason !== 'answered' && isUnread
           ? ['needs', isStillRunning ? stoppedRunning : ended.reason === 'stopped' ? 'Stopped before it answered' : `Failed: ${ended.failure ?? 'the turn ended on an error'}`]
           : isWorking(agent)
-            ? ['working', current === undefined ? 'Thinking' : `${current.name}: ${callSummary(current.input)}`]
+            ? ['working', current === undefined ? 'Thinking' : `${current.tool}: ${current.summary}`]
             : ended?.reason === 'answered' && isUnread
               ? ['replied', replyLine]
               : ['idle', isStillRunning ? stoppedRunning : replyLine === '' ? 'No reply yet' : replyLine]
-    const at = [summary?.lastAt ?? '', agent.messages.at(-1)?.at ?? '', ended?.at ?? ''].reduce((latest, each) => (each > latest ? each : latest), '')
+    const at = [summary?.lastAt ?? '', ended?.at ?? ''].reduce((latest, each) => (each > latest ? each : latest), '')
     const project = summary?.project || entry.cwd
     return {
       id: entry.session,
@@ -273,7 +299,8 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
 
   const tabsOf = (agent: Agent, units: Units | undefined): (UnitTab & { readonly unit: UiUnit })[] => {
     if (units === undefined) return []
-    const pages = units.pages.filter((page) => agent.openPages.has(unitKey(page)))
+    const open = openPages.get(agent.entry.session)
+    const pages = units.pages.filter((page) => open?.has(unitKey(page)) === true)
     return [...units.views.map((unit) => ({ key: unitKey(unit), label: unit.title, isClosable: false, unit })), ...pages.map((unit) => ({ key: unitKey(unit), label: unit.title, isClosable: true, unit }))]
   }
   const columnsOf = (stream: Stream) => Math.max(stream.columns - listColumns - 2, fewestColumns)
@@ -313,13 +340,10 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
   }
 
   const act = (stream: Stream, agent: Agent, action: 'send' | 'abort', input: object) =>
-    void (agent.store === undefined ? sessions.call(agent.entry.session, action, input, { project: agent.entry.cwd }) : callStore(agent.store, action, [agent.entry.session, input, { project: agent.entry.cwd }])).then(
-      () => (agent.store === undefined ? undefined : readStoresSoon()),
-      (error: unknown) => {
-        stream.notice = `${action === 'send' ? 'The prompt did not reach' : 'Stop did not reach'} ${agent.entry.name ?? agent.entry.session}: ${messageOf(error)}`
-        redrawSoon(stream)
-      },
-    )
+    void callSessions(agent.store, action, [agent.entry.session, input, { project: agent.entry.cwd }]).catch((error: unknown) => {
+      stream.notice = `${action === 'send' ? 'The prompt did not reach' : 'Stop did not reach'} ${agent.entry.name ?? agent.entry.session}: ${messageOf(error)}`
+      redrawSoon(stream)
+    })
 
   const actionsOf = (stream: Stream): ScreenActions => {
     const at = () => (stream.cursor === undefined ? undefined : agents.get(stream.cursor))
@@ -375,14 +399,14 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
       },
       closeTab(tab) {
         const agent = at()
-        if (agent === undefined || !agent.openPages.delete(tab)) return
+        if (agent === undefined || openPages.get(agent.entry.session)?.delete(tab) !== true) return
         if (stream.tab === tab) stream.tab = conversationTab
         showUnit(agent, tab, false)
       },
       openPage(page) {
         const agent = at()
         if (agent === undefined) return
-        agent.openPages.add(unitKey(page))
+        openPagesOf(agent.entry.session).add(unitKey(page))
         stream.tab = unitKey(page)
         showUnit(agent, unitKey(page), true)
       },
@@ -436,7 +460,7 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
         ...(row.reason === stoppedRunning ? { state: stoppedRunning } : {}),
         feed: feedOf(agent),
         tabs: tabs.map(({ key, label, isClosable }) => ({ key, label, isClosable })),
-        pages: units?.pages.filter((each) => !agent.openPages.has(unitKey(each))) ?? [],
+        pages: units?.pages.filter((each) => openPages.get(agent.entry.session)?.has(unitKey(each)) !== true) ?? [],
         ...(drawing === undefined ? {} : { page: drawing }),
       },
     }
@@ -457,6 +481,7 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     const html = htmlOf(appScreen(screenOf(stream, on), actionsOf(stream), on))
     stream.controls = controls
     for (const token of stream.numbers.keys()) if (!used.has(token)) stream.numbers.delete(token)
+    watchFeeds()
     if (stream.focus === 'prompt') {
       stream.focus = 'row'
       redrawSoon(stream)
@@ -486,52 +511,51 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
   }
 
   const shownIn = (session: string, key: string, isOpen: boolean) => {
-    const agent = agents.get(session)
-    if (agent === undefined) return
-    if (isOpen) agent.openPages.add(key)
-    else agent.openPages.delete(key)
+    if (isOpen) openPagesOf(session).add(key)
+    else openPages.get(session)?.delete(key)
     for (const stream of streams.values()) if (stream.cursor === session && (isOpen || stream.tab === key)) stream.tab = isOpen ? key : conversationTab
     redrawAll()
   }
 
-  const follow = (entry: RunningEntry): Agent => {
-    const agent: Agent = { entry, summary: undefined, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set() }
-    if (hasTranscript(entry.session, entry.cwd)) readFeedSoon(agent)
-    return agent
-  }
-
   const readFeed = async (agent: Agent) => {
     const { session, cwd: project } = agent.entry
-    const [state, messages, [last]] = await Promise.all([
-      callOwn<ConversationState>(sessionsInterface, 'read', [session, 'state', { project }]),
-      callOwn<SessionMessage[]>(sessionsInterface, 'read', [session, 'messages', { project, last: feedMessages }]),
-      callOwn<TurnData[]>(sessionsInterface, 'read', [session, 'turns', { project, last: 1 }]),
-    ])
-    const isTurnOpen = state.turn !== undefined && state.turn.closedAt === undefined
-    if (isTurnOpen !== agent.isTurnOpen || last?.closedAt !== agent.closedAt) summarizeSoon(summaryQuietMs)
-    agent.isTurnOpen = isTurnOpen
-    agent.closedAt = last?.closedAt
-    agent.openCalls.clear()
-    for (const [callId, call] of Object.entries(state.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
-    const known = new Set(agent.messages.map((message) => message.id))
-    agent.messages = [...agent.messages, ...messages.filter((message) => message.task === undefined && !known.has(message.id))].slice(-keptMessages)
+    const after = agent.messages.at(-1)?.id
+    const messages = await callSessions<SessionMessage[]>(agent.store, 'read', [session, 'messages', { project, ...(after === undefined ? {} : { after }), last: feedMessages }])
+    if (feeds.get(session)?.agent !== agent) return
+    const held = new Set(agent.messages.map((message) => message.id))
+    agent.messages = [...agent.messages, ...messages.filter((message) => message.task === undefined && !held.has(message.id))].slice(-keptMessages)
     redrawAll()
   }
-  const readFeedSoon = (agent: Agent) => {
-    if (agent.feed !== undefined) {
-      agent.isFeedDue = true
-      return
-    }
-    agent.feed = readFeed(agent)
-      .catch((error: unknown) => report(`shows no new messages of ${agent.entry.session}`, error))
-      .finally(() => {
-        agent.feed = undefined
-        if (!agent.isFeedDue) return
-        agent.isFeedDue = false
-        readFeedSoon(agent)
-      })
-      .then(() => undefined)
+  const dropFeed = (session: string, { agent, subscription }: Watched) => {
+    subscription.remove()
+    agent.messages = []
+    feeds.delete(session)
   }
+  const watchFeeds = () => {
+    if (watched === undefined) return
+    const shown = new Set([...streams.values()].flatMap((each) => (each.send === undefined || each.cursor === undefined ? [] : [each.cursor])))
+    for (const [session, feed] of feeds) if (!shown.has(session) || agents.get(session) !== feed.agent) dropFeed(session, feed)
+    for (const session of shown) {
+      const agent = agents.get(session)
+      if (agent === undefined || feeds.has(session)) continue
+      const readFeedSoon = (agent.readFeedSoon ??= oneAtATime(`shows no new messages of ${session}`, () => readFeed(agent)))
+      feeds.set(session, { agent, subscription: hearSessions(agent.store, [session], feedChanges, readFeedSoon) })
+      readFeedSoon()
+    }
+  }
+
+  const readSession = async (agent: Agent) => {
+    const { session } = agent.entry
+    const summary = await findSession((method, args) => callSessions(agent.store, method, args), session, { running: true })
+    if (agents.get(session) !== agent) return
+    if (agent.store === undefined) agent.summary = summary
+    else if (summary?.isRunning === true) {
+      agent.summary = summary
+      agent.entry = storedEntry(summary)
+    } else forget(session)
+    redrawAll()
+  }
+  const readSessionSoon = (agent: Agent) => (agent.readSessionSoon ??= oneAtATime(`kept the status of ${agent.entry.session} it read last`, () => readSession(agent)))()
 
   const guarded = (doing: string, run: () => void) => () => {
     try {
@@ -541,17 +565,11 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     }
   }
 
-  const summarize = async () => {
-    summaryTimer = undefined
+  const summarizeSoon = oneAtATime('kept the models, colors, projects, and statuses it read last', async () => {
     const listed = new Map((await callOwn<SessionData[]>(sessionsInterface, 'sessions', [{ everyProject: true, running: true }])).map((summary) => [summary.id, summary]))
     for (const agent of agents.values()) if (agent.store === undefined) agent.summary = listed.get(agent.entry.session)
     redrawAll()
-  }
-  const summarizeSoon = (ms: number) => {
-    if (summaryTimer !== undefined && ms >= summaryQuietMs) return
-    clearTimeout(summaryTimer)
-    summaryTimer = setTimeout(() => void summarize().catch((error: unknown) => report('kept the models, colors, projects, and statuses it read last', error)), ms)
-  }
+  })
 
   const readRegistry = guarded('kept the sessions it listed last', () => {
     registryTimer = undefined
@@ -560,92 +578,103 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     let isChanged = false
     for (const [id, agent] of agents) {
       if (running.has(id) || agent.store !== undefined) continue
-      agents.delete(id)
       forget(id)
       isChanged = true
     }
+    for (const session of openPages.keys()) if (!running.has(session)) openPages.delete(session)
     for (const entry of entries) {
       const known = agents.get(entry.session)
       if (known?.store !== undefined) {
-        agents.delete(entry.session)
+        forget(entry.session)
       } else if (known !== undefined) {
         known.entry = entry
         continue
       }
-      agents.set(entry.session, follow(entry))
+      agents.set(entry.session, { entry, summary: undefined, messages: [] })
       isChanged = true
     }
-    if (isChanged) summarizeSoon(summaryQuietMs)
+    if (isChanged) summarizeSoon()
     redrawAll()
   })
   const readRegistrySoon = () => {
     registryTimer ??= setTimeout(readRegistry, 0)
   }
 
-  const storeChanges = new Map<string, Promise<Subscription | undefined>>()
   const storeKey = ({ mod, program, device }: ProviderIdentity) => `${device?.id ?? ''}\n${mod}\n${program ?? ''}`
-  const storesOf = async () => {
-    const stores = await sessions.providers.list(sessionsInterface)
-    const keys = new Set(stores.map(storeKey))
-    for (const [key, heard] of storeChanges) {
-      if (keys.has(key)) continue
-      storeChanges.delete(key)
-      void heard.then((subscription) => subscription?.remove())
-    }
-    for (const store of stores) {
-      if (storeChanges.has(storeKey(store))) continue
-      const heard = sessions.providers.hear(listeningOf(sessionsInterface, 'on', 'Change', [], sessionsChanges), store, readStoresSoon).catch((error: unknown) => {
-        storeChanges.delete(storeKey(store))
-        report(`hears no change of ${store.device?.name ?? store.mod}'s sessions`, error)
-        return undefined
-      })
-      storeChanges.set(storeKey(store), heard)
-    }
-    return stores
-  }
-  const callStore = async <Result>(store: ProviderIdentity, method: string, args: readonly unknown[]) => (await sessions.providers.call({ interface: sessionsInterface, method, args, ...store })) as Result
-  const readStore = async (store: ProviderIdentity, seen: Set<string>) => {
-    const listed = await callStore<SessionData[]>(store, 'sessions', [{ everyProject: true, running: true }])
+  const isOn = (agent: Agent | undefined, key: string) => agent?.store !== undefined && storeKey(agent.store) === key
+  const readStore = async (store: ProviderIdentity) => {
+    const listed = await callSessions<SessionData[]>(store, 'sessions', [{ everyProject: true, running: true }])
+    const key = storeKey(store)
+    const ids = new Set(listed.map(({ id }) => id))
+    for (const [id, agent] of agents) if (isOn(agent, key) && !ids.has(id)) forget(id)
     for (const summary of listed) {
       const known = agents.get(summary.id)
-      if (seen.has(summary.id) || (known !== undefined && known.store === undefined)) continue
-      seen.add(summary.id)
-      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionsInterface, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], openPages: new Set(), store }
-      agent.summary = summary
-      agents.set(summary.id, agent)
-      if (agent.readAt === summary.lastAt) continue
-      const [messages, state, [last]] = await Promise.all([
-        callStore<SessionMessage[]>(store, 'read', [summary.id, 'messages', { project: summary.cwd, last: feedMessages }]),
-        callStore<ConversationState | null>(store, 'read', [summary.id, 'state', { project: summary.cwd }]),
-        callStore<TurnData[]>(store, 'read', [summary.id, 'turns', { project: summary.cwd, last: 1 }]),
-      ])
-      agent.messages = messages.filter((message) => message.task === undefined)
-      agent.isTurnOpen = state?.turn !== undefined && state.turn.closedAt === undefined
-      agent.closedAt = last?.closedAt
-      agent.openCalls.clear()
-      for (const [callId, call] of Object.entries(state?.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
-      agent.readAt = summary.lastAt
+      if (known === undefined) agents.set(summary.id, { entry: storedEntry(summary), summary, messages: [], store })
+      else if (isOn(known, key)) {
+        known.summary = summary
+        known.entry = storedEntry(summary)
+      }
     }
+    redrawAll()
   }
-  const readStores = async (): Promise<void> => {
-    if (isReadingStores) {
-      isStoresDue = true
-      return
-    }
-    isReadingStores = true
-    try {
-      const seen = new Set<string>()
-      for (const store of await storesOf()) await readStore(store, seen).catch((error: unknown) => report('kept the sessions a store listed last', error))
-      for (const [id, agent] of agents) if (agent.store !== undefined && !seen.has(id)) agents.delete(id)
-      redrawAll()
-    } finally {
-      isReadingStores = false
-    }
-    if (!isStoresDue) return
-    isStoresDue = false
-    await readStores()
+  const followStore = (store: ProviderIdentity, failed: () => void): Subscription => {
+    const key = storeKey(store)
+    const relist = oneAtATime(`kept the sessions ${store.device?.name ?? store.mod} listed last`, () => readStore(store))
+    const subscription = hearSessions(
+      store,
+      [],
+      listChanges,
+      ({ session, part }) => {
+        const agent = agents.get(session)
+        if (agent === undefined) {
+          if (part === 'running') relist()
+        } else if (isOn(agent, key)) readSessionSoon(agent)
+      },
+      failed,
+    )
+    relist()
+    return subscription
   }
-  const readStoresSoon = () => void readStores().catch((error: unknown) => report('kept the sessions it listed last', error))
+  const followStoresSoon = oneAtATime('kept the sessions providers it listed last', async () => {
+    const listed = await sessions.providers.list(sessionsInterface)
+    if (watched === undefined) return
+    const keys = new Set(listed.map(storeKey))
+    for (const [key, subscription] of stores) {
+      if (keys.has(key)) continue
+      subscription.remove()
+      stores.delete(key)
+    }
+    for (const [id, agent] of agents) if (agent.store !== undefined && !keys.has(storeKey(agent.store))) forget(id)
+    for (const store of listed) {
+      const key = storeKey(store)
+      if (stores.has(key)) continue
+      const followed: Subscription = followStore(store, () => {
+        if (stores.get(key) === followed) stores.delete(key)
+      })
+      stores.set(key, followed)
+    }
+    redrawAll()
+  })
+
+  const changedHere = ({ session, part }: SessionsChange) => {
+    readRegistrySoon()
+    const agent = agents.get(session)
+    if (part !== 'running' && agent !== undefined && agent.store === undefined) readSessionSoon(agent)
+  }
+  const startWatching = () => {
+    if (watched !== undefined) return
+    watched = [hearSessions(undefined, [], listChanges, changedHere), listen(providersInterface, 'Change', followStoresSoon, { interface: sessionsInterface })]
+    readRegistry()
+    summarizeSoon()
+    followStoresSoon()
+  }
+  const stopWatching = () => {
+    for (const each of [...(watched ?? []), ...stores.values()]) each.remove()
+    for (const [session, feed] of feeds) dropFeed(session, feed)
+    for (const [id, agent] of agents) if (agent.store !== undefined) forget(id)
+    watched = undefined
+    stores.clear()
+  }
 
   const stream = (request: Request, url: URL, server: Server<undefined>): Response => {
     const id = url.searchParams.get('stream') ?? ''
@@ -661,12 +690,15 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         opened.send = (event: string, data: object) => controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+        startWatching()
         render(opened)
       },
       cancel() {
         opened.send = undefined
         showIn(opened, undefined)
         opened.expiry = setTimeout(() => streams.delete(id), keptStreamMs).unref()
+        if ([...streams.values()].some((each) => each.send !== undefined)) watchFeeds()
+        else stopWatching()
       },
     })
     server.timeout(request, 0)
@@ -725,30 +757,6 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
     },
     (error: unknown) => report('starts with no visits', error),
   )
-  let isStarted = false
-  const start = () => {
-    if (isStarted) return
-    isStarted = true
-    listen(
-      sessionsInterface,
-      'Change',
-      ({ session, part }: SessionsChange) => {
-        const agent = agents.get(session)
-        if (part === 'messages') return agent === undefined || agent.store !== undefined ? undefined : readFeedSoon(agent)
-        readRegistrySoon()
-        summarizeSoon(0)
-      },
-      sessionsChanges,
-    )
-    listen(uiInterface, 'Change', ({ session }: { readonly session: string }) => refetch(`${session}\nunits`))
-    listen(uiInterface, 'Redraw', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => refetch(`${session}\ndraw\n${mod}/${id}\n`))
-    listen(uiInterface, 'Open', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, true))
-    listen(uiInterface, 'Close', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, false))
-    listen(providersInterface, 'Change', readStoresSoon, { interface: sessionsInterface })
-    readRegistry()
-    summarizeSoon(0)
-    readStoresSoon()
-  }
   const close = async () => {
     const was = server
     server = undefined
@@ -756,7 +764,13 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
   }
   return {
     listen(port) {
-      start()
+      if (!isHearingUi) {
+        isHearingUi = true
+        listen(uiInterface, 'Change', ({ session }: { readonly session: string }) => refetch(`${session}\nunits`))
+        listen(uiInterface, 'Redraw', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => refetch(`${session}\ndraw\n${mod}/${id}\n`))
+        listen(uiInterface, 'Open', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, true))
+        listen(uiInterface, 'Close', ({ session, mod, id }: { readonly session: string; readonly mod: string; readonly id: string }) => shownIn(session, `${mod}/${id}`, false))
+      }
       if (server !== undefined) return server.port ?? port
       try {
         server = page(port)
@@ -772,10 +786,9 @@ export function webApp({ sessions }: { readonly sessions: SessionServer }): WebA
         clearInterval(each.renewal)
         clearTimeout(each.expiry)
       }
-      clearTimeout(summaryTimer)
       clearTimeout(registryTimer)
+      stopWatching()
       following.abort()
-      for (const heard of storeChanges.values()) void heard.then((subscription) => subscription?.remove())
       sessions.interfaces.closed(app)
       await close()
       await visitWrites
@@ -791,9 +804,6 @@ function pressOf({ kind, key, value, href }: PressInput): object {
   return at
 }
 
-function callSummary(input: Readonly<Record<string, unknown>>): string {
-  const question = (input['questions'] as readonly { readonly question?: unknown }[] | undefined)?.[0]?.question
-  const named = [input['command'], input['file_path'], input['path'], input['pattern'], input['url'], input['query'], question, input['description'], input['prompt']].find((value) => typeof value === 'string')
-  const text = typeof named === 'string' ? named : JSON.stringify(input)
-  return firstLine(text)
+function storedEntry(summary: SessionData): RunningEntry {
+  return { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionsInterface, name: summary.title }
 }

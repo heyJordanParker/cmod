@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.11.0] - 2026-11-27
+
+### Added
+- A session tells the tool call it runs now as `openCall: { tool, summary }`, and its last answer's first line as `lastTurn.reply`, so a list of sessions shows both without reading transcripts.
+- `cmod/Sessions` tells a `Change` of `part: 'title'` when a running session's title changes, so a list follows titles without polling.
+
+### Changed
+- A session still on an older cmod plugin shows no tool call and no reply line on its row in the browser app until it reloads: Thinking while it works, and No reply yet once it answered.
+
+### Fixed
+- `/history` and `/mods` register again at every session start, where Claude Code refused each as `it is the plugin's /cmod:history` and `/cmod:mods`. The Skills are now `/cmod:search-history` and `/cmod:manage-mods`.
+- `cmod sessions end` stops a background session whose cmod plugin has not reached `cmod serve` yet, as right after `cmod sessions start`, where it refused with `no cmod plugin in it reaches cmod serve, so it takes no end`.
+- cmod sends far fewer messages between your devices, where each change of a session on another device crossed about 21 times and could use up a relay's daily limit. A session hears another device only for a background task it runs there, and the browser app sends nothing while no page is open, and while one is, reads only what it shows: each session's row from its status, and the messages of the session you have open.
+- On a Mac, `cmod serve`'s first reads of a new conversation index no longer fail with `disk I/O error`.
+
 ## [8.10.4] - 2026-11-26
 
 ### Fixed

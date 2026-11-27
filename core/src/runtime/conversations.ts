@@ -11,12 +11,12 @@ import { TaskEnd, TaskStart } from '../session/goal/task.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { resolve } from '../vendor.js'
 import { ifMissing } from '../utils/paths.js'
-import { messageOf } from '../utils/text.js'
+import { callSummary, firstLine, messageOf, questionOf } from '../utils/text.js'
 import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import { MissingMachineId } from './device.js'
-import { interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type KeptListen, type ProvidedHeard, type ProviderIdentity, type SessionsChange, type HeldSession, storeInterface, methodName, listeningOf, type StoreChange, type StorePart } from './interfaces.js'
+import { findSession, interfaceListeners, interfaceMethods, providerActs, providerPeer, serveProviders, sessionActs, sessionsInterface, uiInterface, type HeldStatus, type Implementation, type Provided, type KeptListen, type ProvidedHeard, type ProviderIdentity, type SessionsChange, type HeldSession, storeInterface, methodName, listeningOf, type StoreChange, type StorePart } from './interfaces.js'
 import { runCmod } from './programs.js'
 import { addressCall, connectRpc, isConnectionGone, RpcError, rpcCodes, type RpcClient } from './rpc.js'
 import type { RoutedHook, Router } from './router.js'
@@ -75,7 +75,7 @@ const noneKept: Kept = { subscribed: {}, watched: {}, provided: [] }
 
 type Registered = { remove(): void }
 
-type OtherProvider = { readonly identity: ProviderIdentity; readonly peer: Pick<RpcClient, 'request'>; readonly change: Registered }
+type OtherProvider = { readonly identity: ProviderIdentity; readonly peer: Pick<RpcClient, 'request'> }
 
 export function serveConversations({
   claude,
@@ -125,16 +125,19 @@ export function serveConversations({
   let contextPercent: number | undefined
   let endedTurn: HeldStatus['lastTurn']
   let failedWith: string | undefined
+  let repliedWith: string | undefined
   const openCalls = new Map<string, ToolCallArgs>()
   const tellStatus = () => {
     if (session === '') return
-    local.client.notify(sessionActs.status, { session, status: waitingFor !== undefined ? 'waiting' : isWorking ? 'busy' : 'idle', ...(waitingFor === undefined ? {} : { waitingFor }), ...(contextPercent === undefined ? {} : { contextPercent }), ...(endedTurn === undefined ? {} : { lastTurn: endedTurn }) } satisfies HeldStatus & { readonly session: string })
+    const open = [...openCalls.values()].at(-1)
+    const openCall = open === undefined ? undefined : { tool: open.name, summary: callSummary(open.input) }
+    local.client.notify(sessionActs.status, { session, status: waitingFor !== undefined ? 'waiting' : isWorking ? 'busy' : 'idle', ...(waitingFor === undefined ? {} : { waitingFor }), ...(contextPercent === undefined ? {} : { contextPercent }), ...(endedTurn === undefined ? {} : { lastTurn: endedTurn }), ...(openCall === undefined ? {} : { openCall }) } satisfies HeldStatus & { readonly session: string })
   }
   const waitFor = (callId: string) => {
     const call = openCalls.get(callId)
     if (call === undefined) return
-    const question = call.name === questionTool ? (call.input['questions'] as readonly { readonly question?: unknown }[] | undefined)?.[0]?.question : undefined
-    waitingFor = typeof question === 'string' ? { dialog: permissionPrompt, question } : { dialog: permissionPrompt, tool: call.name, input: call.input }
+    const question = call.name === questionTool ? questionOf(call.input) : undefined
+    waitingFor = question !== undefined ? { dialog: permissionPrompt, question } : { dialog: permissionPrompt, tool: call.name, input: call.input }
     waitingOn = callId
     tellStatus()
   }
@@ -143,6 +146,7 @@ export function serveConversations({
     if (isStarted) {
       endedTurn = undefined
       failedWith = undefined
+      repliedWith = undefined
     }
     waitingFor = undefined
     waitingOn = undefined
@@ -160,7 +164,7 @@ export function serveConversations({
     if (e.agentId !== undefined) return completed
     const reason = e.reason === 'answer' ? 'answered' : e.reason === 'aborted' ? 'stopped' : 'failed'
     const failure = e.reason === 'refusal' ? (e.refusal.explanation ?? e.refusal.category ?? 'Claude refused to answer.') : failedWith
-    endedTurn = { reason, at: new Date().toISOString(), ...(reason === 'failed' && failure !== undefined ? { failure } : {}) }
+    endedTurn = { reason, at: new Date().toISOString(), ...(reason === 'failed' && failure !== undefined ? { failure } : {}), ...(reason === 'answered' && repliedWith !== undefined ? { reply: repliedWith } : {}) }
     turnMoved(false)
     return completed
   })
@@ -168,6 +172,7 @@ export function serveConversations({
     if (e.agentId !== undefined) return next(e)
     openCalls.set(e.tool_use_id, { name: e.tool, input: toolInputOf(e) })
     if (e.tool === questionTool) waitFor(e.tool_use_id)
+    else tellStatus()
     try {
       return await next(e)
     } finally {
@@ -175,8 +180,8 @@ export function serveConversations({
       if (waitingOn === e.tool_use_id) {
         waitingFor = undefined
         waitingOn = undefined
-        tellStatus()
       }
+      tellStatus()
     }
   })
   router.add('classic.Notification', async (e, next) => {
@@ -216,7 +221,10 @@ export function serveConversations({
   router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e), next.signal.aborted))
   router.add('classic.Stop', async (e, next) => {
     const below = await next(e)
-    if (below.block === undefined && !next.signal.aborted) void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
+    if (below.block === undefined && !next.signal.aborted) {
+      repliedWith = firstLine(e.last_assistant_message ?? '') || undefined
+      void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
+    }
     return below
   })
 
@@ -283,7 +291,7 @@ export function serveConversations({
         await served.replay()
         await held.replay(client)
         storeChanged(undefined)
-        await reconcileTasks()
+        await reconcileTasks({ atConnect: true })
       },
       onError: (error) => {
         if (!isUnreached) claude.ui.warn('serve:connect', `cmod: this session waits for cmod serve: ${messageOf(error)}`)
@@ -315,47 +323,41 @@ export function serveConversations({
     changed: () => void saveListeners().catch((error: unknown) => report('listeners', 'Could not keep the provider listeners of this session', error)),
   })
 
-  const others = new Map<string, OtherProvider>()
-  const keyOf = ({ mod, program, device }: ProviderIdentity) => `${device?.id ?? ''}\n${mod}\n${program ?? ''}`
-  const otherProviders = async () => {
-    const found = await local.client.request<ProviderIdentity[]>(providerActs.providers, { interface: sessionsInterface })
-    const keys = new Set(found.map(keyOf))
-    for (const [key, other] of others) {
-      if (keys.has(key)) continue
-      others.delete(key)
-      other.change.remove()
-    }
-    for (const identity of found) if (!others.has(keyOf(identity))) others.set(keyOf(identity), followProvider(identity))
-    return [...others.values()]
-  }
+  const otherProviders = async (): Promise<OtherProvider[]> => (await local.client.request<ProviderIdentity[]>(providerActs.providers, { interface: sessionsInterface })).map((identity) => ({ identity, peer: providerPeer(local.client, identity) }))
 
-  const followProvider = (identity: ProviderIdentity): OtherProvider => {
-    const peer = providerPeer(local.client, identity)
-    const change = held.listen(local.client, { interface: sessionsInterface, event: 'Change', kind: 'on', provider: identity }, (told: SessionsChange) => {
-      if (told.part === 'running') void closeEndedOn(peer, [told.session]).catch((error: unknown) => report('tasks', `Could not read whether a task ${identity.mod} runs ended`, error))
-    })
-    return { identity, peer, change }
+  const taskWatches = new Map<string, { readonly runner: OtherProvider; readonly watch: Registered }>()
+  const watchTask = (task: string, runner: OtherProvider) => {
+    if (taskWatches.has(task)) return
+    const listening = { ...listeningOf(sessionsInterface, 'on', 'Change', [task], { part: 'running' }), provider: runner.identity }
+    taskWatches.set(task, { runner, watch: held.listen(local.client, listening, () => followTask(runner, task)) })
+    void followTask(runner, task)
+  }
+  const unwatchTask = (task: string) => {
+    taskWatches.get(task)?.watch.remove()
+    taskWatches.delete(task)
   }
 
   const providers = async () => [local.client, ...(await otherProviders()).map((other) => other.peer)]
 
-  const isNotHeld = (error: unknown) => error instanceof RpcError && error.code === rpcCodes.notHeld
+  const isNotHeld = (error: unknown): error is RpcError => error instanceof RpcError && error.code === rpcCodes.notHeld
 
-  const firstHolding = async <Value>(ask: (client: Pick<RpcClient, 'request'>) => Promise<Value>, clients?: readonly Pick<RpcClient, 'request'>[]): Promise<Value> => {
-    let last: unknown
-    for (const client of clients ?? (await providers())) {
+  const sessionsAsk = (client: Pick<RpcClient, 'request'>) => (method: string, args: readonly unknown[]) => client.request(`${sessionsInterface}.${method}`, args)
+
+  const firstHolding = async <Item, Value>(items: readonly Item[], ask: (item: Item) => Promise<Value>): Promise<Value> => {
+    let last = new RpcError(rpcCodes.notHeld, 'No sessions provider answers.')
+    for (const item of items) {
       try {
-        return await ask(client)
+        return await ask(item)
       } catch (error) {
         if (!isNotHeld(error)) throw error
         last = error
       }
     }
-    throw last instanceof Error ? last : new Error(String(last))
+    throw last
   }
 
-  const read = <Value>(id: string, part: string, options: Request = {}): Promise<Value> =>
-    firstHolding((client) => client.request<Value>(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error: unknown) => {
+  const read = async <Value>(id: string, part: string, options: Request = {}): Promise<Value> =>
+    firstHolding(await providers(), (client) => client.request<Value>(`${sessionsInterface}.read`, [id, part, { project: project(), ...options }])).catch((error: unknown) => {
       throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error
     })
 
@@ -365,7 +367,7 @@ export function serveConversations({
     return lists.flat().filter((each) => !seen.has(each.id) && Boolean(seen.add(each.id)))
   }
 
-  const actOn = (target: string, action: Act, input: unknown, context: Request) => firstHolding((client) => client.request(`${sessionsInterface}.${action}`, [target, input, { project: project(), ...context }]))
+  const actOn = async (target: string, action: Act, input: unknown, context: Request) => firstHolding(await providers(), (client) => client.request(`${sessionsInterface}.${action}`, [target, input, { project: project(), ...context }]))
 
   let color: SessionColor = { session: '' }
   let onColor: (told: SessionColor) => void = () => undefined
@@ -400,6 +402,7 @@ export function serveConversations({
   const dispatch = (changes: readonly SessionChange[]) => {
     if (session !== '' && changes.some((change) => change.type === TaskStart || change.type === TaskEnd)) local.client.notify(sessionActs.changed, { session, part: 'tasks' })
     for (const change of changes) {
+      if (change.type === TaskEnd) unwatchTask(change.task.id)
       if ((change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.task === undefined) lastTurn = change.turn
       if (change.type === Message && !liveIds.has(change.message.id)) {
         live.push(change.message)
@@ -553,7 +556,7 @@ export function serveConversations({
 
   const listenToServe = () => {
     serveChanges?.remove()
-    serveChanges = held.listen(local.client, { interface: sessionsInterface, event: 'Change', kind: 'on', args: [session] }, (change: SessionsChange) => {
+    serveChanges = held.listen(local.client, listeningOf(sessionsInterface, 'on', 'Change', [session], { part: ['tasks', 'goal'] }), (change: SessionsChange) => {
       if (change.part === 'tasks') void reconcileTasks()
       if (change.part === 'goal') void rereadGoal()
     })
@@ -563,6 +566,7 @@ export function serveConversations({
     if (id === session) return
     const previous = session
     session = id
+    for (const task of taskWatches.keys()) unwatchTask(task)
     live = []
     liveIds.clear()
     waitingRows.clear()
@@ -595,40 +599,53 @@ export function serveConversations({
     )
     listening = Promise.all([restored, holding]).then(() => undefined)
     listenToServe()
-    void starting.then(reconcileTasks)
+    void starting.then(() => reconcileTasks())
     if (heard.size === 0 && watched.size === 0 && served.listened().length === 0) return
     void Promise.all([previous === '' ? undefined : onListenerFiles(() => claude.fs.write(`${listeners}/${previous}.json`, JSON.stringify(noneKept))), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
   }
 
-  const reconcileTasks = async () => {
+  const openTasks = () => liveTasks().filter((task) => task.isBackground === true && task.closedAt === undefined)
+  const openTask = (id: string) => openTasks().find((task) => task.id === id)
+
+  const reconcileTasks = async ({ atConnect = false } = {}) => {
     if (session === '') return
     await starting
-    const open = Object.values(conversation.state.tasks).filter((task) => task.isBackground === true && task.closedAt === undefined)
-    if (open.length === 0) return
+    if (openTasks().length === 0) return
     const saved = await read<TaskData[]>(session, 'tasks').catch((error: unknown) => (report('tasks', 'Could not read whether its background tasks ended', error), []))
-    for (const task of saved) {
-      const running = conversation.state.tasks[task.id]
-      if (running !== undefined && running.closedAt === undefined && task.closedAt !== undefined) dispatch(conversation.endTask(task, task.closedAt))
+    for (const task of saved) if (task.closedAt !== undefined && openTask(task.id) !== undefined) dispatch(conversation.endTask(task, task.closedAt))
+    const open = openTasks().filter((task) => atConnect || !taskWatches.has(task.id))
+    const others = open.every((task) => taskWatches.has(task.id)) ? [] : await otherProviders()
+    for (const task of open) {
+      const watched = taskWatches.get(task.id)
+      if (watched !== undefined) await followTask(watched.runner, task.id)
+      else await findTask(task.id, others).catch((error: unknown) => report('tasks', 'Could not read whether its tasks on another device ended', error))
     }
-    for (const { peer } of await otherProviders()) await closeEndedOn(peer, open.map((task) => task.id)).catch((error: unknown) => report('tasks', 'Could not read whether its tasks on another device ended', error))
   }
 
-  const closeEndedOn = async (client: Pick<RpcClient, 'request'>, ids: readonly string[]) => {
-    await starting
-    const open = new Set(
-      ids.filter((id) => {
-        const task = conversation.state.tasks[id]
-        return task?.isBackground === true && task.closedAt === undefined
-      }),
-    )
-    if (open.size === 0) return
-    const listed = await client.request<SessionData[]>(`${sessionsInterface}.sessions`, [{ everyProject: true }])
-    for (const ended of listed.filter((each) => open.has(each.id) && !each.isRunning)) {
-      const task = liveTasks().find((each) => each.id === ended.id && each.closedAt === undefined)
-      if (task === undefined) continue
+  const findTask = async (id: string, others: readonly OtherProvider[]) => {
+    if ((await findSession(sessionsAsk(local.client), id)) !== undefined) return
+    for (const runner of others) {
+      const found = await findSession(sessionsAsk(runner.peer), id).catch((error: unknown) => {
+        report('tasks', `Could not ask ${runner.identity.mod} whether it runs task ${id}`, error)
+        return undefined
+      })
+      if (found !== undefined) return watchTask(id, runner)
+    }
+  }
+
+  const followTask = async (runner: OtherProvider, id: string) => {
+    try {
+      await starting
+      if (openTask(id) === undefined) return
+      const found = await findSession(sessionsAsk(runner.peer), id)
+      if (found === undefined) return unwatchTask(id)
+      const task = openTask(id)
+      if (task === undefined || found.isRunning) return
       const closedAt = new Date().toISOString()
       await claude.fs.write(`${backgroundTasks}/${session}/${task.id}.json`, JSON.stringify({ ...task, closedAt } satisfies TaskData))
       dispatch(conversation.endTask(task, closedAt))
+    } catch (error) {
+      report('tasks', `Could not read whether a task ${runner.identity.mod} runs ended`, error)
     }
   }
 
@@ -825,12 +842,14 @@ export function serveConversations({
         const elsewhere: TaskStartArgs = { ...task, ...owner, title: answer?.title ?? task.title, prompt: answer?.prompt ?? task.prompt }
         const others = await otherProviders()
         const onDevice = others.filter(({ identity }) => identity.device !== undefined && (identity.device.name === task.device || identity.device.id === task.device))
-        const opened = await firstHolding((client) => client.request<TaskData>(`${sessionsInterface}.startTask`, [session, elsewhere, { project: project() }]), (onDevice.length > 0 ? onDevice : others).map((other) => other.peer)).catch((error: unknown) => {
-          throw others.length === 0 || isNotHeld(error) ? new Error(`no mod starts sessions on ${task.device}, so the task did not start. Leave device out to start it on ${here.name}.`) : error
+        const candidates = onDevice.length > 0 ? onDevice : others
+        const { opened, runner } = await firstHolding(candidates, async (runner) => ({ opened: await runner.peer.request<TaskData>(`${sessionsInterface}.startTask`, [session, elsewhere, { project: project() }]), runner })).catch((error: unknown) => {
+          throw isNotHeld(error) ? new Error(`no mod starts sessions on ${task.device}, so the task did not start. Leave device out to start it on ${here.name}.`) : error
         })
         const started: TaskData = { ...asked, id: opened.id, title: elsewhere.title }
         await claude.fs.write(`${backgroundTasks}/${session}/${started.id}.json`, JSON.stringify(started))
         dispatch(conversation.startTask(started))
+        watchTask(started.id, runner)
         return started
       }
     }
@@ -910,17 +929,11 @@ export function serveConversations({
   const fields = (request: Request, keys: readonly string[]) => Object.fromEntries(keys.flatMap((key) => (request[key] === undefined ? [] : [[key, request[key]]])))
 
   const sessionNamed = async (id: string): Promise<SessionData> => {
-    const lookedUp = (client: Pick<RpcClient, 'request'>) =>
-      client.request<SessionData>(`${sessionsInterface}.session`, [id]).catch(async (error: unknown) => {
-        if (!(error instanceof RpcError && error.code === rpcCodes.methodNotFound)) throw error
-        const listed = (await client.request<SessionData[]>(`${sessionsInterface}.sessions`, [{ everyProject: true }])).find((each) => each.id === id)
-        if (listed === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${id} on this provider.`)
-        return listed
-      })
-    const found = await firstHolding(lookedUp).catch((error: unknown) => {
-      throw isNotHeld(error) ? new Error(`no session ${id} on any of your devices.`) : error
-    })
-    return found.id === session ? { ...found, isRunning: true } : found
+    for (const client of await providers()) {
+      const found = await findSession(sessionsAsk(client), id)
+      if (found !== undefined) return found.id === session ? { ...found, isRunning: true } : found
+    }
+    throw new Error(`no session ${id} on any of your devices.`)
   }
 
   const methods: Readonly<Record<string, (request: Request, caller: string | undefined) => Promise<unknown>>> = {

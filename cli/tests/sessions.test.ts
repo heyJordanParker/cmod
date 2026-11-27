@@ -222,6 +222,25 @@ test.concurrent("cmod serve stops the background session whose cmod plugin asks 
   expect((await readFile(join(home, 'stopped'), 'utf8')).trimEnd().split('\n')).toEqual([String(servePid), 'stop', '515854d9'])
 })
 
+test.concurrent('cmod sessions end stops a background session no cmod plugin holds yet with claude stop, and refuses any other session no cmod plugin holds', async () => {
+  const background = '515854d9-0c1a-4f2e-9d3b-6a7e8f901234'
+  const { home, servePid, stop } = await servedSessions({})
+  const started = await startOf(process.pid)
+  await writeFiles(home, {
+    'bin/claude': '#!/bin/sh\n[ "$1" = stop ] || exit 1\nprintf \'%s\\n\' "$PPID" "$@" > "$HOME/stopped"\necho "stopped $2"\n',
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: background, cwd: home, procStart: started, kind: 'bg', jobId: '515854d9' }),
+    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 'worker', cwd: home, procStart: started, kind: 'interactive' }),
+  })
+
+  const ended = await cmodWith(home, outside, 'sessions', 'end', background)
+  const refused = await cmodWith(home, outside, 'sessions', 'end', 'worker')
+  stop()
+
+  expect(ended).toEqual({ exitCode: 0, stdout: `Session ${background} ends now.\n`, stderr: '' })
+  expect((await readFile(join(home, 'stopped'), 'utf8')).trimEnd().split('\n')).toEqual([String(servePid), 'stop', '515854d9'])
+  expect(refused).toEqual({ exitCode: 1, stdout: '', stderr: 'cmod sessions: Session worker runs, but no cmod plugin in it reaches cmod serve, so it takes no end, and cmod starts no copy of it. Run /reload-plugins in it.\n' })
+})
+
 test.concurrent("cmod terminal reads, types into, and shows a session's terminal through the program that provides cmod/Terminal", async () => {
   const { home, stop } = await servedSessions({})
   await writeFiles(home, {
