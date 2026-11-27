@@ -366,29 +366,35 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
           const choices =
             reporting === key
               ? [
-                  Button({ plain: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
+                  Button({ plain: true, dimColor: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
                   ...(entry.contact === undefined ? [] : [reportLink(`report-link:${key}`, entry.contact, entry.mod, entry.message, logReport(entry))]),
                   Button({ plain: true, dimColor: true, key: `back:${key}`, label: 'Back', onPress: () => void (mod.state.memory.reporting = null) }),
                 ]
               : [
-                  Button({ plain: true, key: `copy:${key}`, label: 'Copy', onPress: () => copy(entry) }),
-                  Button({ plain: true, key: `report:${key}`, label: 'Report', onPress: () => void (mod.state.memory.reporting = key) }),
+                  Button({ plain: true, dimColor: true, key: `copy:${key}`, label: 'Copy', onPress: () => copy(entry) }),
+                  Button({ plain: true, dimColor: true, key: `report:${key}`, label: 'Report', onPress: () => void (mod.state.memory.reporting = key) }),
                 ]
           return Box({
             key: `log:${key}`,
             flexDirection: 'column',
             children: [
-              Text({
-                wrap: 'truncate-end',
+              Box({
+                justifyContent: 'space-between',
+                columnGap: 2,
                 children: [
-                  Text({ bold: true, children: entry.mod }),
-                  ...(entry.level === 'warning' ? [' ', Badge({ tone: 'warning', children: 'warning' })] : []),
-                  Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ''}` }),
+                  Box({
+                    columnGap: 1,
+                    minWidth: 0,
+                    children: [
+                      Box({ columnGap: 1, flexShrink: 0, children: [Text({ bold: true, children: entry.mod }), ...(entry.level === 'warning' ? [Badge({ tone: 'warning', children: 'warning' })] : [])] }),
+                      Text({ dimColor: true, wrap: 'truncate-end', children: `${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ''}` }),
+                    ],
+                  }),
+                  Box({ columnGap: 2, flexShrink: 0, children: choices }),
                 ],
               }),
               Text({ wrap: 'wrap', children: entry.message }),
               ...(entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: 'truncate-end', children: versionsLine(entry.versions) })]),
-              Box({ gap: 2, flexWrap: 'wrap', children: choices }),
             ],
           })
           }),

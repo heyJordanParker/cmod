@@ -435,7 +435,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.11.0";
+var coreVersion = "8.11.1";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -11069,7 +11069,8 @@ ${String(asked.input.session)}`, asked);
     }
     if (event === "classic.UserPromptSubmit" && phase === "active" && !hasHeardSessionStart) {
       const { session_id, transcript_path, cwd } = e;
-      await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: "SessionStart", source: "resume" });
+      if (session_id === await claude().session.id())
+        await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: "SessionStart", source: "resume" });
     }
     const answer = router.dispatch(event, e, next, signal);
     const render = e;
@@ -11493,6 +11494,8 @@ async function createMod(definition, runtime) {
   router.add("classic.UserPromptSubmit", async (e, next) => {
     staleCwd = undefined;
     await followSession();
+    if (e.session_id !== await claude.session.id())
+      return next(e);
     const isPerson = e.source === undefined || e.source === "user" || e.source === "sdk";
     await followCurrent(e.session_id, e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === "" ? firstLine(e.prompt) : undefined)).catch((error) => report({ id: "cmod:current", message: "Kept the details of the session from before", error }));
     return next(e);
@@ -12163,7 +12166,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12447,28 +12450,34 @@ function settings2(mod) {
           ...log.slice((page - 1) * logPageSize, page * logPageSize).map((entry) => {
             const key = `${entry.mod}/${entry.id}`;
             const choices = reporting === key ? [
-              Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
+              Button({ plain: true, dimColor: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
               ...entry.contact === undefined ? [] : [reportLink(`report-link:${key}`, entry.contact, entry.mod, entry.message, logReport(entry))],
               Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
             ] : [
-              Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
-              Button({ plain: true, key: `report:${key}`, label: "Report", onPress: () => void (mod.state.memory.reporting = key) })
+              Button({ plain: true, dimColor: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
+              Button({ plain: true, dimColor: true, key: `report:${key}`, label: "Report", onPress: () => void (mod.state.memory.reporting = key) })
             ];
             return Box({
               key: `log:${key}`,
               flexDirection: "column",
               children: [
-                Text({
-                  wrap: "truncate-end",
+                Box({
+                  justifyContent: "space-between",
+                  columnGap: 2,
                   children: [
-                    Text({ bold: true, children: entry.mod }),
-                    ...entry.level === "warning" ? [" ", Badge({ tone: "warning", children: "warning" })] : [],
-                    Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
+                    Box({
+                      columnGap: 1,
+                      minWidth: 0,
+                      children: [
+                        Box({ columnGap: 1, flexShrink: 0, children: [Text({ bold: true, children: entry.mod }), ...entry.level === "warning" ? [Badge({ tone: "warning", children: "warning" })] : []] }),
+                        Text({ dimColor: true, wrap: "truncate-end", children: `${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
+                      ]
+                    }),
+                    Box({ columnGap: 2, flexShrink: 0, children: choices })
                   ]
                 }),
                 Text({ wrap: "wrap", children: entry.message }),
-                ...entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: "truncate-end", children: versionsLine(entry.versions) })],
-                Box({ gap: 2, flexWrap: "wrap", children: choices })
+                ...entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: "truncate-end", children: versionsLine(entry.versions) })]
               ]
             });
           }),
@@ -12588,10 +12597,10 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
-var historyMemory = { history: null, historyError: null };
+var historyMemory = { history: null, historyError: null, historyOf: null };
 var reloadQuietMs = 1000;
 var agentTools2 = new Set(["Agent", "Task"]);
 var summaryKeys = ["command", "file_path", "path", "pattern", "url", "description", "query", "skill", "prompt"];
@@ -12679,6 +12688,7 @@ function history(mod, isShown) {
   };
   const load = async () => {
     const current = sessions.current;
+    mod.state.memory.historyOf = current.id;
     const [turns, all, tasks] = await Promise.all([current.turns(), messagesOf(current), current.goal.tasks()]);
     const own = all.filter((message) => message.task === undefined);
     messages.clear();
@@ -12756,12 +12766,12 @@ function history(mod, isShown) {
   const draw = () => {
     const { history: entries, historyError } = mod.state.memory;
     const { find, shown } = mod.state.session.historyView;
-    if (entries === null && historyError === null && loading === undefined)
+    if (mod.state.memory.historyOf !== sessions.current.id && loading === undefined)
       refresh();
-    const finder = Input({ key: "history:find", label: "Find", value: find, placeholder: "Find a prompt", submitLabel: "find", onInput: (text) => change({ find: text }), onSubmit: (text) => change({ find: text }) });
+    const finder = Input({ key: "history:find", value: find, placeholder: "Find a prompt", submitLabel: "find", onInput: (text) => change({ find: text }), onSubmit: (text) => change({ find: text }) });
     const body = () => {
       if (historyError !== null)
-        return Banner({ tone: "critical", children: historyError });
+        return Banner({ tone: "critical", children: historyError, actions: [Button({ key: "history:retry", label: "Try again", onPress: refresh })] });
       if (entries === null)
         return Text({ dimColor: true, children: "Reading the conversation…" });
       if (entries.length === 0)
@@ -12777,7 +12787,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13063,7 +13073,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13093,7 +13103,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13600,7 +13610,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-8N35Gs/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-NgV7rS/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
