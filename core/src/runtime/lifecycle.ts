@@ -733,7 +733,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     }
     if (event === 'classic.UserPromptSubmit' && phase === 'active' && !hasHeardSessionStart) {
       const { session_id, transcript_path, cwd } = e as Frozen<Args<'classic.UserPromptSubmit'>>
-      await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: 'SessionStart', source: 'resume' })
+      if (session_id === (await claude().session.id())) await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: 'SessionStart', source: 'resume' })
     }
     const answer = router.dispatch(event, e, next, signal)
     const render = e as Frozen<Args<'ui.render'>>
@@ -1149,6 +1149,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   router.add('classic.UserPromptSubmit', async (e, next) => {
     staleCwd = undefined
     await followSession()
+    if (e.session_id !== (await claude.session.id())) return next(e)
     const isPerson = e.source === undefined || e.source === 'user' || e.source === 'sdk'
     await followCurrent(e.session_id, e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === '' ? firstLine(e.prompt) : undefined)).catch((error: unknown) => report({ id: 'cmod:current', message: 'Kept the details of the session from before', error }))
     return next(e)

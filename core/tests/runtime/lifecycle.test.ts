@@ -1342,6 +1342,24 @@ test('a mod loaded mid-session, which hears no SessionStart, runs its session-st
   expect(starts).toEqual(['resume'])
 })
 
+test("a mod loaded mid-session, as /reload-plugins loads it, whose first prompt is a fork's starts on the session the process runs, at that session's next prompt", async () => {
+  const fake = fakeClaude({ name: 'demo', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const starts: string[] = []
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => void starts.push(sessions.current.id)) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+  const own = await fake.claude.session.id()
+
+  await fire(lifecycle, 'classic.UserPromptSubmit', { ...sessionStart('startup'), session_id: 'fork-session', hook_event_name: 'UserPromptSubmit', prompt: 'a side question' }, {})
+  await fake.settle()
+  const afterFork = [...starts]
+  await fire(lifecycle, 'classic.UserPromptSubmit', { ...sessionStart('startup'), session_id: own, hook_event_name: 'UserPromptSubmit', prompt: 'hello' }, {})
+  await fake.settle()
+
+  expect([afterFork, starts, sessions.current.id]).toEqual([[], [own], own])
+})
+
 const recordFile = '/home/.local/share/cmod/records/demo.json'
 
 function stoppedSession(firstOutcome: string, code: number) {

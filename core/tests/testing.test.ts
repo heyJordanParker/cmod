@@ -171,6 +171,15 @@ test("after /resume to another session, sessions.current.id and the view name th
   expect((await tested.shown.view.lines()).join('\n')).toContain('This session: resumed-session')
 })
 
+test('a prompt that names another session, as a fork inside the process sends, leaves sessions.current on the session the process runs', async () => {
+  const tested = testMod(defineMod({ name: 'demo', setup: () => undefined }))
+  await tested.start()
+
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'a side question', session_id: 'fork-session' })
+
+  expect(sessions.current.id).toBe('test-session')
+})
+
 test("during a /resume's SessionStart, the session id the engine answers is the resumed one, though Claude Code 2.1.317's $.session.id() still answers the old one, so the cmod plugin acts on the resumed session in place instead of relaying to it", async () => {
   const answered: string[] = []
   const tested = testMod(

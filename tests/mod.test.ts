@@ -1080,6 +1080,22 @@ test('History reads only the messages after the last one it holds when the conve
   expect(after.split('Read src/auth.ts').length).toBe(2)
 })
 
+test('a History whose read failed shows the conversation once Try again reads it', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  await conversationWithTask(tested)
+  tested.fakes.serve.read = () => {
+    throw new Error('the index is busy')
+  }
+  await tested.type('/history')
+  const failed = await historyLines(tested)
+  answerIndex(tested)
+
+  await tested.shown.pane.press('history:retry')
+
+  expect(failed).toContain('The conversation did not load')
+  expect(await historyLines(tested)).toContain('fix the login bug')
+})
+
 test('pressing a row of History scrolls the conversation to that message', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   const scrolled: unknown[] = []

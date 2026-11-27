@@ -544,7 +544,7 @@ test("the dock of cmod's Herdr mod keeps showing the last Claude Code session's 
   expect(calledWith(herdr, 'cmod/UI.views')).toEqual([['worker'], ['other'], ['worker']])
 })
 
-test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing characters or runs of spaces, in the terminal font, and centers a row's buttons on its field", async () => {
+test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing characters or runs of spaces, in the terminal font, never a line whose spaces only sit around a badge, and centers a row's buttons on its field", async () => {
   const usageView = {
     $cmodElement: 'Box',
     props: {
@@ -552,6 +552,7 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
       children: [
         { $cmodElement: 'Box', props: { gap: 2, children: [{ $cmodElement: 'Text', props: { children: 'jarvis          ' } }, { $cmodElement: 'Text', props: { color: 'inactive', children: '███' } }] } },
         { $cmodElement: 'Text', props: { children: ['jordan2   ', { $cmodElement: 'Text', props: { color: 'subtle', children: '██████' } }, { $cmodElement: 'Text', props: { dimColor: true, children: '╌╌╌' } }, ' 14% left'] } },
+        { $cmodElement: 'Text', props: { children: [{ $cmodElement: 'Text', props: { bold: true, children: 'cmod' } }, ' ', { $cmodElement: 'Badge', props: { tone: 'warning', children: 'warning' } }, { $cmodElement: 'Text', props: { dimColor: true, children: ' · 16:46' } }] } },
         { $cmodElement: 'Box', props: { columnGap: 2, flexWrap: 'wrap', children: [{ $cmodElement: 'Input', props: { key: 'demo/usage:find', label: 'Find', value: '' } }, { $cmodElement: 'Button', props: { plain: true, key: 'demo/usage:filter', label: 'Show: All', onPress: { $cmodHandler: 3 } } }] } },
       ],
     },
@@ -565,16 +566,17 @@ test("cmod's Herdr mod keeps text that lays out in cells, block and box-drawing 
   const chartRow = drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.nodes.includes('jordan2   ')))
   expect([chartRow?.calls['font_family'], chartRow?.calls['whitespace_nowrap'], chartRow?.calls['flex_wrap']]).toEqual([['JetBrains Mono'], [], undefined])
   expect([row?.calls['items_center'], row?.calls['gap_y']]).toEqual([[], [8]])
+  expect(drawn.find((each) => each.nodes.some((node) => node instanceof Element && node.nodes.includes('cmod')))?.calls['font_family']).toBeUndefined()
 })
 
-test("cmod's Herdr mod centers a view that draws one sentence, in the muted color", async () => {
+test("cmod's Herdr mod draws a view of one sentence at its top left, in the muted color, as VS Code draws a view's welcome text", async () => {
   const herdr = await herdrWith({}, listing(() => ({ $cmodElement: 'Text', props: { dimColor: true, children: 'Run /rulebook to check every Prompt in this project.' } }), { views: [{ mod: 'rulebook', id: 'results', title: 'rulebook' }], pages: [] }))
   const root = herdr.render()
   const body = found(root, (each) => each.calls['id']?.[0] === 'cmod-note')[0]
   const note = found(root, (each) => each.nodes.includes('Run /rulebook to check every Prompt in this project.'))[0]
 
-  expect([body?.calls['items_center'], body?.calls['justify_center']]).toEqual([[], []])
-  expect([note?.calls['text_center'], note?.calls['text_color']]).toEqual([[], ['#muted']])
+  expect([body?.calls['items_center'], body?.calls['justify_center'], body?.calls['p']]).toEqual([undefined, undefined, [12]])
+  expect([note?.calls['text_center'], note?.calls['text_color']]).toEqual([undefined, ['#muted']])
 })
 
 test("cmod's Herdr mod draws a mod's page as T3 Code's settings do: tabs in sentence case, a Panel with actions as a header with its title and buttons, a labelled field as a row with its label at the left, and a field with no label across the row", async () => {

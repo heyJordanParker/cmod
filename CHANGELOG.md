@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.11.1] - 2026-11-27
+
+### Fixed
+- After `/reload-plugins`, a session's mods stay on that session when the first prompt they hear is a fork's, such as `/btw`'s. They moved to the fork, so History failed with `no session <id> on any of your devices`, and the Sidebar in Herdr said the session runs no cmod plugin and to run /reload-plugins.
+- History reads the conversation again when its session changes, and a failed read offers Try again, where the failure stayed on screen until the next message.
+- Herdr draws the Sidebar as Zed draws its panels: plain buttons with no border, one height for buttons, fields, and rows, list rows lined up with the text beside them, space above each section, and a view's one line of text at its top, where it sat alone in the middle of the pane. A Log entry keeps Copy and Report at the end of its first line, and its line no longer turns to the terminal font.
+- History's search is one field across the Sidebar, where a Find label took half of it.
+
 ## [8.11.0] - 2026-11-27
 
 ### Added

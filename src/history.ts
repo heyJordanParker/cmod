@@ -19,14 +19,14 @@ export type HistoryEntry = {
 
 export type HistoryState = {
   readonly session: { historyView: { find: string; opened: readonly string[]; shown: number } }
-  readonly memory: { history: readonly HistoryEntry[] | null; historyError: string | null }
+  readonly memory: { history: readonly HistoryEntry[] | null; historyError: string | null; historyOf: string | null }
 }
 
 export const pageRows = 50
 
 export const historySession: HistoryState['session'] = { historyView: { find: '', opened: [], shown: pageRows } }
 
-export const historyMemory: HistoryState['memory'] = { history: null, historyError: null }
+export const historyMemory: HistoryState['memory'] = { history: null, historyError: null, historyOf: null }
 
 export type HistoryView = { readonly title: string; draw(): JSX.Element; refresh(): void }
 
@@ -127,6 +127,7 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
 
   const load = async () => {
     const current = sessions.current
+    mod.state.memory.historyOf = current.id
     const [turns, all, tasks] = await Promise.all([current.turns(), messagesOf(current), current.goal.tasks()])
     const own = all.filter((message) => message.task === undefined)
     messages.clear()
@@ -211,10 +212,10 @@ export function history<State extends HistoryState>(mod: Mod<State>, isShown: ()
   const draw = (): JSX.Element => {
     const { history: entries, historyError } = mod.state.memory
     const { find, shown } = mod.state.session.historyView
-    if (entries === null && historyError === null && loading === undefined) refresh()
-    const finder = Input({ key: 'history:find', label: 'Find', value: find, placeholder: 'Find a prompt', submitLabel: 'find', onInput: (text: string) => change({ find: text }), onSubmit: (text: string) => change({ find: text }) })
+    if (mod.state.memory.historyOf !== sessions.current.id && loading === undefined) refresh()
+    const finder = Input({ key: 'history:find', value: find, placeholder: 'Find a prompt', submitLabel: 'find', onInput: (text: string) => change({ find: text }), onSubmit: (text: string) => change({ find: text }) })
     const body = (): JSX.Element => {
-      if (historyError !== null) return Banner({ tone: 'critical', children: historyError })
+      if (historyError !== null) return Banner({ tone: 'critical', children: historyError, actions: [Button({ key: 'history:retry', label: 'Try again', onPress: refresh })] })
       if (entries === null) return Text({ dimColor: true, children: 'Reading the conversation…' })
       if (entries.length === 0) return Text({ dimColor: true, wrap: 'wrap', children: 'Each prompt you send shows here, with what Claude did for it.' })
       const { rows, earlier } = visible(entries)
