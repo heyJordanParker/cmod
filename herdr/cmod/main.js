@@ -544,7 +544,7 @@ export default class Cmod extends View {
     return v_flex().id("cmod-empty").flex_1().min_h(0).gap(UI.space.xs).p(UI.space.md)
       .child(div().role("heading").accessibility_label(title).font_semibold().child(title))
       .child(div().role("label").accessibility_label(text).max_w(UI.note).text_color(t.muted).child(text))
-      .when(action !== undefined, (el) => el.child(div().pt(UI.space.sm).child(this.control(Button.new("cmod-empty-action"), "filled", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
+      .when(action !== undefined, (el) => el.child(div().pt(UI.space.sm).self_start().child(this.control(Button.new("cmod-empty-action"), "filled", t).accessibility_label(action?.label ?? "").on_click((_event, cx) => action?.run(cx)).child(action?.label ?? ""))));
   }
 
   alert(text, t) {

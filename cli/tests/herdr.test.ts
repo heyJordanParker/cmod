@@ -836,7 +836,9 @@ test("cmod's Herdr mod shows why a session shows nothing in place of its views, 
     if (!isHeld) throw new Error(refusal)
     return named(method, params)
   })
-  const refused = labelled(herdr.render())
+  const refusedRoot = herdr.render()
+  const refused = labelled(refusedRoot)
+  const action = found(refusedRoot, (each) => each.nodes.some((node) => node instanceof Element && node.kind === 'Button'))[0]
 
   isHeld = true
   herdr.tell('Change', { session: 'worker', part: 'views' })
@@ -847,6 +849,7 @@ test("cmod's Herdr mod shows why a session shows nothing in place of its views, 
     ['div', refusal],
     ['Button', 'Try again'],
   ])
+  expect(action?.calls['self_start']).toEqual([])
   expect(found(herdr.render(), (each) => each.nodes.includes('worker/cmod/dashboard'))).toHaveLength(1)
 })
 

@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.11.2] - 2026-11-27
+
+### Fixed
+- In Herdr, the Try again button under a session that shows no views keeps its own width, where it stretched across the Sidebar.
+
 ## [8.11.1] - 2026-11-27
 
 ### Fixed
