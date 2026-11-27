@@ -157,6 +157,25 @@ test.concurrent('cmod serve lists a session Claude Code records as waiting with 
   expect(stderr).toBe('')
 })
 
+test.concurrent('cmod serve tells one title Change and no status Change when the name Claude Code records for a running session changes', async () => {
+  const { home, client, nextHeard, heardAll, stopped } = await servedHome({ status: 'busy', name: 'Fix the login' })
+
+  await client.request('$/listen', { id: '1', interface: 'cmod/Sessions', event: 'Change', kind: 'on', args: ['older'] })
+  const renamed = nextHeard()
+  await writeFiles(home, { '.claude/sessions/1.json': olderRecord(home, { status: 'busy', name: 'Fix the signup' }) })
+  await renamed
+  const idle = nextHeard()
+  await writeFiles(home, { '.claude/sessions/1.json': olderRecord(home, { status: 'idle', name: 'Fix the signup' }) })
+  await idle
+  const { stderr } = await stopped()
+
+  expect(heardAll).toEqual([
+    { id: '1', payload: { session: 'older', part: 'title' }, cursor: '1' },
+    { id: '1', payload: { session: 'older', part: 'status' }, cursor: '2' },
+  ])
+  expect(stderr).toBe('')
+})
+
 test.concurrent('cmod serve answers the cmod/SessionStore and cmod/Session names a cmod plugin from 7.0.0 calls, and refuses its listener on another session', async () => {
   const { home, client, stop } = await servedHome()
 
@@ -269,6 +288,57 @@ test.concurrent('cmod serve reads a session record Claude Code left with bytes a
   expect(running.map(({ id, status }) => ({ id, status }))).toEqual([{ id: 'older', status: 'idle' }])
   expect({ id: found.id, isRunning: found.isRunning, status: found.status }).toEqual({ id: 'older', isRunning: true, status: 'idle' })
   expect(missing).toBe('No session gone on this computer.')
+})
+
+const answeredTranscript = (session: string, folder: string) =>
+  [
+    { type: 'user', uuid: `${session}-u`, sessionId: session, timestamp: '2026-11-19T10:00:00.000Z', cwd: folder, message: { role: 'user', content: 'Deploy the app' } },
+    { type: 'assistant', uuid: `${session}-a`, sessionId: session, timestamp: '2026-11-19T10:00:02.000Z', cwd: folder, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Deployed to production.\nDetails follow.' }] } },
+    { type: 'system', subtype: 'turn_duration', uuid: `${session}-d`, sessionId: session, timestamp: '2026-11-19T10:00:03.000Z', cwd: folder, durationMs: 3000 },
+  ]
+    .map((row) => `${JSON.stringify(row)}\n`)
+    .join('')
+
+test.concurrent("cmod serve lists a running session no cmod plugin holds with the last turn its index holds, so an older cmod plugin's session still shows its reply", async () => {
+  const { home, folder, client, stop } = await servedHome()
+  await writeFiles(home, { [`${folder}/older.jsonl`]: answeredTranscript('older', project(home)) })
+
+  const [listed] = await client.request<readonly { readonly lastTurn?: unknown }[]>('cmod/Sessions.sessions', [{ project: project(home), running: true }])
+  const found = await client.request<{ readonly lastTurn?: unknown }>('cmod/Sessions.session', ['older'])
+  stop()
+
+  expect(listed?.lastTurn).toEqual({ reason: 'answered', at: '2026-11-19T10:00:03.000Z', reply: 'Deployed to production.' })
+  expect(found.lastTurn).toEqual({ reason: 'answered', at: '2026-11-19T10:00:03.000Z', reply: 'Deployed to production.' })
+})
+
+test.concurrent('cmod serve lists the last turn a holding cmod plugin tells over the one its index holds', async () => {
+  const { home, folder, client, stop } = await servedHome()
+  await writeFiles(home, { [`${folder}/older.jsonl`]: answeredTranscript('older', project(home)) })
+  await client.request('$/hold', { session: 'older', project: project(home), cwd: project(home) })
+  await client.request('$/status', { session: 'older', status: 'idle', lastTurn: { reason: 'stopped', at: '2026-11-19T10:05:00.000Z' } })
+
+  const [listed] = await client.request<readonly { readonly lastTurn?: unknown }[]>('cmod/Sessions.sessions', [{ project: project(home), running: true }])
+  stop()
+
+  expect(listed?.lastTurn).toEqual({ reason: 'stopped', at: '2026-11-19T10:05:00.000Z' })
+})
+
+test.concurrent('cmod serve lists a running session a cmod plugin holds with no last turn from its index and leaves its transcript unread in full, and a running one no plugin holds with its index last turn', async () => {
+  const { home, folder, client, stop } = await servedHome()
+  await writeFiles(home, { [`${folder}/older.jsonl`]: answeredTranscript('older', project(home)), [`${folder}/held.jsonl`]: answeredTranscript('held', project(home)) })
+  await client.request('$/hold', { session: 'held', project: project(home), cwd: project(home) })
+  await client.request('$/status', { session: 'held', status: 'idle' })
+
+  const listed = await client.request<readonly { readonly id: string; readonly lastTurn?: unknown }[]>('cmod/Sessions.sessions', [{ project: project(home), running: true }])
+  const found = await client.request<{ readonly lastTurn?: unknown }>('cmod/Sessions.session', ['held'])
+  const index = new Database(join(home, '.local/share/cmod/history-14.sqlite'), { readonly: true })
+  const heldMessages = index.query<{ count: number }, []>("select count(*) as count from messages where session = 'held'").get()?.count
+  index.close()
+  stop()
+
+  expect(Object.fromEntries(listed.map(({ id, lastTurn }) => [id, lastTurn]))).toEqual({ held: undefined, older: { reason: 'answered', at: '2026-11-19T10:00:03.000Z', reply: 'Deployed to production.' } })
+  expect(found.lastTurn).toBeUndefined()
+  expect(heldMessages).toBe(0)
 })
 
 test.concurrent("cmod serve reads and types into the herdr-core terminal that runs a session's process, though no cmod plugin in the session reaches it, and answers not held for a session no terminal of this computer runs", async () => {

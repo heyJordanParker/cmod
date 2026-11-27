@@ -1,5 +1,5 @@
 ---
-name: mods
+name: manage-mods
 description: Install, update, configure, and fix Claude Code mods and plugins with the cmod command. Install or remove one, turn it on or off, set an option or a hotkey, keep a secret, read the Log of failures, and press any control in Settings or a mod's view. TRIGGER when the person wants a mod installed, changed, turned off, or fixed, when a mod's toast or failure shows up, or when a task needs a mod's setting. DO NOT TRIGGER to write a mod's code; use /cmod:build-mod.
 allowed-tools: Bash(cmod list:*), Bash(cmod log:*), Bash(cmod options:*), Bash(cmod ui:*), Bash(cmod sessions list:*)
 ---

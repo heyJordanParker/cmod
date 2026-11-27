@@ -83,7 +83,8 @@ type Session = {
   readonly status?: 'busy' | 'shell' | 'idle' | 'waiting'
   readonly waitingFor?: { dialog: string; tool?: string; input?: Record<string, unknown>; question?: string }
   readonly contextPercent?: number
-  readonly lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string }
+  readonly lastTurn?: { reason: 'answered' | 'stopped' | 'failed'; at: string; failure?: string; reply?: string }
+  readonly openCall?: { tool: string; summary: string }
   readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
@@ -116,8 +117,9 @@ type Session = {
 - `status` is what a running session does now, as Claude Code records it: `busy` while a turn runs, `waiting` while a dialog waits on the person, `shell` while a command a stopped turn left runs in its terminal, and `idle` between turns. A session whose Claude Code records none has the one its cmod plugin hears: `busy` from a turn's start to its end, `waiting` while a permission prompt or a question is open, else `idle`. An ended session, a task's `owner`, and `sessions.current` have none.
 - `waitingFor` is what a `waiting` session waits on. `dialog` is Claude Code's name for it, such as `permission prompt`, `input needed`, or `dialog open`. A permission prompt for a tool call adds the call's `tool` and `input`, and an `AskUserQuestion` call adds its first `question`.
 - `contextPercent` is how full the session's context window is, in percent, from its `usage()` after each turn. A session before its first answer has none.
-- `lastTurn` is how the session's last main turn ended, as its cmod plugin hears it: `answered`, `stopped` when the person stopped it with Esc or an app's `abort`, or `failed` with the `failure` text Claude Code gave, and `at`, the ISO time it ended. A turn stopped with Esc has no ending in its transcript until the next prompt, so only the cmod plugin's hooks hear it. A running turn, a session whose cmod plugin has heard no turn end since it started, and an ended session have none.
-- `cmod/Sessions` tells a `Change` of `part: 'status'` whenever a session's `status`, `waitingFor`, `contextPercent`, or `lastTurn` changes.
+- `lastTurn` is how the session's last main turn ended, as its cmod plugin hears it: `answered`, `stopped` when the person stopped it with Esc or an app's `abort`, or `failed` with the `failure` text Claude Code gave, and `at`, the ISO time it ended. An `answered` turn adds `reply`, the first line of Claude's last answer in it. A running session no cmod plugin holds takes it from its transcript: `answered`, with `reply`, once its last main turn ended. A turn stopped with Esc has no ending in its transcript until the next prompt, so only the cmod plugin's hooks hear it. A running turn and an ended session have none.
+- `openCall` is the tool call the session's main agent runs now, as its cmod plugin hears it: its `tool`, such as `Bash`, and `summary`, the first line of its command, file, pattern, URL, query, question, description, or prompt. It goes away once the call returns. An `idle` session, a session between calls, and an ended session have none.
+- `cmod/Sessions` tells a `Change` of `part: 'status'` whenever a session's `status`, `waitingFor`, `contextPercent`, `lastTurn`, or `openCall` changes, and one of `part: 'title'` when the name Claude Code records for a running session changes.
 
 ### Read a record
 

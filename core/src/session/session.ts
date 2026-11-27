@@ -177,7 +177,8 @@ export type Session = Pick<RecordPart, 'search'> & {
   readonly status?: 'busy' | 'shell' | 'idle' | 'waiting'
   readonly waitingFor?: { readonly dialog: string; readonly tool?: string; readonly input?: Readonly<Record<string, unknown>>; readonly question?: string }
   readonly contextPercent?: number
-  readonly lastTurn?: { readonly reason: 'answered' | 'stopped' | 'failed'; readonly at: string; readonly failure?: string }
+  readonly lastTurn?: { readonly reason: 'answered' | 'stopped' | 'failed'; readonly at: string; readonly failure?: string; readonly reply?: string }
+  readonly openCall?: { readonly tool: string; readonly summary: string }
   readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>

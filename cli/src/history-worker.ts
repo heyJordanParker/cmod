@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite'
+import { SQLiteError, type Database } from 'bun:sqlite'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { getSession, listSessions, openHistory, readContexts, readGoal, readMessages, readState, readTasks, readTurns, removeSession, searchMessages, type IndexAnswer, type IndexCall } from './history.js'
 
@@ -22,6 +22,6 @@ self.onmessage = ({ data: { id, method, args } }: MessageEvent<IndexCall>) => {
     const run = methods[method as keyof IndexMethods] as (db: Database, ...args: readonly unknown[]) => unknown
     answer({ id, value: run((db ??= openHistory()), ...args) })
   } catch (error) {
-    answer({ id, error: messageOf(error) })
+    answer({ id, error: error instanceof SQLiteError && error.code !== undefined ? `${messageOf(error)} (${error.code})` : messageOf(error) })
   }
 }

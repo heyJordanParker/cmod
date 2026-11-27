@@ -29,6 +29,7 @@ export type SessionData = {
   readonly waitingFor?: Session['waitingFor']
   readonly contextPercent?: number
   readonly lastTurn?: Session['lastTurn']
+  readonly openCall?: Session['openCall']
 }
 
 export type ContextData = Pick<Context, 'number' | 'openedAt' | 'closedAt' | 'task'>

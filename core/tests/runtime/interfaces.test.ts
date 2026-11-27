@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { defineMod, provide, providers, sessions, type Provided } from '../../src/mod.js'
-import { createProviders, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, methodName, programConnection, programsInterface, providerActs, providerHoldMs, routeSessions, serveProviders, showLeaseMs, storeInterface, uiInterface, type ProgramReach, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
+import { createProviders, findSession, interfaceListeners, interfaceMethods, interfaceServer, listeningOf, listenMethod, methodName, onMethod, programConnection, programsInterface, providerActs, providerHoldMs, routeSessions, serveProviders, showLeaseMs, storeInterface, uiInterface, unlistenMethod, type Heard, type Listening, type ProgramReach, type ProviderIdentity, type ServedProviders, type SessionComputer, type SessionTerminals } from '../../src/runtime/interfaces.js'
 import { addressCall, connectRpc, RpcError, rpcCodes, rpcRoutes, type HttpFetch, type RpcHttpAnswer, type RpcRoutes } from '../../src/runtime/rpc.js'
 import { didNotAnswer } from '../../src/runtime/dependencies.js'
 import { testMod } from '../../src/testing.js'
@@ -753,6 +753,31 @@ test("a session's listener on a provider that is not there yet, as after cmod se
   serve.close()
 })
 
+test('two on listeners of one Change whose matchers name the same keys in another order share one $/listen, each hears every payload past the other throwing, and only the last removal sends $/unlisten', async () => {
+  const sent: unknown[] = []
+  const peer = { request: async (method: string, params?: unknown) => (sent.push([method, params]), {}) as never }
+  let reported: (error: unknown) => void = () => undefined
+  const isReported = new Promise<unknown>((resolve) => (reported = resolve))
+  const listeners = interfaceListeners({ report: (error) => reported(error) })
+  const heard: unknown[] = []
+  const first = listeners.listen(peer, listeningOf('cmod/Sessions', 'on', 'Change', ['s1'], { session: 's1', part: 'running' }), () => {
+    throw new Error('The first listener broke.')
+  })
+  const second = listeners.listen(peer, listeningOf('cmod/Sessions', 'on', 'Change', ['s1'], { part: 'running', session: 's1' }), (payload) => void heard.push(payload))
+  const listened = [...sent]
+
+  void listeners.handler(onMethod, { id: '1', payload: { session: 's1', part: 'running' } } satisfies Heard, new AbortController().signal)
+  first.remove()
+  const afterFirst = [...sent]
+  second.remove()
+
+  expect(listened).toEqual([[listenMethod, { interface: 'cmod/Sessions', event: 'Change', kind: 'on', args: ['s1'], matcher: { session: 's1', part: 'running' }, id: '1' }]])
+  expect(heard).toEqual([{ session: 's1', part: 'running' }])
+  expect(String(await isReported)).toBe('Error: The first listener broke.')
+  expect(afterFirst).toEqual(listened)
+  expect(sent).toEqual([...listened, [unlistenMethod, { id: '1' }]])
+})
+
 test('a listener added before its program answers reports nothing, and hears the program once it connects', async () => {
   const server = interfaceServer({ implementations: { 'demo/Platform': { machines: () => [] } } })
   const routes = rpcRoutes({ handle: (connection) => server.handler(connection), now: () => Date.now() })
@@ -902,9 +927,9 @@ const macDevice = { id: 'mac-id', name: 'mac' }
 
 const devboxDevice = { id: 'devbox-id', name: 'devbox' }
 
-function linkedDevices(devboxComputer: Computer = noSessions, macComputer: Computer = noSessions) {
+function linkedDevices(devboxComputer: Computer = noSessions, macComputer: Computer = noSessions, devboxInstances: Readonly<Record<string, string>> = {}) {
   const mac = servedComputer({}, {}, { device: macDevice, computer: macComputer })
-  const devbox = servedComputer({}, {}, { device: devboxDevice, computer: devboxComputer })
+  const devbox = servedComputer({}, devboxInstances, { device: devboxDevice, computer: devboxComputer })
   const sent: { readonly from: string; readonly message: unknown }[] = []
   const carriers = new Map<string, { readonly served: ServedProviders; flush(): Promise<unknown> }>()
   let answered: () => void = () => undefined
@@ -1153,6 +1178,36 @@ test('a send to a session whose cmod plugin answers its act only once the runnin
   serve.close()
 })
 
+test('findSession reads one session from a sessions provider, from its session list in the scope it is given when its cmod is older than 8.8.0, and answers undefined when the provider holds no such session', async () => {
+  const worker = sessionNamed('worker', true)
+  const asked: unknown[] = []
+  const current = async (method: string, args: readonly unknown[]) => {
+    asked.push([method, args])
+    if (args[0] === 'worker') return worker
+    throw new RpcError(rpcCodes.notHeld, `No session ${String(args[0])} on this computer.`)
+  }
+  const older = async (method: string, args: readonly unknown[]) => {
+    asked.push([method, args])
+    if (method === 'session') throw new RpcError(rpcCodes.methodNotFound, 'cmod serve answers no cmod/Sessions.session.')
+    return [worker]
+  }
+  const broken = async () => Promise.reject(new RpcError(rpcCodes.internal, 'The conversation index is locked.'))
+
+  expect(await findSession(current, 'worker')).toEqual(worker)
+  expect(await findSession(current, 'gone')).toBeUndefined()
+  expect(await findSession(older, 'worker')).toEqual(worker)
+  expect(await findSession(older, 'gone', { running: true })).toBeUndefined()
+  await expect(findSession(broken, 'worker')).rejects.toThrow('The conversation index is locked.')
+  expect(asked).toEqual([
+    ['session', ['worker']],
+    ['session', ['gone']],
+    ['session', ['worker']],
+    ['sessions', [{ everyProject: true }]],
+    ['session', ['gone']],
+    ['sessions', [{ everyProject: true, running: true }]],
+  ])
+})
+
 test("a send to a session that runs with no cmod plugin holding it stays queued, and its cmod plugin's $/hold delivers each queued mail once, in the order it was sent", async () => {
   const watched = watchedMail()
   const { serve, fetch, computer, reported } = servedComputer({}, {}, { computer: { ...noSessions, ...watched.mailbox, session: (id) => (id === 'worker' ? sessionNamed('worker', true) : undefined) } })
@@ -1291,10 +1346,191 @@ test('a message channel carries nothing while it is idle, across every lease of 
   await devices.settled()
   const sentIdle = devices.sent.length - sentLinked
   await session.mod.providers('demo/Echo')
+  const sentFirst = devices.sent.length - sentLinked
+  await session.mod.providers('demo/Echo')
 
   expect(sentIdle).toBe(0)
-  expect(devices.sent.length - sentLinked).toBe(2)
+  expect(sentFirst).toBe(2)
+  expect(devices.sent.length - sentLinked - sentFirst).toBe(0)
   await devices.close()
+})
+
+test("a program that starts providing an interface on another device lists at this computer's next providers call, once that device's cmod/Providers tells the Change", async () => {
+  const devices = linkedDevices()
+  const session = devices.connect(devices.mac, 'boat')
+  await devices.linked()
+  const before = (await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]
+  const watches = (await session.mod.providers('cmod/Providers')) as unknown as readonly ProvidersWatch[]
+  const heard = heardChanges(watches[0], 'demo/Echo')
+  await devices.settled()
+  const arrived = heard.nth(heard.changes.length + 1)
+
+  const program = devices.connect(devices.devbox, 'demo', { mod: 'demo', program: 'echo' })
+  program.served.provide('demo/Echo', { echo: (text: string) => text })
+  await arrived
+  const after = (await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]
+
+  expect(before).toEqual([])
+  expect(after.map((each) => [each.mod, each.program, each.device])).toEqual([['demo', 'echo', devboxDevice]])
+  expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  await devices.close()
+})
+
+test("a 7.0.0 program whose instance file on another device starts or stops naming an interface, with no $/provide, lists or leaves at this computer's next providers call once cmod/Programs.changed runs there", async () => {
+  const instances: Record<string, string> = {}
+  const devices = linkedDevices(noSessions, noSessions, instances)
+  const session = devices.connect(devices.mac, 'boat')
+  const holder = devices.connect(devices.devbox, 'holder')
+  await devices.linked()
+  const before = (await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]
+  const watches = (await session.mod.providers('cmod/Providers')) as unknown as readonly ProvidersWatch[]
+  const heard = heardChanges(watches[0], 'demo/Echo')
+  await devices.settled()
+  const started = heard.nth(heard.changes.length + 1)
+
+  instances['/store/instances/demo/echo.json'] = JSON.stringify({ address: 'unix:/store/echo.sock', pid: 1, started: '', provides: ['demo/Echo'] })
+  await holder.client.request(methodName(programsInterface, 'changed'), ['demo', 'echo'])
+  await started
+  const listed = (await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]
+  const stopped = heard.nth(heard.changes.length + 1)
+  delete instances['/store/instances/demo/echo.json']
+  await holder.client.request(methodName(programsInterface, 'changed'), ['demo', 'echo'])
+  await stopped
+  const after = (await session.mod.providers('demo/Echo')) as unknown as readonly Echo[]
+
+  expect(before).toEqual([])
+  expect(listed.map((each) => [each.mod, each.program, each.device])).toEqual([['demo', 'echo', devboxDevice]])
+  expect(after).toEqual([])
+  expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  await devices.close()
+})
+
+test("cmod serve asks another device for its providers again once that device's cmod serve links again, and once only", async () => {
+  const devices = linkedDevices()
+  const session = devices.connect(devices.mac, 'boat')
+  await devices.linked()
+  await session.mod.providers('demo/Echo')
+  const again = await devices.devboxAgain(async () => undefined)
+  await devices.settled()
+  const asked = linkSent(devices.sent, macDevice.id, providerActs.providers)
+
+  await session.mod.providers('demo/Echo')
+  await session.mod.providers('demo/Echo')
+
+  expect(linkSent(devices.sent, macDevice.id, providerActs.providers) - asked).toBe(1)
+  expect([...devices.mac.reported, ...again.reported]).toEqual([])
+  await devices.close()
+})
+
+function linkSent(sent: readonly { readonly from: string; readonly message: unknown }[], from: string, method: string, name?: string): number {
+  return sent.filter(({ from: sender, message }) => {
+    const { method: sentMethod, params } = message as { readonly method?: unknown; readonly params?: { readonly interface?: unknown } }
+    return sender === from && sentMethod === method && (name === undefined || params?.interface === name)
+  }).length
+}
+
+function changeListener(fetch: HttpFetch, listening: Omit<Listening, 'id'>) {
+  const heard: unknown[] = []
+  let told: () => void = () => undefined
+  const isTold = new Promise<void>((resolve) => (told = resolve))
+  const client = connectRpc({
+    call: addressCall(fetch, 'unix:/store/serve.sock'),
+    handle: async (method, params) => {
+      if (method !== onMethod) return null
+      heard.push((params as Heard).payload)
+      told()
+      return null
+    },
+    clock: retriesAtOnce,
+  })
+  return {
+    heard,
+    isTold,
+    client,
+    listen: () => client.request(listenMethod, { ...listening, id: 'change' }),
+    unlisten: () => client.request(unlistenMethod, { id: 'change' }),
+    caughtUp: () => client.request(providerActs.providers, { interface: 'demo/Echo', device: 'no-device' }),
+  }
+}
+
+test("ten connections that listen to one Change of another device's cmod/Sessions share one listener there: one $/listen crosses the link, each change crosses once and reaches all ten, and only the last removal sends $/unlisten", async () => {
+  const devices = linkedDevices()
+  await devices.linked()
+  await devices.settled()
+  const onDevbox = { mod: 'cmod', program: 'cmod', device: devboxDevice }
+  const listeners = Array.from({ length: 10 }, () => changeListener(devices.mac.fetch, { ...listeningOf('cmod/Sessions', 'on', 'Change', [], { part: 'goal' }), provider: onDevbox }))
+  for (const each of listeners) await each.listen()
+  await devices.settled()
+  const listened = linkSent(devices.sent, macDevice.id, listenMethod, 'cmod/Sessions')
+  const toldBefore = linkSent(devices.sent, devboxDevice.id, onMethod)
+
+  devices.devbox.serve.changed({ session: 'devbox-1', part: 'goal' })
+  await Promise.all(listeners.map((each) => each.isTold))
+  await devices.settled()
+  const told = linkSent(devices.sent, devboxDevice.id, onMethod) - toldBefore
+  for (const each of listeners.slice(0, 9)) await each.unlisten()
+  await devices.settled()
+  const unlistenedByNine = linkSent(devices.sent, macDevice.id, unlistenMethod)
+  await listeners[9]?.unlisten()
+  await devices.settled()
+
+  expect(listened).toBe(1)
+  expect(told).toBe(1)
+  expect(listeners.map((each) => each.heard)).toEqual(listeners.map(() => [{ session: 'devbox-1', part: 'goal' }]))
+  expect(unlistenedByNine).toBe(0)
+  expect(linkSent(devices.sent, macDevice.id, unlistenMethod)).toBe(1)
+  expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  for (const each of listeners) await each.client.close()
+  await devices.close()
+})
+
+test("two connections' before listeners on another device's provider stay two listeners there, and the provider's ask hears each one's answer", async () => {
+  const devices = linkedDevices()
+  const program = devices.connect(devices.devbox, 'rulebook', { mod: 'rulebook', program: 'rules' })
+  const rules = program.served.provide('demo/Rules', {})
+  await program.client.request('$/providers', { interface: 'demo/Rules' })
+  await devices.linked()
+  for (const name of ['modes', 'notes']) {
+    const session = devices.connect(devices.mac, name)
+    const [found] = (await session.mod.providers('demo/Rules')) as unknown as readonly Rules[]
+    found?.beforeCheck(() => ({ rules: { [name]: 'off' } }))
+    await session.client.request('$/providers', { interface: 'demo/Rules' })
+  }
+  await devices.settled()
+
+  const answered = await rules.ask('Check', { tool: 'Bash' })
+
+  expect(linkSent(devices.sent, macDevice.id, listenMethod, 'demo/Rules')).toBe(2)
+  expect(answered).toHaveLength(2)
+  expect(answered).toEqual(expect.arrayContaining([{ rules: { modes: 'off' } }, { rules: { notes: 'off' } }]))
+  expect([...devices.mac.reported, ...devices.devbox.reported]).toEqual([])
+  await devices.close()
+})
+
+test("cmod serve tells a cmod/Sessions listener with no matcher every Change but messages, and messages only to a listener whose matcher names that part, both as it tells and as it replays after a cursor", async () => {
+  const { serve, fetch, reported } = servedComputer()
+  const every = changeListener(fetch, listeningOf('cmod/Sessions', 'on', 'Change', [], undefined))
+  const transcripts = changeListener(fetch, listeningOf('cmod/Sessions', 'on', 'Change', [], { part: 'messages' }))
+  await every.listen()
+  await transcripts.listen()
+
+  for (const part of ['status', 'running', 'messages'] as const) serve.changed({ session: 's1', part })
+  const replayed = changeListener(fetch, { ...listeningOf('cmod/Sessions', 'on', 'Change', [], undefined), after: '0' })
+  await replayed.listen()
+  for (const each of [every, transcripts, replayed]) await each.caughtUp()
+
+  expect(every.heard).toEqual([
+    { session: 's1', part: 'status' },
+    { session: 's1', part: 'running' },
+  ])
+  expect(transcripts.heard).toEqual([{ session: 's1', part: 'messages' }])
+  expect(replayed.heard).toEqual([
+    { session: 's1', part: 'status' },
+    { session: 's1', part: 'running' },
+  ])
+  expect(reported).toEqual([])
+  for (const each of [every, transcripts, replayed]) await each.client.close()
+  serve.close()
 })
 
 test('a device on a message channel leaves providers once its cmod/Devices provider tells it is gone', async () => {
@@ -1675,4 +1911,22 @@ test("cmod serve tells a listener of cmod/Programs the program whose instance fi
 
   expect(found?.['mod']).toBe('cmod')
   expect(await heard).toEqual({ mod: 'demo', program: 'echo' })
+})
+
+test("a programChanged whose instance read fails still closes that program's exited connection, and reports the failure", async () => {
+  const instances: Record<string, string> = {}
+  const { serve, fetch, connect, reported } = servedComputer({}, instances, { hasExited: async (_mod, program) => program === 'dead' })
+  await rawProvider(fetch, 'dead')
+  const holder = connect('holder')
+  const listedBefore = (await serve.providers.list('demo/Echo')).map((each) => each.program)
+  instances['/store/instances/demo/dead.json'] = '{"pid": 41'
+
+  await holder.client.request(methodName(programsInterface, 'changed'), ['demo', 'dead'])
+  delete instances['/store/instances/demo/dead.json']
+
+  expect(listedBefore).toEqual(['dead'])
+  expect((await serve.providers.list('demo/Echo')).map((each) => each.program)).toEqual([])
+  expect(reported).toEqual([expect.stringContaining('SyntaxError')])
+  await holder.client.close()
+  serve.close()
 })

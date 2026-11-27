@@ -10,7 +10,7 @@ import { register } from '../hooks/register.js'
 import { cmodPlugin, type CmodPluginState } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'
 
-declare const Bun: { sleep(ms: number): Promise<void> }
+declare const Bun: { sleep(ms: number): Promise<void>; Glob: new (pattern: string) => { scanSync(options: { readonly cwd: string }): Iterable<string> }; file(path: string): { text(): Promise<string> } }
 
 type Answer = { exitCode: number; stdout: string; stderr: string }
 
@@ -904,6 +904,17 @@ test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0
   expect(ran).toEqual([`${cmodProgram} hotkeys set /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkeys set /test/plugins/cmod settings meta+m`, `${cmodProgram} hotkeys set /test/plugins/cmod history meta+h`])
   expect(tested.state.global.boundHotkeys).toEqual(['sidebar', 'settings', 'history'])
   expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'cmod--history', 'mods', 'history']))
+})
+
+test("no command the cmod plugin registers shares its name with one of the cmod plugin's Skills, because Claude Code refuses that command at every session start", async () => {
+  const skills = `${(import.meta as ImportMeta & { readonly dir: string }).dir}/../skills/`
+  const named = await Promise.all([...new Bun.Glob('*/SKILL.md').scanSync({ cwd: skills })].map(async (path) => /^name: (\S+)$/m.exec(await Bun.file(`${skills}${path}`).text())?.[1]))
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [], boundHotkeys: allHotkeys } } })
+
+  await tested.start()
+
+  expect(named).toEqual(expect.arrayContaining(['sessions', 'build-mod']))
+  expect(tested.shown.commands.filter((command) => named.includes(command))).toEqual([])
 })
 
 test('a cmod that bound its first hotkeys binds a hotkey a newer cmod adds, and leaves the ones it bound before', async () => {

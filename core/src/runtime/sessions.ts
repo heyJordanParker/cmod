@@ -51,7 +51,7 @@ export function subagentTranscript(sessionTranscript: string | undefined, task: 
   return sessionTranscript?.endsWith('.jsonl') === true ? `${sessionTranscript.slice(0, -'.jsonl'.length)}/subagents/agent-${task}.jsonl` : undefined
 }
 
-const sessionFields: Readonly<Record<keyof SessionData, true>> = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true }
+const sessionFields: Readonly<Record<keyof SessionData, true>> = { id: true, title: true, color: true, project: true, cwd: true, transcriptPath: true, model: true, startedAt: true, lastAt: true, forkedFrom: true, isRunning: true, agentType: true, visitedAt: true, device: true, status: true, waitingFor: true, contextPercent: true, lastTurn: true, openCall: true }
 
 export function pickedColor(args: string): string | undefined {
   const picked = args.trim().toLowerCase()

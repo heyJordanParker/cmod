@@ -1,5 +1,5 @@
 ---
-name: history
+name: search-history
 description: Search and read what Claude Code sessions did, on any of the person's devices, with cmod sessions search and read. Find where something was decided, built, or broken, read a session's messages, turns, tasks, goal, and usage, or follow a session live. TRIGGER when the work needs earlier work, such as "what did we decide about", "find the session that", "what did that worker do", or "when did this break". DO NOT TRIGGER to message or drive a session; use /cmod:sessions.
 allowed-tools: Bash(cmod sessions:*)
 ---
