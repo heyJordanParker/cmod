@@ -62,6 +62,8 @@ const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
   servesWebUi: 'Show the Sidebar in your browser',
   servesTailnet: 'Open web apps from your other devices, through Tailscale',
+  servesApi: 'Let agents on your tailnet reach your sessions, with the token cmod serve status prints',
+  runsAgentsAsSessions: "Run Claude's background agents as background sessions, which any session or device can message",
   roundsBarEnds: 'Round the ends of bars in every terminal, for a font with Nerd Font symbols.',
 } satisfies Partial<Record<keyof Preferences, string>>
 
@@ -118,7 +120,7 @@ export async function readLog(mod: Mod<object>): Promise<LogEntry[]> {
   return newestLog(read)
 }
 
-async function readPreferences(mod: Mod<object>): Promise<Preferences> {
+export async function readPreferences(mod: Mod<object>): Promise<Preferences> {
   const path = preferencesPath(await storeOf(mod))
   return parsePreferences(await readJson(path), path)
 }

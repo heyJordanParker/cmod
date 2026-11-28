@@ -14,6 +14,7 @@ import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { routeAgents } from './agents.js'
 import { history, historyMemory, historySession, type HistoryState } from './history.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { webUi } from './web.js'
@@ -118,6 +119,7 @@ export const cmodPlugin = defineMod({
     mod.hotkeys.sidebar.onPress(() => shown.toggle())
     mod.hotkeys.settings.onPress(() => shown.toggleSettings())
     mod.hotkeys.history.onPress(() => shown.toggleHistory())
+    routeAgents(mod)
 
     mod.use(
       slashCommand({

@@ -360,12 +360,12 @@ function preferencesPath(store) {
 function devicePath(store) {
   return `${store}/device.json`;
 }
-var preferenceKeys = ["showsInstalledModErrors", "servesWebUi", "servesTailnet", "roundsBarEnds"];
+var preferenceKeys = ["showsInstalledModErrors", "servesWebUi", "servesTailnet", "servesApi", "runsAgentsAsSessions", "roundsBarEnds"];
 function parsePreferences(value, path) {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== "boolean")))
     throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`);
   const saved = isObject(value) ? value : {};
-  return { showsInstalledModErrors: saved["showsInstalledModErrors"] === true, servesWebUi: saved["servesWebUi"] === true, servesTailnet: saved["servesTailnet"] !== false, roundsBarEnds: saved["roundsBarEnds"] === true };
+  return { showsInstalledModErrors: saved["showsInstalledModErrors"] === true, servesWebUi: saved["servesWebUi"] === true, servesTailnet: saved["servesTailnet"] !== false, servesApi: saved["servesApi"] === true, runsAgentsAsSessions: saved["runsAgentsAsSessions"] === true, roundsBarEnds: saved["roundsBarEnds"] === true };
 }
 function tailnetFolder(store, mod) {
   return `${store}/tailnet/${checkedName(mod)}`;
@@ -435,7 +435,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "8.11.2";
+var coreVersion = "8.12.0";
 var oldestCmodVersion = "8.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -3362,6 +3362,7 @@ function createRouter() {
 
 // node_modules/@cmodjs/core/runtime/rpc.js
 var rpcCodes = {
+  parse: -32700,
   methodNotFound: -32601,
   invalidParams: -32602,
   internal: -32603,
@@ -6368,7 +6369,7 @@ function serveConversations({ claude, router, store, project, report, clear, kee
     const below = await next(e);
     if (below.block === undefined && !next.signal.aborted) {
       repliedWith = firstLine(e.last_assistant_message ?? "") || undefined;
-      answerTask().catch((error) => report("task", "Could not record that this session answered its task", error));
+      answerTask(e.last_assistant_message ?? "").catch((error) => report("task", "Could not record that this session answered its task", error));
     }
     return below;
   });
@@ -7043,7 +7044,7 @@ ${target}`;
     dispatch(conversation.startTask(started));
     return started;
   };
-  const answerTask = async () => {
+  const answerTask = async (answer) => {
     const { env } = await claude.settings.read();
     const asked = isObject(env) ? env[taskVariable] : undefined;
     if (typeof asked !== "string")
@@ -7056,6 +7057,9 @@ ${target}`;
     const closed = { ...task, id: session, closedAt: new Date().toISOString() };
     await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(closed));
     local.client.notify(sessionActs.changed, { session: from, part: "tasks" });
+    if (from === "" || answer.trim() === "")
+      return;
+    await actOn(from, "send", { type: Prompt, text: answer, from: { session, title: task.title } }, { caller: cmodPluginName });
   };
   const merged = (saved, kept, key) => {
     const keptKeys = new Set(kept.map(key));
@@ -12166,7 +12170,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, viewParams: null, notice: null, widget: null, logPage: 1 };
 var areaTitles = {
@@ -12187,6 +12191,8 @@ var preferenceTitles = {
   showsInstalledModErrors: "Show errors from installed mods",
   servesWebUi: "Show the Sidebar in your browser",
   servesTailnet: "Open web apps from your other devices, through Tailscale",
+  servesApi: "Let agents on your tailnet reach your sessions, with the token cmod serve status prints",
+  runsAgentsAsSessions: "Run Claude's background agents as background sessions, which any session or device can message",
   roundsBarEnds: "Round the ends of bars in every terminal, for a font with Nerd Font symbols."
 };
 var viewSection = "view:";
@@ -12597,7 +12603,34 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/src/history.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/agents.ts
+var forkType = "fork";
+var builtInType = "general-purpose";
+function routeAgents(mod) {
+  sessions.current.beforeToolCall({ name: "Agent" }, async (call) => {
+    const { input } = call;
+    if (input["run_in_background"] === false || input["name"] !== undefined || input["isolation"] !== undefined)
+      return;
+    if (!(await readPreferences(mod)).runsAgentsAsSessions)
+      return;
+    const title = typeof input["description"] === "string" && input["description"].trim() !== "" ? input["description"].trim() : "Agent";
+    const prompt = typeof input["prompt"] === "string" ? input["prompt"] : "";
+    const type = typeof input["subagent_type"] === "string" ? input["subagent_type"] : undefined;
+    const model = typeof input["model"] === "string" ? { model: input["model"] } : {};
+    const task = type === forkType ? await sessions.current.fork({ title, prompt, isBackground: true }) : await sessions.current.startTask({ title, prompt, isBackground: true, ...type === undefined || type === builtInType ? {} : { agentType: type }, ...model });
+    const short = task.id.slice(0, 8);
+    return {
+      result: [
+        `"${title}" runs as the background Claude Code session ${task.id}, which keeps running after this session ends. Its answer arrives as a message from that session, so go on with other work until it does.`,
+        `Message it with \`cmod sessions send ${short} <text>\`, read it with \`cmod sessions read messages ${short}\`, and stop it with \`cmod sessions end ${short}\`.`
+      ].join(`
+
+`)
+    };
+  });
+}
+
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/history.ts
 var pageRows = 50;
 var historySession = { historyView: { find: "", opened: [], shown: pageRows } };
 var historyMemory = { history: null, historyError: null, historyOf: null };
@@ -12787,7 +12820,7 @@ function history(mod, isShown) {
   return { title: "History", draw, refresh };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var tabHotkeys = 8;
@@ -13073,7 +13106,7 @@ function sidebar(mod, settings, history, openInBrowser) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/src/web.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/web.ts
 function webUi(mod, server) {
   const { claude, report } = engineOf(mod);
   const openInBrowser = async () => {
@@ -13103,7 +13136,7 @@ function webUi(mod, server) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession, ...historySession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -13167,6 +13200,7 @@ var cmodPlugin = defineMod({
     mod.hotkeys.sidebar.onPress(() => shown.toggle());
     mod.hotkeys.settings.onPress(() => shown.toggleSettings());
     mod.hotkeys.history.onPress(() => shown.toggleHistory());
+    routeAgents(mod);
     mod.use(slashCommand({
       name: "mods",
       description: "Open Settings, where you turn your mods off or remove them, and change their options, hotkeys, pages, and widgets",
@@ -13610,7 +13644,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-LoSue5/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-e6ElzL/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
