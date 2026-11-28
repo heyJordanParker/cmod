@@ -13,6 +13,7 @@ export type RpcMessage =
   | { readonly jsonrpc: '2.0'; readonly id: RpcId; readonly error: RpcErrorData }
 
 export const rpcCodes = {
+  parse: -32700,
   methodNotFound: -32601,
   invalidParams: -32602,
   internal: -32603,
@@ -297,12 +298,50 @@ export function rpcRoutes({
       })
     })
 
+  const answerOnce = async (request: RpcHttpRequest): Promise<RpcHttpAnswer> => {
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch (error) {
+      return { status: 200, json: { jsonrpc: '2.0', id: null, error: { code: rpcCodes.parse, message: `cmod reads one JSON-RPC request or a batch: ${error instanceof Error ? error.message : String(error)}` } } }
+    }
+    const asked = (Array.isArray(body) ? body : [body]).flatMap((message) => {
+      const fields = typeof message === 'object' && message !== null ? (message as Readonly<Record<string, unknown>>) : {}
+      return typeof fields['method'] === 'string' && (typeof fields['id'] === 'number' || typeof fields['id'] === 'string') ? [fields['id']] : []
+    })
+    if (asked.length === 0) {
+      const connection = channel(() => undefined)
+      connection.receive(body)
+      connection.close(new Error('the notifications were read'))
+      return { status: 204 }
+    }
+    const answers = new Map<RpcId, RpcMessage>()
+    return new Promise<RpcHttpAnswer>((resolve) => {
+      const connection = channel((message) => {
+        if ('method' in message || !asked.includes(message.id)) return
+        answers.set(message.id, message)
+        if (answers.size === asked.length) finish()
+      })
+      const finish = () => {
+        connection.close(new Error('the request was answered'))
+        const ordered = asked.flatMap((id) => {
+          const answer = answers.get(id)
+          return answer === undefined ? [] : [answer]
+        })
+        resolve({ status: 200, json: Array.isArray(body) ? ordered : ordered[0] })
+      }
+      request.signal.addEventListener('abort', () => connection.close(new Error('the client left the request')), { once: true })
+      connection.receive(body)
+    })
+  }
+
   const route = async (request: RpcHttpRequest): Promise<RpcHttpAnswer> => {
     sweep()
     const url = new URL(request.path, 'http://cmod')
     const [, id] = /^\/rpc\/([\w-]{1,64})$/.exec(url.pathname) ?? []
     const chars = Number(url.searchParams.get('chars'))
     try {
+      if (url.pathname === rpcPath && request.method === 'POST') return await answerOnce(request)
       if (url.pathname === `${rpcPath}/connect` && request.method === 'POST') return { status: 200, json: { connection: open().connection.id } }
       if (id === undefined) return { status: 404, json: { error: `cmod has no ${request.method} ${url.pathname}.` } }
       if (request.method === 'DELETE') {

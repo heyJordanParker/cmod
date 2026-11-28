@@ -45,6 +45,32 @@ test('cmod task start runs claude --bg named with the task title and with the st
   expect(await lines(home, 'bg-place')).toEqual([join(home, 'work'), 'unset'])
 })
 
+test("cmod task start runs the task as a sub-agent of the starting session's herdr-core terminal, so Herdr lists, peeks, and keeps it under that session, and gives it its session id", async () => {
+  const home = await backgroundHome()
+  await writeFiles(home, {
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 'starter', cwd: home, procStart: await startOf(process.pid), kind: 'interactive' }),
+    'bin/hc': `#!/bin/sh
+case "$1" in
+  connect) read -r line; echo '{"jsonrpc":"2.0","id":1,"result":{"terminals":[{"address":"t2","pid":1},{"address":"t7","pid":7,"foreground":{"pid":${process.pid}}}]}}' ;;
+  run) printf '%s\\n' "$@" > "$HOME/hc-args"; echo '{"address":"t9","agent":"claude-code","state":"live","turn":0}' ;;
+  *) exit 2 ;;
+esac
+`,
+  })
+
+  const started = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Upgrade', '--agent', 'Explore', '--cwd', join(home, 'work'), '--json', '--', 'Upgrade every dependency.')
+  const task = JSON.parse(started.stdout) as Readonly<Record<string, unknown>> & { readonly id: string }
+  const args = await lines(home, 'hc-args')
+  const claudeAt = args.indexOf('--') + 1
+
+  expect(started.stderr).toBe('')
+  expect(task).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), title: 'Upgrade', agentType: 'Explore', openedBy: '', openedAt: expect.any(String), isBackground: true })
+  expect(args.slice(0, claudeAt)).toEqual(['run', '--bg', '--json', '--parent', 't7', '--no-notify', '--outlive-parent', '--cwd', join(home, 'work'), '--'])
+  expect(args.slice(claudeAt + 1, claudeAt + 7)).toEqual(['--session-id', task.id, '--agent', 'Explore', '--name', 'Upgrade'])
+  expect(args.slice(-2)).toEqual(['--', 'Upgrade every dependency.'])
+  expect(existsSync(join(home, 'bg-args'))).toBe(false)
+})
+
 const row = (uuid: string, parentUuid: string | null, type: string, text: string) => ({ uuid, parentUuid, type, sessionId: 'starter', isSidechain: false, timestamp: '2026-11-19T10:00:00.000Z', message: { role: type, content: text } })
 
 const starterTranscript = [

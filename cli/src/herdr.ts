@@ -96,12 +96,25 @@ async function herdrCore<Result>(method: string, params: Readonly<Record<string,
   }
 }
 
-async function terminalOf(session: string): Promise<string> {
+export async function terminalRunning(session: string): Promise<string | undefined> {
   const pid = runningEntries().find((entry) => entry.session === session)?.pid
   const listed = pid === undefined || installed('hc') === undefined ? [] : (await herdrCore<{ readonly terminals: readonly CoreTerminal[] }>('terminal.list', {})).terminals
-  const found = listed.find((terminal) => !terminal.address.includes('/') && (terminal.pid === pid || terminal.foreground?.pid === pid))
+  return listed.find((terminal) => !terminal.address.includes('/') && (terminal.pid === pid || terminal.foreground?.pid === pid))?.address
+}
+
+async function terminalOf(session: string): Promise<string> {
+  const found = await terminalRunning(session)
   if (found === undefined) throw new RpcError(rpcCodes.notHeld, `No session ${session} runs in a herdr-core terminal on this computer.`)
-  return found.address
+  return found
+}
+
+export async function runAsSubagent(parent: string, argv: readonly string[], cwd: string): Promise<string> {
+  const hc = installed('hc')
+  if (hc === undefined) throw new Error('herdr-core is not installed on this computer.')
+  const { exitCode, stdout, stderr } = await capture([hc, 'run', '--bg', '--json', '--parent', parent, '--no-notify', '--outlive-parent', '--cwd', cwd, '--', ...argv])
+  const started: unknown = exitCode === 0 ? JSON.parse(stdout) : undefined
+  if (!isObject(started) || typeof started['address'] !== 'string') throw new Error(`hc run exited ${exitCode}: ${(stderr || stdout).trim()}`)
+  return started['address']
 }
 
 async function herdrApp(...args: string[]): Promise<string> {

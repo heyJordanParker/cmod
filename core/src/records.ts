@@ -309,7 +309,13 @@ export function serveAppsPath(store: string): string {
   return `${store}/serve.json`
 }
 
-export type ServeApps = { readonly url: string; readonly token: string }
+export type ServeApps = { readonly url: string; readonly token: string; readonly api?: string }
+
+export function parseServeApps(value: unknown, path: string): ServeApps | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value) || typeof value['url'] !== 'string' || typeof value['token'] !== 'string' || (value['api'] !== undefined && typeof value['api'] !== 'string')) throw new Error(`${path} is not the address and token cmod serve gives its clients. cmod serve writes it again at its start.`)
+  return { url: value['url'], token: value['token'], ...(typeof value['api'] === 'string' ? { api: value['api'] } : {}) }
+}
 
 export type ProgramInstance = { readonly pid: number; readonly started: string; readonly address?: string; readonly tailnetUrl?: string; readonly provides?: readonly string[] }
 
@@ -385,14 +391,14 @@ export function devicePath(store: string): string {
   return `${store}/device.json`
 }
 
-export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean; readonly roundsBarEnds: boolean }
+export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean; readonly servesApi: boolean; readonly runsAgentsAsSessions: boolean; readonly roundsBarEnds: boolean }
 
-const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet', 'roundsBarEnds'] as const satisfies readonly (keyof Preferences)[]
+const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet', 'servesApi', 'runsAgentsAsSessions', 'roundsBarEnds'] as const satisfies readonly (keyof Preferences)[]
 
 export function parsePreferences(value: unknown, path: string): Preferences {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== 'boolean'))) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
   const saved = isObject(value) ? value : {}
-  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true, servesTailnet: saved['servesTailnet'] !== false, roundsBarEnds: saved['roundsBarEnds'] === true }
+  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true, servesTailnet: saved['servesTailnet'] !== false, servesApi: saved['servesApi'] === true, runsAgentsAsSessions: saved['runsAgentsAsSessions'] === true, roundsBarEnds: saved['roundsBarEnds'] === true }
 }
 
 export function tailnetFolder(store: string, mod: string): string {
@@ -511,7 +517,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '8.11.2'
+export const coreVersion = '8.12.0'
 
 export const oldestCmodVersion = '8.0.0'
 

@@ -7,7 +7,7 @@ import { dataFolder, devicePath, isObject, storeFolder, type ServeApps } from '@
 import { bunClock, bunFetch } from '@cmodjs/core/src/runtime/bun.js'
 import { measureDevice, MissingMachineId } from '@cmodjs/core/src/runtime/device.js'
 import { routeSessions, sessionsInterface, storeInterface, wantsMessages, type HoldingOf, type Mail, type SessionComputer, type SessionContext, type SessionRouting, type StoreChange, type ToldAt, type VisitedAt } from '@cmodjs/core/src/runtime/interfaces.js'
-import { RpcError, rpcCodes, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
+import { RpcError, rpcCodes, rpcPath, type RpcConnection, type RpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
 import type { TaskStartArgs } from '@cmodjs/core/src/session/session.js'
 import { activeSessions, startBackground, startTask, stopBackground, withBackgroundStatus } from './claude.js'
@@ -356,16 +356,23 @@ const appsPath = '/ui'
 
 const unreadMessage = 1003
 
-export function serveApps(routes: RpcRoutes, report: (doing: string, error: unknown) => void): AppServer {
-  const token = randomBytes(32).toString('base64url')
-  const isToken = (given: string | null) => given !== null && given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token))
+export function newServeToken(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+const bearer = /^Bearer (\S+)$/
+
+export function serveApps(routes: RpcRoutes, token: string, report: (doing: string, error: unknown) => void): AppServer {
+  const isToken = (given: string | null | undefined) => typeof given === 'string' && given.length === token.length && timingSafeEqual(Buffer.from(given), Buffer.from(token))
   const server = Bun.serve<{ connection?: RpcConnection }>({
     hostname: '127.0.0.1',
     port: 0,
     fetch(request, server) {
       const url = new URL(request.url)
-      if (url.pathname !== appsPath) return Response.json({ error: `cmod serve has no ${url.pathname}. Apps connect to ${appsPath}.` }, { status: 404 })
-      if (!isToken(url.searchParams.get('token'))) return Response.json({ error: 'cmod serve takes the token serve.json in the cmod store gives.' }, { status: 401 })
+      const isRpc = url.pathname === rpcPath || url.pathname.startsWith(`${rpcPath}/`)
+      if (url.pathname !== appsPath && !isRpc) return Response.json({ error: `cmod serve has no ${url.pathname}. Apps connect to ${appsPath}, and a client posts JSON-RPC to ${rpcPath}.` }, { status: 404 })
+      if (!isToken(url.searchParams.get('token') ?? bearer.exec(request.headers.get('authorization') ?? '')?.[1])) return Response.json({ error: 'cmod serve takes the token cmod serve status prints, as Authorization: Bearer <token>.' }, { status: 401 })
+      if (isRpc) return answered(routes, request) ?? Response.json({ error: `cmod serve has no ${request.method} ${url.pathname}.` }, { status: 404 })
       return server.upgrade(request, { data: {} }) ? undefined : Response.json({ error: `${appsPath} takes a WebSocket.` }, { status: 426 })
     },
     websocket: {

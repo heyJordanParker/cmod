@@ -1100,7 +1100,7 @@ test('a lookup of one session asks cmod serve for that id and lists no session, 
   expect(lists).toBe(0)
 })
 
-test("a background session's cmod plugin records its task's answer at the session's first stop, and the session that started it closes the task", async () => {
+test("a background session's cmod plugin records its task's answer at the session's first stop, the session that started it closes the task, and reads the answer once, as mail from the task, as Claude Code tells a parent its background agent finished", async () => {
   const disk = fakeFiles({})
   const saved = async (session: string) => Promise.all((await disk.list(`/store/data/cmod/tasks/${session}`).catch(ifMissing([]))).map(async (file) => JSON.parse(await disk.read(`/store/data/cmod/tasks/${session}/${file.name}`)) as unknown))
   const serve = fakeServe(() => ({ read: async (session, part) => (part === 'tasks' ? saved(session) : part === 'state' ? null : []) }), { device: async () => testDevice })
@@ -1134,6 +1134,8 @@ test("a background session's cmod plugin records its task's answer at the sessio
   expect(await saved('starter')).toEqual([ended])
   expect(background.fake.calls.filter((each) => each.call === 'fs.write' && String(each.args[0]).includes('/tasks/'))).toHaveLength(1)
   expect((await starter.served.answer({ to: 'cmod', method: conversationMethods.tasks, input: { session: 'starter' }, caller: 'demo' }))?.value).toEqual([ended])
+  const prompts = starter.fake.calls.filter((each) => each.call === 'prompt.submit').map((each) => (each.args[0] as { readonly text: string }).text)
+  expect(prompts).toEqual([expect.stringMatching(/^<cmod-message from="test-session" title="Upgrade the dependencies" reply="cmod sessions send test-ses --reply-to \d+">\nUpgraded\.\n<\/cmod-message>$/)])
 })
 
 test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this cmod knows, so it is never refused as unknown', async () => {

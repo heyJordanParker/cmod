@@ -21,6 +21,11 @@ in CLAUDE_CODE_SESSION_ID. The new session starts fresh on the prompt, or with
 transcript: the whole conversation, or with --at its first message through the
 message with that id, and nothing after it. --agent and --model pick the agent
 definition and model of a fresh session, and --cwd the folder it works in.
+When the session this command runs in runs in a herdr-core terminal, the new
+session runs in a herdr-core terminal of its own, a sub-agent of that terminal,
+as hc run --parent starts one, so Herdr lists it under the session, peeks at
+it, keeps it as a tab, and sends it back. It keeps running once its parent
+ends. Any other session starts with claude --bg, in Claude Code's own daemon.
 Claude Code names the new session with the title. It prints the task, as one
 line of JSON with --json, and the cmod plugin of the new session tells the
 starting session once it answered.

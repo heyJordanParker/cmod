@@ -2,19 +2,23 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, rmdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { listenMethod, storeInterface } from '@cmodjs/core/src/runtime/interfaces.js'
-import { dataFolder, parsePreferences, parseWebUi, preferencesPath, serveAppsPath, serveSocketPath, storeFolder, webPath, type ServeApps } from '@cmodjs/core/src/records.js'
+import { dataFolder, parsePreferences, parseServeApps, parseTailnetRecord, parseWebUi, preferencesPath, serveAppsPath, serveSocketPath, storeFolder, tailnetPath, webPath, type ServeApps } from '@cmodjs/core/src/records.js'
+import { rpcPath } from '@cmodjs/core/src/runtime/rpc.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
 import { placeHerdrMod } from '../herdr.js'
 import { openIndex, runningEntries } from '../history.js'
-import { answered, answeredOlderPlugin, serveApps, serveSessions } from '../serve.js'
-import { isNewerCmodInstalled } from '../store.js'
+import { answered, answeredOlderPlugin, newServeToken, serveApps, serveSessions } from '../serve.js'
+import { isNewerCmodInstalled, readSecret, storeSecret } from '../store.js'
 import { readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 import { webApp } from '../web.js'
+
+const apiProgram = 'api'
 
 export const summary = "Serve this computer's sessions to every session, script, and the browser app."
 
 export const help = `Usage: cmod serve
+       cmod serve status [--json]
 
 ${summary}
 
@@ -55,9 +59,24 @@ and moves the replies cmod web serve before 7.0.0 marked read, web-read.json, to
 visited.json.
 
 An app that is no session, such as cmod's Herdr mod, reaches the same calls
-over a WebSocket on 127.0.0.1 at /ui. Its address and a token made at each
-start are in serve.json in the cmod store, which only you can read, and a
-connection without ?token=<token> is refused.
+over a WebSocket on 127.0.0.1 at /ui, or posts one JSON-RPC 2.0 request or a
+batch to /rpc there and reads the answers in the response. Its address and the
+token are in serve.json in the cmod store, which only you can read, and a
+request without the token, as Authorization: Bearer <token> or ?token=<token>,
+is refused. cmod makes the token once and keeps it among cmod's secrets.
+
+While "Let agents on your tailnet reach your sessions" and "Open web apps from
+your other devices, through Tailscale" are on in Settings, under cmod,
+Preferences, Tailscale serves the same /rpc and /ui at
+https://<computer>.<tailnet>.ts.net:<port>/, with the same token, so an agent
+on another device lists, reads, messages, and starts this computer's sessions
+with the methods cmod/Sessions names, such as:
+
+  curl -H "Authorization: Bearer $TOKEN" -d '{"jsonrpc":"2.0","id":1,
+    "method":"cmod/Sessions.sessions","params":[{"running":true}]}' \\
+    https://<computer>.<tailnet>.ts.net:<port>/rpc
+
+cmod serve status prints each address cmod serve answers at, and the token.
 
 At its start it also places cmod's Herdr mod, which draws every session's
 widgets, views, and pages in Herdr over that WebSocket, in mods/cmod of Herdr's
@@ -72,8 +91,44 @@ and on your tailnet while Tailscale is signed in, as cmod web describes. cmod we
 serve runs the same server, for a session whose cmod plugin is older.`
 
 export async function run(argv: string[]): Promise<number> {
-  if (argv.length > 0) throw new Error(`cmod serve takes no arguments.\n\n${help}`)
+  if (argv[0] === 'status') return printStatus(argv.slice(1))
+  if (argv.length > 0) throw new Error(`cmod serve takes no arguments but status.\n\n${help}`)
   return serve()
+}
+
+const tokenKey = 'serveToken'
+
+async function serveToken(): Promise<string> {
+  const kept = await readSecret('cmod', tokenKey)
+  if (kept !== undefined) return kept
+  const made = newServeToken()
+  await storeSecret('cmod', tokenKey, made)
+  return made
+}
+
+async function printStatus(argv: readonly string[]): Promise<number> {
+  const isJson = argv.includes('--json')
+  const unknown = argv.filter((each) => each !== '--json')
+  if (unknown.length > 0) throw new Error(`cmod serve status takes only --json, not ${unknown.join(' ')}.`)
+  const store = storeFolder(process.env)
+  const path = serveAppsPath(store)
+  const apps = parseServeApps(await readJson(path), path)
+  if (apps === undefined) throw new Error(`cmod serve is not running: ${path} does not exist. A Claude Code session with the cmod plugin starts it.`)
+  const socket = `unix:${serveSocketPath(store)}`
+  const tailnet = parseTailnetRecord(await readJson(tailnetPath(store, 'cmod', apiProgram)), tailnetPath(store, 'cmod', apiProgram))
+  const api = apps.api === undefined ? undefined : `${apps.api.replace(/\/+$/, '')}${rpcPath}`
+  if (isJson) {
+    process.stdout.write(`${JSON.stringify({ socket, apps: apps.url, ...(api === undefined ? {} : { api }), token: apps.token }, null, 2)}\n`)
+    return 0
+  }
+  const lines = [
+    `sessions and scripts here  ${socket}`,
+    `apps here                  ${apps.url}`,
+    `agents on your tailnet     ${api ?? `off: ${tailnet?.reason ?? 'Off in Settings, under cmod, Preferences.'}`}`,
+    `token                      ${apps.token}`,
+  ]
+  process.stdout.write(`${lines.join('\n')}\n`)
+  return 0
 }
 
 export async function serve(): Promise<number> {
@@ -95,8 +150,11 @@ export async function serve(): Promise<number> {
     },
   })
   await chmod(socket, 0o600)
-  const apps = serveApps(sessions.routes, report)
-  await writeAtomically(serveAppsPath(store), `${JSON.stringify({ url: apps.url, token: apps.token } satisfies ServeApps, null, 2)}\n`, { mode: 0o600 })
+  const apps = serveApps(sessions.routes, await serveToken(), report)
+  let api: string | undefined
+  const served = { isApiOn: false }
+  const writeApps = () => writeAtomically(serveAppsPath(store), `${JSON.stringify({ url: apps.url, token: apps.token, ...(api === undefined ? {} : { api }) } satisfies ServeApps, null, 2)}\n`, { mode: 0o600 })
+  await writeApps()
   const ending = new AbortController()
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => ending.abort())
   let page: number | undefined
@@ -105,7 +163,22 @@ export async function serve(): Promise<number> {
     void (checking = checking.then(async () => {
       if (ending.signal.aborted) return
       if (await isNewerCmodInstalled()) return ending.abort()
-      const isOn = parsePreferences(await readJson(preferencesPath(store)), preferencesPath(store)).servesWebUi
+      const preferences = parsePreferences(await readJson(preferencesPath(store)), preferencesPath(store))
+      const isApiWanted = preferences.servesApi && preferences.servesTailnet
+      if (isApiWanted && !served.isApiOn) {
+        api = await serveOnTailnet(await readTailnet().catch((error: unknown) => ({ reason: messageOf(error) })), 'cmod', apiProgram, `127.0.0.1:${new URL(apps.url).port}`)
+        served.isApiOn = true
+        await writeApps()
+        if (api !== undefined) process.stderr.write(`cmod serve: serves its API to your tailnet at ${api}\n`)
+      }
+      if (!isApiWanted && served.isApiOn) {
+        served.isApiOn = false
+        api = undefined
+        await stopServing('cmod', apiProgram)
+        await writeApps()
+        process.stderr.write('cmod serve: took its API off your tailnet, because it is off in Settings\n')
+      }
+      const isOn = preferences.servesWebUi
       if (isOn && page === undefined) {
         page = await openPage(web, store, report)
         process.stderr.write(`cmod serve: serves the browser app at http://127.0.0.1:${page}/\n`)
@@ -129,6 +202,7 @@ export async function serve(): Promise<number> {
     sessions.interfaces.closed(own)
     await web.stop()
     if (page !== undefined) await stopServing('cmod', 'cmod').catch((error: unknown) => report('kept the browser app on your tailnet', error))
+    if (served.isApiOn) await stopServing('cmod', apiProgram).catch((error: unknown) => report('kept its API on your tailnet', error))
     sessions.close()
     await server.stop(true)
     await apps.stop()

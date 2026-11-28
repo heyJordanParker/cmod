@@ -2,6 +2,7 @@ import type { Args, EventResult, Frozen } from 'claude-code'
 import { coreVersion, dataFolder, isObject, serveSocketPath } from '../records.js'
 import { Message, rowOfAppend, type Row } from '../session/context/turn/message/message.js'
 import { modNote, Note } from '../session/context/turn/message/note.js'
+import { Prompt } from '../session/context/turn/message/prompt.js'
 import { Person } from '../session/context/turn/message/sender.js'
 import { createConversation, emptyConversation, ownerOfSpawn, tasksWithAgents, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import { Session, UsageChange, type BeforeEvent, type Surface, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
@@ -223,7 +224,7 @@ export function serveConversations({
     const below = await next(e)
     if (below.block === undefined && !next.signal.aborted) {
       repliedWith = firstLine(e.last_assistant_message ?? '') || undefined
-      void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
+      void answerTask(e.last_assistant_message ?? '').catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
     }
     return below
   })
@@ -875,7 +876,7 @@ export function serveConversations({
     return started
   }
 
-  const answerTask = async () => {
+  const answerTask = async (answer: string) => {
     const { env } = await claude.settings.read()
     const asked = isObject(env) ? env[taskVariable] : undefined
     if (typeof asked !== 'string') return
@@ -886,6 +887,8 @@ export function serveConversations({
     const closed: TaskData = { ...task, id: session, closedAt: new Date().toISOString() }
     await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(closed))
     local.client.notify(sessionActs.changed, { session: from, part: 'tasks' })
+    if (from === '' || answer.trim() === '') return
+    await actOn(from, 'send', { type: Prompt, text: answer, from: { session, title: task.title } }, { caller: cmodPluginName })
   }
 
   const merged = <Item>(saved: readonly Item[], kept: readonly Item[], key: (item: Item) => string): Item[] => {

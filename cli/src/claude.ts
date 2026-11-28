@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, readlinkSync } from 'node:fs'
 import { mkdtemp, readdir, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,6 +10,7 @@ import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../package.json'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
+import { runAsSubagent, terminalRunning } from './herdr.js'
 import { runningEntries } from './history.js'
 import { readPlugin, type Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
@@ -244,7 +246,14 @@ export async function startBackground(args: readonly string[], cwd: string): Pro
 export async function startTask(session: string, { title, prompt, cwd, agentType, model, fork }: { readonly title: string; readonly prompt: string; readonly cwd: string; readonly agentType?: string; readonly model?: string; readonly fork?: string }): Promise<TaskData> {
   const task = { title, ...(fork === undefined ? {} : { forkedFrom: session }), ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), openedBy: '', openedAt: new Date().toISOString(), isBackground: true as const }
   const settings = JSON.stringify({ env: { CMOD_TASK: JSON.stringify({ session, ...task }) } })
-  const id = await startBackground([...(fork === undefined ? [] : ['--resume', fork]), ...(agentType === undefined ? [] : ['--agent', agentType]), ...(model === undefined ? [] : ['--model', model]), '--name', title, '--settings', settings, '--', prompt], cwd)
+  const owned = [...(agentType === undefined ? [] : ['--agent', agentType]), ...(model === undefined ? [] : ['--model', model]), '--name', title, '--settings', settings, '--', prompt]
+  const parent = await terminalRunning(session)
+  if (parent !== undefined) {
+    const id = fork ?? randomUUID()
+    await runAsSubagent(parent, [claudeCode(), ...(fork === undefined ? ['--session-id', id] : ['--resume', fork]), ...owned], cwd)
+    return { id, ...task }
+  }
+  const id = await startBackground([...(fork === undefined ? [] : ['--resume', fork]), ...owned], cwd)
   return { id, ...task }
 }
 

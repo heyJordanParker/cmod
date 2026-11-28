@@ -627,6 +627,32 @@ test("an answer larger than Claude Code's 4 MiB fetch limit reaches the client w
   routes.close()
 })
 
+test('a client with no connection, such as curl, posts one JSON-RPC request or a batch to /rpc and reads each answer in the same response, and a notification answers 204', async () => {
+  const told: unknown[] = []
+  const routes = rpcRoutes({
+    handle: () => async (method, params) => {
+      if (method === 'demo/Echo.tell') return void told.push(params)
+      if (method === 'demo/Echo.fail') throw new Error('the echo broke')
+      return `echo ${String((params as readonly unknown[])[0])}`
+    },
+    now: () => Date.now(),
+  })
+  const posted = (body: string) => routes.route({ method: 'POST', path: '/rpc', signal: new AbortController().signal, json: async () => JSON.parse(body) as unknown }) as Promise<RpcHttpAnswer>
+
+  const one = await posted('{"jsonrpc":"2.0","id":1,"method":"demo/Echo.echo","params":["ping"]}')
+  const batch = await posted('[{"jsonrpc":"2.0","id":"b","method":"demo/Echo.fail"},{"jsonrpc":"2.0","method":"demo/Echo.tell","params":["heard"]},{"jsonrpc":"2.0","id":"a","method":"demo/Echo.echo","params":["pong"]}]')
+  const notified = await posted('{"jsonrpc":"2.0","method":"demo/Echo.tell","params":["once"]}')
+  const broken = await posted('{"jsonrpc":')
+
+  expect(one).toEqual({ status: 200, json: { jsonrpc: '2.0', id: 1, result: 'echo ping' } })
+  expect(batch).toEqual({ status: 200, json: [{ jsonrpc: '2.0', id: 'b', error: { code: rpcCodes.internal, message: 'the echo broke' } }, { jsonrpc: '2.0', id: 'a', result: 'echo pong' }] })
+  expect(notified).toEqual({ status: 204 })
+  expect(told).toEqual([['heard'], ['once']])
+  expect(broken.json).toMatchObject({ id: null, error: { code: rpcCodes.parse } })
+  expect(routes.connections()).toEqual([])
+  routes.close()
+})
+
 test('a poll its client abandons drops its connection at once: cmod serve forgets it, its calls fail as closed, and its next poll answers 410', async () => {
   const closed: string[] = []
   const routes = rpcRoutes({ handle: () => async () => null, onClose: (connection) => void closed.push(connection.id), now: () => Date.now() })

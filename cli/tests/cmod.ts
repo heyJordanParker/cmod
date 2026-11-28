@@ -210,11 +210,17 @@ case "$*" in
 esac
 `
 
+const herdrCore = `#!/bin/sh
+[ "$1" = connect ] || exit 2
+read -r line
+echo '{"jsonrpc":"2.0","id":1,"result":{"terminals":[]}}'
+`
+
 export async function temporaryHome(): Promise<string> {
   const home = await mkdtemp(join(temporaryRoot, 'cmod-test-'))
   homes.push(home)
   await mkdir(join(home, 'tmp'))
-  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager, 'bin/tailscale': tailscale })
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager, 'bin/tailscale': tailscale, 'bin/hc': herdrCore })
   return home
 }
 

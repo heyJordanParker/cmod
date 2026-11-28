@@ -109,6 +109,40 @@ test.concurrent('turning servesTailnet off asks Tailscale nothing, and turning i
   await next.done
 })
 
+test.concurrent("cmod serve answers an agent's JSON-RPC on your tailnet with the token it keeps across restarts, while servesApi is on, and takes its API off once servesApi is off", async () => {
+  const home = await webHome({ '.local/share/cmod/preferences.json': '{ "servesApi": true }\n' })
+  const serve = await servedChanges(home)
+  await serve.serving.waitForOutput('serves its API to your tailnet at https://computer.example.ts.net:')
+  const apps = () => JSON.parse(readFileSync(join(store(home), 'serve.json'), 'utf8')) as { readonly url: string; readonly token: string; readonly api?: string }
+  const { url, token, api } = apps()
+  const local = `${url.replace('ws:', 'http:').replace(/\/ui$/, '')}/rpc`
+  const posted = (headers: Record<string, string>) => fetch(local, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'cmod/Sessions.sessions', params: [{ running: true }] }) })
+
+  const answered = await posted({ authorization: `Bearer ${token}` })
+  const refused = await posted({})
+  const status = await cmod(home, 'serve', 'status')
+
+  expect(api).toMatch(/^https:\/\/computer\.example\.ts\.net:\d+\/$/)
+  expect(serveCalls(home)).toEqual([`tailscale serve --bg --https=${new URL(url).port} http://127.0.0.1:${new URL(url).port}`])
+  expect([answered.status, await answered.json()]).toEqual([200, { jsonrpc: '2.0', id: 1, result: [] }])
+  expect(refused.status).toBe(401)
+  expect(status.stdout).toContain(`agents on your tailnet     ${api}rpc`)
+  expect(status.stdout).toContain(`token                      ${token}`)
+
+  await writeFiles(home, { '.local/share/cmod/preferences.json': '{ "servesApi": false }\n' })
+  await serve.tell('cmod/Store', 'changed', ['preferences'])
+  await serve.serving.waitForOutput('took its API off your tailnet')
+  expect(serveCalls(home).at(-1)).toBe(`tailscale serve --https=${new URL(url).port} off`)
+  expect(apps()).not.toHaveProperty('api')
+
+  serve.serving.child.kill('SIGTERM')
+  await serve.serving.done
+  const again = await servedChanges(home)
+  expect(apps().token).toBe(token)
+  again.serving.child.kill('SIGTERM')
+  await again.serving.done
+})
+
 test.concurrent('cmod teardown takes every web app of the mod off your tailnet and deletes their tailnet addresses', async () => {
   const home = await webHome({ '.local/share/cmod/tailnet/demo/web-server.json': `${JSON.stringify({ port: 62021, url: 'https://computer.example.ts.net:62021/', reason: null })}\n` })
 

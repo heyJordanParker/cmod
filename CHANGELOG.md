@@ -4,6 +4,18 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [8.12.0] - 2026-11-28
+
+### Added
+- A background task started from a session that runs in a herdr-core terminal runs as that terminal's sub-agent, as `hc run --parent` starts one, so the Herdr app lists it under the session, peeks at it, keeps it as a tab, and sends it back. It started under `claude --bg`, which no Herdr terminal shows.
+- "Run Claude's background agents as background sessions", in Settings, under cmod, Preferences, off by default. While it is on, each Agent call Claude runs in the background starts a background session through cmod, which any session or device messages, and Claude reads its address. A call Claude waits on, one with a name, and one in a worktree stay Claude Code's own subagents.
+- A background task's first answer reaches the session that started it as a message from the task's session, as Claude Code tells a session its background agent finished. The starter learned it only by reading the task.
+- Agents on your other devices reach this computer's sessions: with "Let agents on your tailnet reach your sessions" on in Settings, under cmod, Preferences, Tailscale serves cmod serve's API at `https://<computer>.<tailnet>.ts.net:<port>/rpc`. A client posts JSON-RPC 2.0 there with the token as `Authorization: Bearer <token>`, and lists, reads, messages, and starts sessions with the `cmod/Sessions` methods. `cmod serve status` prints each address and the token.
+- `POST /rpc` answers one JSON-RPC request or a batch in its response, on `serve.sock` and the apps address, for a client that holds no connection.
+
+### Changed
+- cmod serve keeps the apps token among cmod's secrets, so an app or agent keeps it across restarts, and takes it as `Authorization: Bearer <token>` too.
+
 ## [8.11.2] - 2026-11-27
 
 ### Fixed

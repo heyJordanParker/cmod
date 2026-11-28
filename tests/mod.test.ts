@@ -2794,3 +2794,37 @@ test('open in browser turns the browser app on and opens the address cmod web pr
   expect(ran).toContain(`${cmodProgram} web`)
   expect(tested.shown.toasts).toContainEqual(expect.objectContaining({ type: 'success', message: 'The browser app is open' }))
 })
+
+test("with Run Claude's background agents as background sessions on, an Agent call that runs in the background starts a background session, and Claude reads how to reach it", async () => {
+  const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ runsAgentsAsSessions: true }) } })
+  const started: string[][] = []
+  const spawn = tested.fakes.process.spawn
+  tested.fakes.process.spawn = (request) => {
+    if (request.argv[1] !== 'task') return spawn?.(request) ?? exited(0)
+    started.push([...request.argv])
+    return exited(0, { stream: 'stdout', text: `${JSON.stringify({ id: '1a2b3c4d-0000-4000-8000-000000000001', title: 'Map the auth code', agentType: 'Explore', model: 'haiku', openedBy: '', openedAt: '2026-11-28T10:00:00.000Z', isBackground: true })}\n` })
+  }
+
+  const answer = await tested.raise.beforeToolCall({ name: 'Agent', input: { description: 'Map the auth code', prompt: 'Map every file the auth code reads.', subagent_type: 'Explore', model: 'haiku' } })
+
+  expect(started.map((argv) => argv.slice(1))).toEqual([['task', 'start', '--title', 'Map the auth code', '--agent', 'Explore', '--model', 'haiku', '--cwd', '/test/plugins/cmod', '--json', '--', 'Map every file the auth code reads.']])
+  expect(answer).toEqual({ result: expect.stringContaining('"Map the auth code" runs as the background Claude Code session 1a2b3c4d-0000-4000-8000-000000000001') })
+  expect((answer as { readonly result: string }).result).toContain('cmod sessions send 1a2b3c4d <text>')
+})
+
+test("an Agent call Claude needs at once, one with a name or a worktree, and every Agent call while the preference is off run as Claude Code's own subagents", async () => {
+  const on = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ runsAgentsAsSessions: true }) } })
+  const off = testMod(cmodPlugin, { state: bound })
+  const agent = { description: 'Map the auth code', prompt: 'Map every file the auth code reads.' }
+
+  const answers = [
+    await on.raise.beforeToolCall({ name: 'Agent', input: { ...agent, run_in_background: false } }),
+    await on.raise.beforeToolCall({ name: 'Agent', input: { ...agent, name: 'mapper' } }),
+    await on.raise.beforeToolCall({ name: 'Agent', input: { ...agent, isolation: 'worktree' } }),
+    await off.raise.beforeToolCall({ name: 'Agent', input: agent }),
+  ]
+
+  expect(answers).toEqual([undefined, undefined, undefined, undefined])
+  const taskStarts = (tested: ReturnType<typeof testMod>) => tested.calls.filter(({ call, args }) => call === 'process.spawn' && (args[0] as { readonly argv: readonly string[] }).argv[1] === 'task')
+  expect([taskStarts(on), taskStarts(off)]).toEqual([[], []])
+})
